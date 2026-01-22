@@ -295,12 +295,14 @@ get_trend_arrow() {
     fi
 }
 
-# Get smart pace indicator based on ratio of actual vs expected usage
-# Compares: actual% vs expected% (where expected = days_elapsed/7 * 100)
+# Get smart pace indicator using BURN RATE (Google SRE method)
+# burn_rate = 1.0 means you'll hit exactly 100% at reset
+# burn_rate > 1.0 means you'll run out BEFORE reset (e.g., 2.0 = exhausts day 3.5)
+# burn_rate < 1.0 means you'll have budget left at reset
 # Uses 8-tier emoji scale: ❄️ → 🧊 → 🙂 → 👌 → ♨️ → 🥵 → 🔥 → 🚨
 # Trend arrows: ↑ (heating fast), ↗ (warming), → (stable), ↘ (cooling), ↓ (cooling fast)
 # If at limit (>=100%), shows time until reset: 🚨 -1.2d
-# Alternates: emoji+arrow 4 times, then raw %, repeat
+# Alternates: emoji+arrow 9 times, then raw % once
 get_smart_pace_indicator() {
     local usage=$1
     local resets_at=$2
@@ -311,8 +313,9 @@ get_smart_pace_indicator() {
     pct=${pct:-0}
 
     local reset_suffix=""
-    local ratio=1.0
+    local burn_rate=1.0
     local days_until_reset=7
+    local days_elapsed=0
 
     if [ -n "$resets_at" ] && [ "$resets_at" != "null" ]; then
         # Parse ISO timestamp to epoch (works on macOS and Linux)
@@ -325,19 +328,20 @@ get_smart_pace_indicator() {
 
         if [ -n "$reset_epoch" ] && [ "$reset_epoch" -gt "$now" ]; then
             local seconds_until_reset=$((reset_epoch - now))
-            days_until_reset=$(echo "scale=2; $seconds_until_reset / 86400" | bc)
-            local days_elapsed=$(echo "scale=4; 7 - $days_until_reset" | bc)
+            days_until_reset=$(echo "scale=4; $seconds_until_reset / 86400" | bc)
+            days_elapsed=$(echo "scale=4; 7 - $days_until_reset" | bc)
+            [[ "$days_elapsed" == .* ]] && days_elapsed="0$days_elapsed"
 
-            # Calculate expected usage if evenly distributed
-            local expected=$(echo "scale=4; ($days_elapsed / 7) * 100" | bc)
-
-            # Calculate ratio (actual / expected) - use scale=4 for trend detection precision
-            if [ "$(echo "$expected > 0.1" | bc)" -eq 1 ]; then
-                ratio=$(echo "scale=4; $pct / $expected" | bc)
+            # Calculate burn rate: projected usage over 7 days at current pace
+            # burn_rate = (pct / days_elapsed) * 7 / 100
+            # Equivalent to: if I keep using at this rate, what % will I hit by day 7?
+            if [ "$(echo "$days_elapsed > 0.01" | bc)" -eq 1 ]; then
+                burn_rate=$(echo "scale=4; ($pct / $days_elapsed) * 7 / 100" | bc)
+                [[ "$burn_rate" == .* ]] && burn_rate="0$burn_rate"
             elif [ "$pct" -gt 0 ]; then
-                ratio=10  # Way ahead if we have usage but expected is ~0
+                burn_rate=10  # Way ahead if we have usage but almost no time elapsed
             else
-                ratio=0   # No usage, no expected = perfect
+                burn_rate=0   # No usage yet = perfect
             fi
 
             # Format reset time suffix for when at limit
@@ -350,42 +354,72 @@ get_smart_pace_indicator() {
         fi
     fi
 
-    # Get trend arrow based on usage% velocity (how fast burning tokens vs sustainable)
-    local arrow=$(get_trend_arrow "$usage")
-
-    # Map ratio (actual/expected) to 8-tier emoji scale
-    local emoji
-    if [ "$(echo "$ratio < 0.3" | bc)" -eq 1 ]; then
-        emoji="❄️"   # Way under pace
-    elif [ "$(echo "$ratio < 0.6" | bc)" -eq 1 ]; then
-        emoji="🧊"   # Under pace
-    elif [ "$(echo "$ratio < 0.8" | bc)" -eq 1 ]; then
-        emoji="🙂"   # Comfortable
-    elif [ "$(echo "$ratio < 1.1" | bc)" -eq 1 ]; then
-        emoji="👌"   # On pace
-    elif [ "$(echo "$ratio < 1.3" | bc)" -eq 1 ]; then
-        emoji="♨️"   # Warming up
-    elif [ "$(echo "$ratio < 1.5" | bc)" -eq 1 ]; then
-        emoji="🥵"   # Hot
-    elif [ "$(echo "$ratio < 2.0" | bc)" -eq 1 ]; then
-        emoji="🔥"   # Very hot
-    else
-        emoji="🚨"   # Alarm
+    # Alternate display: emoji+arrow 9 times, then raw % once (every 10 sec update)
+    # Check cycle FIRST so raw % always shows on cycle 9, regardless of alarm state
+    local cycle=$(( ($(date +%s) / 10) % 10 ))
+    if [ "$cycle" -eq 9 ]; then
+        echo "${DIM}${pct}%${RESET}"
+        return
     fi
 
-    # If at/over limit, always show alarm with reset time (no arrow needed)
+    # If at/over limit, always show alarm with reset time
     if [ "$pct" -ge 100 ]; then
         echo "🚨${reset_suffix}"
         return
     fi
 
-    # Alternate display: emoji+arrow 9 times, then raw % once (every 10 sec update)
-    local cycle=$(( ($(date +%s) / 10) % 10 ))
-    if [ "$cycle" -eq 9 ]; then
-        echo "${DIM}${pct}%${RESET}"
-    else
+    # Get trend arrow based on usage% velocity
+    local arrow=$(get_trend_arrow "$usage")
+
+    # GRACE PERIOD: First 6 hours (0.25 days), use absolute thresholds only
+    # This prevents false alarms when burn rate is unstable due to small sample
+    if [ "$(echo "$days_elapsed < 0.25" | bc)" -eq 1 ]; then
+        local emoji
+        if [ "$pct" -ge 30 ]; then
+            emoji="🚨"   # 30%+ in first 6 hours is critical
+        elif [ "$pct" -ge 20 ]; then
+            emoji="🔥"   # 20%+ is warning
+        elif [ "$pct" -ge 10 ]; then
+            emoji="♨️"   # 10%+ is warm
+        else
+            emoji="👌"   # Under 10% in first 6 hours is fine
+        fi
         echo "${emoji}${arrow}"
+        return
     fi
+
+    # GRADUATED MINIMUM: Higher absolute % required for alarm early in week
+    local min_for_alarm
+    if [ "$(echo "$days_elapsed < 1" | bc)" -eq 1 ]; then
+        min_for_alarm=20   # Day 1: need 20%+ for alarm
+    elif [ "$(echo "$days_elapsed < 2" | bc)" -eq 1 ]; then
+        min_for_alarm=15   # Day 2: need 15%+
+    else
+        min_for_alarm=10   # Day 3+: normal sensitivity
+    fi
+
+    # Map burn rate to emoji
+    # burn_rate 1.0 = on pace, >1 = will run out before reset, <1 = will have leftover
+    local emoji
+    if [ "$(echo "$burn_rate < 0.3" | bc)" -eq 1 ]; then
+        emoji="❄️"   # Way under - using < 30% of sustainable rate
+    elif [ "$(echo "$burn_rate < 0.6" | bc)" -eq 1 ]; then
+        emoji="🧊"   # Under pace - will use ~40-60% by reset
+    elif [ "$(echo "$burn_rate < 0.85" | bc)" -eq 1 ]; then
+        emoji="🙂"   # Comfortable - will use ~60-85% by reset
+    elif [ "$(echo "$burn_rate < 1.15" | bc)" -eq 1 ]; then
+        emoji="👌"   # On pace - will use ~85-115% by reset
+    elif [ "$(echo "$burn_rate < 1.4" | bc)" -eq 1 ]; then
+        emoji="♨️"   # Warming - will run out ~day 5-6
+    elif [ "$(echo "$burn_rate < 1.8" | bc)" -eq 1 ]; then
+        emoji="🥵"   # Hot - will run out ~day 4-5
+    elif [ "$(echo "$burn_rate < 2.5" | bc)" -eq 1 ] || [ "$pct" -lt "$min_for_alarm" ]; then
+        emoji="🔥"   # Very hot - will run out ~day 3-4 (or high rate but low absolute)
+    else
+        emoji="🚨"   # Alarm - burn_rate >= 2.5 AND pct >= min_for_alarm
+    fi
+
+    echo "${emoji}${arrow}"
 }
 
 # Extract all values in a single jq call (11 calls → 1)
