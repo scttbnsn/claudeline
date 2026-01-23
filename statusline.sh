@@ -184,115 +184,87 @@ get_usage_data() {
 # Returns: ↑ (heating fast), ↗ (warming), → (stable), ↘ (cooling), ↓ (cooling fast)
 get_trend_arrow() {
     local current_usage=$1  # Current usage percentage (0-100)
+    local week_start=${2:-0}  # Epoch when current week started (optional)
     [[ "$current_usage" == .* ]] && current_usage="0$current_usage"
 
     local now=$(date +%s)
-    local min_interval=30  # Don't record more than once per 30 seconds
 
-    # Append to history if enough time has passed since last entry
-    local should_append=1
-    if [ -f "$USAGE_HISTORY" ]; then
-        local last_line=$(tail -1 "$USAGE_HISTORY" 2>/dev/null)
-        local last_time=${last_line%%,*}
-        if [ -n "$last_time" ] && [ $((now - last_time)) -lt $min_interval ]; then
-            should_append=0
-        fi
-    fi
+    # Single awk call: append, prune, calculate velocity, return arrow code
+    # This replaces ~10 subprocess calls (tail, head, wc, 2x awk, sort, 4x bc) with 1
+    local arrow_code=$(awk -F, -v now="$now" -v usage="$current_usage" \
+        -v week_start="$week_start" -v trend_window="${TREND_WINDOW:-900}" '
+    BEGIN {
+        min_interval = 30
+        max_age = now - 86400
+        cutoff = now - trend_window
+        anchor_interval = 14400
+        sustainable = 0.00992
+        first_time = 0; first_usage = 0
+        last_time = 0; last_usage = 0
+        count = 0
+    }
+    {
+        # Skip entries before week start (handles weekly reset)
+        if (week_start > 0 && $1 < week_start) next
+        # Skip entries older than 24hr
+        if ($1 < max_age) next
 
-    if [ "$should_append" -eq 1 ]; then
-        echo "$now,$current_usage" >> "$USAGE_HISTORY"
-    fi
-
-    # Smart pruning (24hr max):
-    # - Within TREND_WINDOW: keep all samples (dense)
-    # - 15min-24hr old: keep 1 sample per 4-hour block (sparse anchors)
-    # - Older than 24hr: delete
-    if [ -f "$USAGE_HISTORY" ]; then
-        local cutoff=$((now - TREND_WINDOW))
-        local max_age=$((now - 86400))  # 24 hours
-        local anchor_interval=14400     # 4 hours
-        local temp_file="${USAGE_HISTORY}.tmp"
-
-        awk -F, -v cutoff="$cutoff" -v max_age="$max_age" -v interval="$anchor_interval" -v now="$now" '
-        $1 < max_age { next }  # Delete anything older than 24hr
-        $1 >= cutoff { print; next }  # Keep all recent samples
-        {
-            # For mid-range samples, keep one per 4-hour block
-            block = int((now - $1) / interval)
-            if (!(block in seen)) {
-                seen[block] = 1
-                print
-            }
+        # Smart pruning: keep recent samples, sparse anchors for older
+        if ($1 < cutoff) {
+            block = int((now - $1) / anchor_interval)
+            if (block in seen) next
+            seen[block] = 1
         }
-        ' "$USAGE_HISTORY" | sort -t, -k1 -n > "$temp_file" 2>/dev/null
-        mv "$temp_file" "$USAGE_HISTORY" 2>/dev/null
-    fi
 
-    # Need at least 2 data points to compute trend
-    local line_count=$(wc -l < "$USAGE_HISTORY" 2>/dev/null | tr -d ' ')
-    if [ -z "$line_count" ] || [ "$line_count" -lt 2 ]; then
-        echo -e "${CTX_GREEN}→${RESET}"  # Not enough data yet
-        return
-    fi
+        # Track first and last for velocity calc
+        if (first_time == 0 || $1 < first_time) { first_time = $1; first_usage = $2 }
+        if ($1 > last_time) { last_time = $1; last_usage = $2 }
+        count++
 
-    # Get oldest and newest samples for velocity calculation
-    local first_line=$(head -1 "$USAGE_HISTORY")
-    local last_line=$(tail -1 "$USAGE_HISTORY")
-    local first_time=${first_line%%,*}
-    local first_usage=${first_line##*,}
-    local last_time=${last_line%%,*}
-    local last_usage=${last_line##*,}
+        # Remember for append check
+        most_recent_time = (most_recent_time > $1) ? most_recent_time : $1
 
-    [[ "$first_usage" == .* ]] && first_usage="0$first_usage"
-    [[ "$last_usage" == .* ]] && last_usage="0$last_usage"
+        # Output kept lines for rewrite
+        print > "/dev/stderr"
+    }
+    END {
+        # Append new entry if enough time passed
+        if (now - most_recent_time >= min_interval) {
+            print now "," usage > "/dev/stderr"
+            if (first_time == 0) { first_time = now; first_usage = usage }
+            last_time = now; last_usage = usage
+            count++
+        }
 
-    # Calculate time elapsed in minutes
-    local elapsed_min=$(echo "scale=4; ($last_time - $first_time) / 60" | bc 2>/dev/null)
-    [[ "$elapsed_min" == .* ]] && elapsed_min="0$elapsed_min"
+        # Need 2+ points and 1+ minute elapsed
+        if (count < 2) { print "stable"; exit }
+        elapsed_min = (last_time - first_time) / 60
+        if (elapsed_min < 1) { print "stable"; exit }
 
-    # Need meaningful time span
-    if [ "$(echo "$elapsed_min < 1" | bc 2>/dev/null)" -eq 1 ]; then
-        echo -e "${CTX_GREEN}→${RESET}"  # Not enough time elapsed
-        return
-    fi
+        # Calculate velocity ratio
+        velocity = (last_usage - first_usage) / elapsed_min
+        ratio = velocity / sustainable
 
-    # Calculate actual usage velocity (%/min)
-    local usage_change=$(echo "scale=6; $last_usage - $first_usage" | bc 2>/dev/null)
-    [[ "$usage_change" == .* ]] && usage_change="0$usage_change"
-    [[ "$usage_change" == -.* ]] && usage_change="-0${usage_change#-}"
+        # Map to arrow code
+        if (ratio > 3) print "hot"
+        else if (ratio > 1.5) print "warm"
+        else if (ratio < 0.1) print "cold"
+        else if (ratio < 0.5) print "cool"
+        else print "stable"
+    }
+    ' "$USAGE_HISTORY" 2> "${USAGE_HISTORY}.tmp")
 
-    local actual_velocity=$(echo "scale=6; $usage_change / $elapsed_min" | bc 2>/dev/null)
-    [[ "$actual_velocity" == .* ]] && actual_velocity="0$actual_velocity"
-    [[ "$actual_velocity" == -.* ]] && actual_velocity="-0${actual_velocity#-}"
-    actual_velocity=${actual_velocity:-0}
+    # Replace history with pruned version
+    mv "${USAGE_HISTORY}.tmp" "$USAGE_HISTORY" 2>/dev/null
 
-    # Sustainable velocity = 100% / 7 days = 100 / (7*24*60) ≈ 0.00992 %/min
-    local sustainable="0.00992"
-
-    # Compare actual to sustainable
-    # >1.5x sustainable = warming, >3x = heating fast
-    # <0.5x sustainable = cooling, <0.1x = cooling fast
-    local ratio=$(echo "scale=4; $actual_velocity / $sustainable" | bc 2>/dev/null)
-    [[ "$ratio" == .* ]] && ratio="0$ratio"
-    [[ "$ratio" == -.* ]] && ratio="-0${ratio#-}"
-    ratio=${ratio:-0}
-
-    # Map velocity ratio to colored arrow
-    # ratio = actual_velocity / sustainable_velocity
-    # >1.5 = warming (using faster than sustainable)
-    # <0.5 = cooling (using slower than sustainable)
-    # Colors: cyan (cooling) → green (stable) → orange (warming) → red (hot)
-    if [ "$(echo "$ratio > 3" | bc 2>/dev/null)" -eq 1 ]; then
-        echo -e "${CTX_RED}↑${RESET}"    # Heating fast - 3x+ sustainable
-    elif [ "$(echo "$ratio > 1.5" | bc 2>/dev/null)" -eq 1 ]; then
-        echo -e "${CTX_ORANGE}↗${RESET}" # Warming - 1.5-3x sustainable
-    elif [ "$(echo "$ratio < 0.1" | bc 2>/dev/null)" -eq 1 ]; then
-        echo -e "${CYAN}↓${RESET}"       # Cooling fast - barely using
-    elif [ "$(echo "$ratio < 0.5" | bc 2>/dev/null)" -eq 1 ]; then
-        echo -e "${BURST_TEAL}↘${RESET}" # Cooling - <0.5x sustainable
-    else
-        echo -e "${CTX_GREEN}→${RESET}"  # Stable - roughly on pace
-    fi
+    # Map code to colored arrow
+    case "$arrow_code" in
+        hot)    echo -e "${CTX_RED}↑${RESET}" ;;
+        warm)   echo -e "${CTX_ORANGE}↗${RESET}" ;;
+        cold)   echo -e "${CYAN}↓${RESET}" ;;
+        cool)   echo -e "${BURST_TEAL}↘${RESET}" ;;
+        *)      echo -e "${CTX_GREEN}→${RESET}" ;;
+    esac
 }
 
 # Get smart pace indicator using BURN RATE (Google SRE method)
@@ -313,9 +285,9 @@ get_smart_pace_indicator() {
     pct=${pct:-0}
 
     local reset_suffix=""
-    local burn_rate=1.0
-    local days_until_reset=7
-    local days_elapsed=0
+    local week_start=0
+    local days_elapsed_x10k=70000  # 7 days * 10000 (default: full week elapsed)
+    local burn_rate_x10k=10000     # 1.0 * 10000 (default: on pace)
 
     if [ -n "$resets_at" ] && [ "$resets_at" != "null" ]; then
         # Parse ISO timestamp to epoch (works on macOS and Linux)
@@ -328,27 +300,30 @@ get_smart_pace_indicator() {
 
         if [ -n "$reset_epoch" ] && [ "$reset_epoch" -gt "$now" ]; then
             local seconds_until_reset=$((reset_epoch - now))
-            days_until_reset=$(echo "scale=4; $seconds_until_reset / 86400" | bc)
-            days_elapsed=$(echo "scale=4; 7 - $days_until_reset" | bc)
-            [[ "$days_elapsed" == .* ]] && days_elapsed="0$days_elapsed"
+            week_start=$((reset_epoch - 604800))  # 7 days before reset = week start
 
-            # Calculate burn rate: projected usage over 7 days at current pace
-            # burn_rate = (pct / days_elapsed) * 7 / 100
-            # Equivalent to: if I keep using at this rate, what % will I hit by day 7?
-            if [ "$(echo "$days_elapsed > 0.01" | bc)" -eq 1 ]; then
-                burn_rate=$(echo "scale=4; ($pct / $days_elapsed) * 7 / 100" | bc)
-                [[ "$burn_rate" == .* ]] && burn_rate="0$burn_rate"
+            # Use integer math: multiply by 10000 to preserve 4 decimal places
+            # 86400 seconds = 1 day
+            local days_until_x10k=$(( seconds_until_reset * 10000 / 86400 ))
+            days_elapsed_x10k=$(( 70000 - days_until_x10k ))  # 7 * 10000
+
+            # Calculate burn rate: (pct / days_elapsed) * 7 / 100
+            if [ "$days_elapsed_x10k" -gt 100 ]; then  # > 0.01 days
+                burn_rate_x10k=$(( pct * 70000 / days_elapsed_x10k ))
             elif [ "$pct" -gt 0 ]; then
-                burn_rate=10  # Way ahead if we have usage but almost no time elapsed
+                burn_rate_x10k=100000  # 10.0
             else
-                burn_rate=0   # No usage yet = perfect
+                burn_rate_x10k=0
             fi
 
-            # Format reset time suffix for when at limit
-            if [ "$(echo "$days_until_reset >= 1" | bc)" -eq 1 ]; then
-                reset_suffix=" -$(printf "%.1f" "$days_until_reset")d"
+            # Format reset time suffix for when at limit (only place needing float)
+            if [ "$days_until_x10k" -ge 10000 ]; then  # >= 1 day
+                # Format: days_until_x10k / 10000 with 1 decimal
+                local days_int=$(( days_until_x10k / 10000 ))
+                local days_frac=$(( (days_until_x10k % 10000) / 1000 ))
+                reset_suffix=" -${days_int}.${days_frac}d"
             else
-                local hours_until=$(echo "scale=0; $days_until_reset * 24" | bc)
+                local hours_until=$(( days_until_x10k * 24 / 10000 ))
                 reset_suffix=" -${hours_until}h"
             fi
         fi
@@ -369,11 +344,12 @@ get_smart_pace_indicator() {
     fi
 
     # Get trend arrow based on usage% velocity
-    local arrow=$(get_trend_arrow "$usage")
+    local arrow=$(get_trend_arrow "$usage" "$week_start")
 
     # GRACE PERIOD: First 6 hours (0.25 days), use absolute thresholds only
     # This prevents false alarms when burn rate is unstable due to small sample
-    if [ "$(echo "$days_elapsed < 0.25" | bc)" -eq 1 ]; then
+    # days_elapsed_x10k < 2500 means < 0.25 days
+    if [ "${days_elapsed_x10k:-0}" -lt 2500 ]; then
         local emoji
         if [ "$pct" -ge 30 ]; then
             emoji="🚨"   # 30%+ in first 6 hours is critical
@@ -390,30 +366,31 @@ get_smart_pace_indicator() {
 
     # GRADUATED MINIMUM: Higher absolute % required for alarm early in week
     local min_for_alarm
-    if [ "$(echo "$days_elapsed < 1" | bc)" -eq 1 ]; then
+    if [ "${days_elapsed_x10k:-0}" -lt 10000 ]; then  # < 1 day
         min_for_alarm=20   # Day 1: need 20%+ for alarm
-    elif [ "$(echo "$days_elapsed < 2" | bc)" -eq 1 ]; then
+    elif [ "${days_elapsed_x10k:-0}" -lt 20000 ]; then  # < 2 days
         min_for_alarm=15   # Day 2: need 15%+
     else
         min_for_alarm=10   # Day 3+: normal sensitivity
     fi
 
-    # Map burn rate to emoji
+    # Map burn rate to emoji using integer comparison (burn_rate_x10k)
     # burn_rate 1.0 = on pace, >1 = will run out before reset, <1 = will have leftover
     local emoji
-    if [ "$(echo "$burn_rate < 0.3" | bc)" -eq 1 ]; then
+    local br=${burn_rate_x10k:-10000}  # Default to 1.0 if not set
+    if [ "$br" -lt 3000 ]; then
         emoji="❄️"   # Way under - using < 30% of sustainable rate
-    elif [ "$(echo "$burn_rate < 0.6" | bc)" -eq 1 ]; then
+    elif [ "$br" -lt 6000 ]; then
         emoji="🧊"   # Under pace - will use ~40-60% by reset
-    elif [ "$(echo "$burn_rate < 0.85" | bc)" -eq 1 ]; then
+    elif [ "$br" -lt 8500 ]; then
         emoji="🙂"   # Comfortable - will use ~60-85% by reset
-    elif [ "$(echo "$burn_rate < 1.15" | bc)" -eq 1 ]; then
+    elif [ "$br" -lt 11500 ]; then
         emoji="👌"   # On pace - will use ~85-115% by reset
-    elif [ "$(echo "$burn_rate < 1.4" | bc)" -eq 1 ]; then
+    elif [ "$br" -lt 14000 ]; then
         emoji="♨️"   # Warming - will run out ~day 5-6
-    elif [ "$(echo "$burn_rate < 1.8" | bc)" -eq 1 ]; then
+    elif [ "$br" -lt 18000 ]; then
         emoji="🥵"   # Hot - will run out ~day 4-5
-    elif [ "$(echo "$burn_rate < 2.5" | bc)" -eq 1 ] || [ "$pct" -lt "$min_for_alarm" ]; then
+    elif [ "$br" -lt 25000 ] || [ "$pct" -lt "$min_for_alarm" ]; then
         emoji="🔥"   # Very hot - will run out ~day 3-4 (or high rate but low absolute)
     else
         emoji="🚨"   # Alarm - burn_rate >= 2.5 AND pct >= min_for_alarm
