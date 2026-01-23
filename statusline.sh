@@ -197,7 +197,7 @@ get_trend_arrow() {
     touch "$USAGE_HISTORY" 2>/dev/null
     : > "$tmp" 2>/dev/null
     local arrow_code
-    arrow_code=$(awk -F, -v now="$now" -v usage="$current_usage" \
+    if arrow_code=$(awk -F, -v now="$now" -v usage="$current_usage" \
         -v week_start="$week_start" -v trend_window="${TREND_WINDOW:-900}" \
         -v out="$tmp" '
     BEGIN {
@@ -260,10 +260,13 @@ get_trend_arrow() {
         else if (ratio < 0.5) print "cool"
         else print "stable"
     }
-    ' "$USAGE_HISTORY")
-
-    # Replace history with pruned version
-    mv "$tmp" "$USAGE_HISTORY" 2>/dev/null
+    ' "$USAGE_HISTORY"); then
+        # Replace history with pruned version only on success
+        mv "$tmp" "$USAGE_HISTORY" 2>/dev/null
+    else
+        rm -f "$tmp"
+        arrow_code="stable"
+    fi
 
     # Map code to colored arrow
     case "$arrow_code" in
