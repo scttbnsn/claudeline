@@ -191,8 +191,15 @@ get_trend_arrow() {
 
     # Single awk call: append, prune, calculate velocity, return arrow code
     # This replaces ~10 subprocess calls (tail, head, wc, 2x awk, sort, 4x bc) with 1
-    local arrow_code=$(awk -F, -v now="$now" -v usage="$current_usage" \
-        -v week_start="$week_start" -v trend_window="${TREND_WINDOW:-900}" '
+    # Data output goes to temp file via -v out variable (not stderr) to prevent
+    # awk errors from corrupting history file
+    local tmp="${USAGE_HISTORY}.tmp"
+    touch "$USAGE_HISTORY" 2>/dev/null
+    : > "$tmp" 2>/dev/null
+    local arrow_code
+    arrow_code=$(awk -F, -v now="$now" -v usage="$current_usage" \
+        -v week_start="$week_start" -v trend_window="${TREND_WINDOW:-900}" \
+        -v out="$tmp" '
     BEGIN {
         min_interval = 30
         max_age = now - 86400
@@ -224,17 +231,18 @@ get_trend_arrow() {
         # Remember for append check
         most_recent_time = (most_recent_time > $1) ? most_recent_time : $1
 
-        # Output kept lines for rewrite
-        print > "/dev/stderr"
+        # Output kept lines to temp file (not stderr, to avoid corruption from awk errors)
+        print >> out
     }
     END {
         # Append new entry if enough time passed
         if (now - most_recent_time >= min_interval) {
-            print now "," usage > "/dev/stderr"
+            print now "," usage >> out
             if (first_time == 0) { first_time = now; first_usage = usage }
             last_time = now; last_usage = usage
             count++
         }
+        close(out)
 
         # Need 2+ points and 1+ minute elapsed
         if (count < 2) { print "stable"; exit }
@@ -252,10 +260,10 @@ get_trend_arrow() {
         else if (ratio < 0.5) print "cool"
         else print "stable"
     }
-    ' "$USAGE_HISTORY" 2> "${USAGE_HISTORY}.tmp")
+    ' "$USAGE_HISTORY")
 
     # Replace history with pruned version
-    mv "${USAGE_HISTORY}.tmp" "$USAGE_HISTORY" 2>/dev/null
+    mv "$tmp" "$USAGE_HISTORY" 2>/dev/null
 
     # Map code to colored arrow
     case "$arrow_code" in

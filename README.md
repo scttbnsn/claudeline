@@ -273,6 +273,23 @@ Then restart Claude Code. That's it.
 
 </details>
 
+## Performance
+
+Typical execution time with warm caches:
+
+| Scenario | Time |
+|----------|------|
+| Warm caches (typical) | ~250ms |
+| Best case | ~190ms |
+| Cold API cache | +700ms (network) |
+| Cold JSONL cache | +2.5s (file scan) |
+
+Caching keeps things fast:
+- **API cache:** 60 seconds (usage data from Anthropic)
+- **JSONL cache:** 5 minutes (all-time totals from project files)
+
+The script optimizes subprocess calls - the trend velocity calculation uses a single awk call instead of 10+ shell commands (head, tail, wc, grep, sort, bc, etc.).
+
 ## Requirements
 
 - `jq` (for JSON parsing)
