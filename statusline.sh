@@ -319,8 +319,10 @@ get_smart_pace_indicator() {
             days_elapsed_x10k=$(( 70000 - days_until_x10k ))  # 7 * 10000
 
             # Calculate burn rate: (pct / days_elapsed) * 7 / 100
+            # burn_rate_x10k = burn_rate * 10000 = pct * 7 * 10000 / days_elapsed / 100
+            #                = pct * 700 / days_elapsed = pct * 7000000 / days_elapsed_x10k
             if [ "$days_elapsed_x10k" -gt 100 ]; then  # > 0.01 days
-                burn_rate_x10k=$(( pct * 70000 / days_elapsed_x10k ))
+                burn_rate_x10k=$(( pct * 7000000 / days_elapsed_x10k ))
             elif [ "$pct" -gt 0 ]; then
                 burn_rate_x10k=100000  # 10.0
             else
