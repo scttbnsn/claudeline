@@ -1596,7 +1596,7 @@ fi
 # Shows remaining balance and % of monthly cap used
 CREDIT_INDICATOR=""
 WEEKLY_PCT=$(printf "%.0f" "$WEEKLY_USAGE" 2>/dev/null)
-if [ "$WEEKLY_PCT" -ge 100 ] 2>/dev/null && [ -n "$EXTRA_USED" ] && [ "$EXTRA_USED" != "_" ] && [ -n "$EXTRA_LIMIT" ] && [ "$EXTRA_LIMIT" != "_" ]; then
+if [ "$WEEKLY_PCT" -ge 100 ] 2>/dev/null && [ -n "$EXTRA_USED" ] && [ "$EXTRA_USED" != "_" ] && [ "$EXTRA_USED" != "null" ] && [ -n "$EXTRA_LIMIT" ] && [ "$EXTRA_LIMIT" != "_" ] && [ "$EXTRA_LIMIT" != "null" ]; then
     # API returns cents, convert to dollars
     EXTRA_REMAINING=$(echo "scale=0; ($EXTRA_LIMIT - $EXTRA_USED) / 100" | bc 2>/dev/null)
     EXTRA_CAP=$(echo "scale=0; $EXTRA_LIMIT / 100" | bc 2>/dev/null)
