@@ -13,11 +13,13 @@ PINK="\033[38;2;255;110;199m"      # #FF6EC7
 PURPLE="\033[38;2;187;134;252m"    # #BB86FC
 CYAN="\033[38;2;100;255;218m"      # #64FFDA
 BLUE="\033[38;2;130;170;255m"      # #82AAFF
-# Context tier colors (green → yellow → orange → red)
-CTX_GREEN="\033[38;2;194;255;74m"  # #C2FF4A - neon lime
-CTX_YELLOW="\033[38;2;255;234;0m"  # #FFEA00 - electric yellow
-CTX_ORANGE="\033[38;2;254;117;63m" # #FE753F - coral orange
-CTX_RED="\033[38;2;255;77;106m"    # #FF4D6A - hot pink red
+# Context tier colors (6-level gradient: cyan → lime → yellow → orange → coral → red)
+CTX_CYAN="\033[38;2;100;255;218m"    # #64FFDA - cyan
+CTX_LIME="\033[38;2;194;255;74m"     # #C2FF4A - neon lime
+CTX_YELLOW="\033[38;2;255;234;0m"    # #FFEA00 - electric yellow
+CTX_ORANGE="\033[38;2;255;165;0m"    # #FFA500 - orange
+CTX_CORAL="\033[38;2;254;117;63m"    # #FE753F - coral
+CTX_RED="\033[38;2;255;77;106m"      # #FF4D6A - hot pink red
 # Legacy (for other elements)
 GREEN="\033[38;2;194;255;74m"      # #C2FF4A
 RED="\033[38;2;255;77;106m"        # #FF4D6A
@@ -499,16 +501,22 @@ else
     PERCENT_USED=0
 fi
 
-# Color-code context based on usage (40/25/23/12 split, adjusted for ~35K startup overhead)
-if [ "$PERCENT_USED" -lt 40 ]; then
-    CTX_COLOR=$CTX_GREEN
+# Color-code context based on usage (6-tier gradient)
+if [ "$PERCENT_USED" -lt 18 ]; then
+    CTX_COLOR=$CTX_CYAN
     CTX_ICON="✨"
-elif [ "$PERCENT_USED" -lt 65 ]; then
+elif [ "$PERCENT_USED" -lt 35 ]; then
+    CTX_COLOR=$CTX_LIME
+    CTX_ICON="✨"
+elif [ "$PERCENT_USED" -lt 50 ]; then
     CTX_COLOR=$CTX_YELLOW
     CTX_ICON="💭"
-elif [ "$PERCENT_USED" -lt 88 ]; then
+elif [ "$PERCENT_USED" -lt 68 ]; then
     CTX_COLOR=$CTX_ORANGE
     CTX_ICON="🧠"
+elif [ "$PERCENT_USED" -lt 88 ]; then
+    CTX_COLOR=$CTX_CORAL
+    CTX_ICON="🔥"
 else
     CTX_COLOR=$CTX_RED
     CTX_ICON="💾"
