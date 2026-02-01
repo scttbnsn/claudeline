@@ -1556,7 +1556,7 @@ else
 fi
 
 # Get usage data from API
-read -r WEEKLY_USAGE RESETS_AT EXTRA_USAGE BURST_USAGE EXTRA_USED EXTRA_LIMIT <<< "$(get_usage_data)"
+read -r WEEKLY_USAGE RESETS_AT _ BURST_USAGE EXTRA_USED EXTRA_LIMIT <<< "$(get_usage_data)"
 
 # Smart pace indicator (trend-based)
 PACE_INDICATOR=""
