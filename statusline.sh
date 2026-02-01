@@ -171,15 +171,18 @@ get_usage_data() {
         -H "anthropic-beta: oauth-2025-04-20" \
         "https://api.anthropic.com/api/oauth/usage" 2>/dev/null)
 
-    local utilization=$(echo "$response" | jq -r '.seven_day.utilization // empty' 2>/dev/null)
-    local resets_at=$(echo "$response" | jq -r '.seven_day.resets_at // empty' 2>/dev/null)
-    local extra_util=$(echo "$response" | jq -r '.extra_usage.utilization // empty' 2>/dev/null)
-    local burst_util=$(echo "$response" | jq -r '.five_hour.utilization // empty' 2>/dev/null)
+    # Extract all fields, using _ as placeholder for null/missing values
+    local utilization=$(echo "$response" | jq -r '.seven_day.utilization // "_"' 2>/dev/null)
+    local resets_at=$(echo "$response" | jq -r '.seven_day.resets_at // "_"' 2>/dev/null)
+    local extra_util=$(echo "$response" | jq -r '.extra_usage.utilization // "_"' 2>/dev/null)
+    local burst_util=$(echo "$response" | jq -r '.five_hour.utilization // "_"' 2>/dev/null)
+    local extra_used=$(echo "$response" | jq -r '.extra_usage.used_credits // "_"' 2>/dev/null)
+    local extra_limit=$(echo "$response" | jq -r '.extra_usage.monthly_limit // "_"' 2>/dev/null)
 
-    if [ -n "$utilization" ]; then
-        # Cache the result (utilization resets_at extra_utilization burst_utilization)
-        echo -e "$now\n$utilization $resets_at $extra_util $burst_util" > "$API_CACHE"
-        echo "$utilization $resets_at $extra_util $burst_util"
+    if [ -n "$utilization" ] && [ "$utilization" != "_" ]; then
+        # Cache: utilization resets_at extra_util burst_util extra_used extra_limit
+        echo -e "$now\n$utilization $resets_at $extra_util $burst_util $extra_used $extra_limit" > "$API_CACHE"
+        echo "$utilization $resets_at $extra_util $burst_util $extra_used $extra_limit"
     else
         # Return stale cache if API fails
         [ -f "$API_CACHE" ] && tail -1 "$API_CACHE" 2>/dev/null
@@ -308,7 +311,7 @@ get_smart_pace_indicator() {
     local days_elapsed_x10k=70000  # 7 days * 10000 (default: full week elapsed)
     local burn_rate_x10k=10000     # 1.0 * 10000 (default: on pace)
 
-    if [ -n "$resets_at" ] && [ "$resets_at" != "null" ]; then
+    if [ -n "$resets_at" ] && [ "$resets_at" != "_" ] && [ "$resets_at" != "null" ]; then
         # Parse ISO timestamp to epoch (works on macOS and Linux)
         local reset_epoch
         if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -1552,9 +1555,8 @@ else
     REPO_BRANCH="${SKY}${DIR_NAME}${RESET}"
 fi
 
-# Get usage data from API (utilization resets_at extra_utilization burst_utilization)
-# Replace 4 awk calls with single read
-read -r WEEKLY_USAGE RESETS_AT EXTRA_USAGE BURST_USAGE <<< "$(get_usage_data)"
+# Get usage data from API
+read -r WEEKLY_USAGE RESETS_AT EXTRA_USAGE BURST_USAGE EXTRA_USED EXTRA_LIMIT <<< "$(get_usage_data)"
 
 # Smart pace indicator (trend-based)
 PACE_INDICATOR=""
@@ -1565,7 +1567,7 @@ fi
 # Burst indicator (💥 with colored bar, only when > 0%)
 # 8 levels: ▁▂▃▄▅▆▇█ with color gradient jade→teal→green→yellow→orange→red→magenta→bright magenta
 BURST_INDICATOR=""
-if [ -n "$BURST_USAGE" ] && [ "$BURST_USAGE" != "null" ]; then
+if [ -n "$BURST_USAGE" ] && [ "$BURST_USAGE" != "_" ] && [ "$BURST_USAGE" != "null" ]; then
     BURST_PCT=$(printf "%.0f" "$BURST_USAGE" 2>/dev/null)
     if [ "$BURST_PCT" -gt 0 ] 2>/dev/null; then
         # Map percentage to bar and color
@@ -1590,12 +1592,17 @@ if [ -n "$BURST_USAGE" ] && [ "$BURST_USAGE" != "null" ]; then
     fi
 fi
 
-# Credit usage indicator (💳 with percentage, only when > 0%)
+# Credit indicator (💳) - only shown when at weekly limit (in overage)
+# Shows remaining balance and % of monthly cap used
 CREDIT_INDICATOR=""
-if [ -n "$EXTRA_USAGE" ] && [ "$EXTRA_USAGE" != "null" ]; then
-    CREDIT_PCT=$(printf "%.0f" "$EXTRA_USAGE" 2>/dev/null)
-    if [ "$CREDIT_PCT" -gt 0 ] 2>/dev/null; then
-        CREDIT_INDICATOR="${DIM}💳${CREDIT_PCT}%${RESET}"
+WEEKLY_PCT=$(printf "%.0f" "$WEEKLY_USAGE" 2>/dev/null)
+if [ "$WEEKLY_PCT" -ge 100 ] 2>/dev/null && [ -n "$EXTRA_USED" ] && [ "$EXTRA_USED" != "_" ] && [ -n "$EXTRA_LIMIT" ] && [ "$EXTRA_LIMIT" != "_" ]; then
+    # API returns cents, convert to dollars
+    EXTRA_REMAINING=$(echo "scale=0; ($EXTRA_LIMIT - $EXTRA_USED) / 100" | bc 2>/dev/null)
+    EXTRA_CAP=$(echo "scale=0; $EXTRA_LIMIT / 100" | bc 2>/dev/null)
+    EXTRA_SPENT_PCT=$(echo "scale=0; $EXTRA_USED * 100 / $EXTRA_LIMIT" | bc 2>/dev/null)
+    if [ -n "$EXTRA_REMAINING" ] && [ -n "$EXTRA_CAP" ]; then
+        CREDIT_INDICATOR="${DIM}💳\$${EXTRA_REMAINING}/\$${EXTRA_CAP} (${EXTRA_SPENT_PCT}%)${RESET}"
     fi
 fi
 
