@@ -11,7 +11,7 @@ DIM="\033[2m"
 # Accent colors
 PINK="\033[38;2;255;110;199m"      # #FF6EC7
 PURPLE="\033[38;2;187;134;252m"    # #BB86FC
-CYAN="\033[38;2;100;255;218m"      # #64FFDA
+CYAN="\033[38;2;92;200;255m"       # #5CC8FF - sky blue
 BLUE="\033[38;2;130;170;255m"      # #82AAFF
 # Context tier colors (6-level gradient: cyan → lime → yellow → orange → coral → red)
 CTX_CYAN="\033[38;2;100;255;218m"    # #64FFDA - cyan
@@ -24,7 +24,7 @@ CTX_RED="\033[38;2;255;77;106m"      # #FF4D6A - hot pink red
 GREEN="\033[38;2;194;255;74m"      # #C2FF4A
 RED="\033[38;2;255;77;106m"        # #FF4D6A
 # Burst bar gradient (8 levels: cyan → teal → green → yellow → orange → red → magenta → bright magenta)
-BURST_CYAN="\033[38;2;100;255;218m"       # #64FFDA
+BURST_CYAN="\033[38;2;32;232;182m"        # #20E8B6 - jade
 BURST_TEAL="\033[38;2;0;200;170m"         # #00C8AA
 BURST_GREEN="\033[38;2;100;220;100m"      # #64DC64
 BURST_YELLOW="\033[38;2;255;234;0m"       # #FFEA00
