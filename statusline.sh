@@ -480,25 +480,23 @@ else
 fi
 
 # Session-tier fun cost items (price <= $20) — shown during session display
-SESSION_COST_ITEMS=(0 1 2 3 4 5 6 8 9 10 11 12 13 14 15 16 17 20 23 26 27 28 29 30 31 33 38 39)
+SESSION_COST_ITEMS=(0 1 2 3 4 5 6 8 9 10 11 12 13 14 15 18 21 24 25 26 27 29 32 33)
 
 # All-time-tier fun cost items (price > $20) — shown during all-time normal display
-ALLTIME_COST_ITEMS=(7 18 19 21 22 24 25 32 34 35 36 37)
+ALLTIME_COST_ITEMS=(7 16 17 19 20 22 23 28 30 31)
 
 # Session metric: 4 equal categories, rotate items within each
-# Categories: 0=water(1), 1=power(7), 2=utility(3), 3=fun_cost(28 session-tier)
+# Categories: 0=water(1), 1=power(7), 2=utility(3), 3=fun_cost(24 session-tier)
 CATEGORY_INDEX=$((NOW_DIV_10 % 4))
 # Item within category rotates on slower cycle (every 40s = 4 categories * 10s)
 ITEM_CYCLE=$((NOW_DIV_10 / 4))
-WATER_ITEM_INDEX=0                         # standard water only (bathtubs/pools in all-time)
 POWER_ITEM_INDEX=$((ITEM_CYCLE % 7))      # 0=standard, 1-6=fun power (no coal/reactor)
 UTILITY_ITEM_INDEX=$((ITEM_CYCLE % 3))    # 0=tokens, 1=money, 2=data
 FUN_COST_ITEM_INDEX=${SESSION_COST_ITEMS[$((ITEM_CYCLE % ${#SESSION_COST_ITEMS[@]}))]}  # session-tier only (price <= $20)
 
 # All-time item indices (rotate through items within their category)
-# ALLTIME_COST_ITEMS has 12 items (price > $20), ABSURD_EMOJI has 8 items
-# ALLTIME_COST_ITEMS has 12 items (price > $20), ABSURD_EMOJI has 7 items
-ALLTIME_ABSURD_INDEX=$((NOW_DIV_10 % 7))
+# Normal: 10 cost + coal + reactor + tokens + cost + data = 15; Absurd: 7 items
+ALLTIME_ABSURD_INDEX=$((NOW_DIV_10 % ${#ABSURD_EMOJI[@]}))
 
 # Calculate context percentage (scaled to auto-compact threshold)
 # 168K is the actual compression trigger point (out of 200K total context)
@@ -641,48 +639,8 @@ format_count() {
         local count=$(printf "%.1f" "$raw_count")
         echo "$count" | sed 's/\.0$//'
     else
-        # For values < 1, snap to easy fraction targets (capped at 1/100)
-        local exact_denom=$(echo "1 / $raw_count" | bc -l)
-        [[ "$exact_denom" == .* ]] && exact_denom="0$exact_denom"
-
-        # Floor check: if exact_denom > 150, value is too small for readable fractions
-        if [ "$(echo "$exact_denom > 150" | bc)" -eq 1 ]; then
-            echo "<1/100th"
-            return
-        fi
-
-        # Find closest snap target (capped at 100)
-        local snap_targets=(2 3 4 5 10 20 50 100)
-        local best_denom=2
-        local best_diff=999999999
-
-        for target in "${snap_targets[@]}"; do
-            local diff=$(echo "scale=6; d=$exact_denom - $target; if (d < 0) -d else d" | bc)
-            [[ "$diff" == .* ]] && diff="0$diff"
-            if [ "$(echo "$diff < $best_diff" | bc)" -eq 1 ]; then
-                best_diff="$diff"
-                best_denom="$target"
-            fi
-        done
-
-        [ "$best_denom" -le 1 ] && echo "1" && return
-
-        # Ordinal suffix (3rd, 22nd, etc. but 11th, 12th, 13th; 1/2 has no suffix)
-        local suffix="th"
-        if [ "$best_denom" -eq 2 ]; then
-            suffix=""
-        else
-            local last_two=$((best_denom % 100))
-            local last_one=$((best_denom % 10))
-            if [ "$last_two" -lt 11 ] || [ "$last_two" -gt 13 ]; then
-                case "$last_one" in
-                    2) suffix="nd" ;;
-                    3) suffix="rd" ;;
-                esac
-            fi
-        fi
-
-        echo "1/${best_denom}${suffix}"
+        # For values < 1, use 2 significant digits so you can watch it grow
+        printf "%.2g" "$raw_count"
     fi
 }
 
@@ -807,12 +765,18 @@ format_fun_power() {
         return
     fi
 
-    # Special case: coal shows mass burned (lbs) at ~1 lb/kWh
+    # Special case: coal shows mass burned at ~1 lb/kWh, scales to tons at 2000 lbs
     if [ "$watts" -eq 0 ]; then
         local kwh=$(echo "scale=6; $wh / 1000" | bc)
         [[ "$kwh" == .* ]] && kwh="0$kwh"
-        local lbs=$(format_count "$kwh")
-        echo "$emoji $lbs lbs $name"
+        if [ "$(echo "$kwh >= 2000" | bc)" -eq 1 ]; then
+            local tons=$(echo "scale=6; $kwh / 2000" | bc)
+            local count=$(format_count "$tons")
+            echo "$emoji $count tons $name"
+        else
+            local lbs=$(format_count "$kwh")
+            echo "$emoji $lbs lbs $name"
+        fi
         return
     fi
 
@@ -849,27 +813,19 @@ format_fun_power() {
 
 # Fun money conversions - NORMAL items (session + all-time normal)
 # Parallel arrays for emoji, name, price
-FUN_EMOJI=("☕" "🍕" "🌮" "🍺" "🍔" "🍌" "🍿" "🎮" "📚" "🧻" "🖍️" "🥑" "🍦" "🥨" "🦪" "🌭" "🥯" "🍣" "🥩" "🛢️" "🥤" "🍝" "🦞" "🥗" "🏋️" "🚴" "🍪" "🥜" "📰" "🌯" "🧃" "🍟" "🛴" "🚋" "🖱️" "📱" "🩸" "🧸" "🥐" "🎵")
-FUN_NAME=("starbucks®" "joe's®" "tacorias®" "yuenglings®" "shackburgers®" "chiquitas®" "alamos®" "gta6s®" "strands®" "charmins®" "crayolas®" "haas®" "ample-hills®" "auntie-annes®" "blue-points®" "nathans®" "ess-a-bagels®" "nami-noris®" "lugers®" "exxon-valdezs®" "big-gulps®" "carbones®" "redlobsters®" "sweetgreens®" "equinoxs®" "soulcycles®" "levains®" "nuts4nuts®" "nytimes®" "chipotles®" "juice-presses®" "pommes-frites®" "razors®" "njts®" "magic-mice®" "iphones®" "pints-o-blood®" "paddingtons®" "cronuts®" "apple-music®")
-FUN_PRICE=(5.50 4 4.60 7 9 0.30 18 70 17 1 0.11 2 7 5 3.50 6 4 8 65 75 2.50 40 30 15 260 38 5 5 7 12 11 9 35 5.90 99 999 200 30 7.75 0.004)
+# 0:starbucks 1:joe's 2:tacoria 3:yuengling 4:shackburger 5:chiquita 6:alamo 7:gta6
+# 8:charmin 9:crayola 10:haas 11:auntie-annes 12:blue-point 13:nathan's 14:ess-a-bagel
+# 15:nami-nori 16:luger's 17:exxon-valdez 18:big-gulp 19:carbone 20:redlobster
+# 21:sweetgreen 22:equinox 23:soulcycle 24:levain 25:chipotle 26:juice-press
+# 27:pommes-frites 28:razor 29:njt 30:magic-mouse 31:iphone 32:cronut 33:apple-music
+FUN_EMOJI=("☕" "🍕" "🌮" "🍺" "🍔" "🍌" "🍿" "🎮" "🧻" "🖍️" "🥑" "🥨" "🦪" "🌭" "🥯" "🍣" "🥩" "🛢️" "🥤" "🍝" "🦞" "🥗" "🏋️" "🚴" "🍪" "🌯" "🧃" "🍟" "🛴" "🚋" "🖱️" "📱" "🥐" "🎵")
+FUN_NAME=("starbucks®" "joe's®" "tacorias®" "yuenglings®" "shackburgers®" "chiquitas®" "alamos®" "gta6s®" "charmins®" "crayolas®" "haas®" "auntie-annes®" "blue-points®" "nathans®" "ess-a-bagels®" "nami-noris®" "lugers®" "exxon-valdezs®" "big-gulps®" "carbones®" "redlobsters®" "sweetgreens®" "equinoxs®" "soulcycles®" "levains®" "chipotles®" "juice-presses®" "pommes-frites®" "razors®" "njts®" "magic-mice®" "iphones®" "cronuts®" "apple-music®")
+FUN_PRICE=(5.50 4 4.60 7 9 0.30 18 70 1 0.11 2 5 3.50 6 4 8 65 75 2.50 40 30 15 260 38 5 12 11 9 35 5.90 99 999 7.75 0.004)
 
 # Fun money conversions - ABSURD items (all-time only, fraction chasing 1)
-ABSURD_EMOJI=("🚐" "🧟" "🏝️" "🚢" "🏪" "🩸" "🚁")
-ABSURD_NAME=("sprinters®" "thrillers®" "private-islands®" "supertankers®" "chipotle-franchises®" "body @ blood®" "h130s®")
-ABSURD_PRICE=(50000 1600000 18000000 150000000 1000000 2000 3500000)
-
-# Helper: pluralize unit (add 's' unless count is exactly 1)
-pluralize() {
-    local count=$1
-    local singular=$2
-    local plural=${3:-${singular}s}
-    # Check if count is exactly 1 (not 1.5, not 1/2)
-    if [ "$count" = "1" ]; then
-        echo "$singular"
-    else
-        echo "$plural"
-    fi
-}
+ABSURD_EMOJI=("🚐" "🧟" "🏝️" "🏪" "🚁" "☕" "☕")
+ABSURD_NAME=("sprinters®" "thrillers®" "private-islands®" "chipotle-franchises®" "h130s®" "starbucks-franchises®" "starbucks-ceo-pays®")
+ABSURD_PRICE=(50000 1600000 18000000 1000000 3500000 315000 57000000)
 
 # Multi-unit format functions
 # Format: {count} {unit} @ {brand}® for sub-units, {count} {brand}® for main unit
@@ -877,49 +833,30 @@ pluralize() {
 format_starbucks() {
     local cost=$1
     local emoji="☕"
-    # sip $0.31, venti $5.50, franchise $315000, ceo-pay $57000000
-    if [ "$(echo "$cost >= 57000000" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 57000000" | bc)
-        local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "ceo-pay" "ceo-pays")
-        echo "$emoji $count $unit @ starbucks®"
-    elif [ "$(echo "$cost >= 315000" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 315000" | bc)
-        local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "franchise" "franchises")
-        echo "$emoji $count $unit @ starbucks®"
-    elif [ "$(echo "$cost >= 5.50" | bc)" -eq 1 ]; then
+    # sip $0.31, starbucks (venti) $5.50
+    if [ "$(echo "$cost >= 5.50" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 5.50" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "venti" "ventis")
-        echo "$emoji $count $unit @ starbucks®"
+        echo "$emoji $count starbucks®"
     else
         local raw=$(echo "scale=6; $cost / 0.31" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "sip" "sips")
-        echo "$emoji $count $unit @ starbucks®"
+        echo "$emoji $count sips @ starbucks®"
     fi
 }
 
 format_joes() {
     local cost=$1
     local emoji="🍕"
-    # bite $0.33, slice $4, pie $32
-    if [ "$(echo "$cost >= 32" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 32" | bc)
-        local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "pie" "pies")
-        echo "$emoji $count $unit @ joe's®"
-    elif [ "$(echo "$cost >= 4" | bc)" -eq 1 ]; then
+    # bite $0.33, joe's (slice) $4
+    if [ "$(echo "$cost >= 4" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 4" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "slice" "slices")
-        echo "$emoji $count $unit @ joe's®"
+        echo "$emoji $count joe's®"
     else
         local raw=$(echo "scale=6; $cost / 0.33" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "bite" "bites")
-        echo "$emoji $count $unit @ joe's®"
+        echo "$emoji $count bites @ joe's®"
     fi
 }
 
@@ -930,40 +867,30 @@ format_tacoria() {
     if [ "$(echo "$cost >= 4.60" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 4.60" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "taco" "tacos")
-        echo "$emoji $count $unit @ tacoria®"
+        echo "$emoji $count tacos @ tacoria®"
     else
         local raw=$(echo "scale=6; $cost / 1.15" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "bite" "bites")
-        echo "$emoji $count $unit @ tacoria®"
+        echo "$emoji $count bites @ tacoria®"
     fi
 }
 
 format_yuengling() {
     local cost=$1
     local emoji="🍺"
-    # sip $0.37, pint $7, pitcher $22, keg $200
+    # sip $0.37, yuengling (pint) $7, keg $200
     if [ "$(echo "$cost >= 200" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 200" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "keg" "kegs")
-        echo "$emoji $count $unit @ yuengling®"
-    elif [ "$(echo "$cost >= 22" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 22" | bc)
-        local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "pitcher" "pitchers")
-        echo "$emoji $count $unit @ yuengling®"
+        echo "$emoji $count kegs @ yuengling®"
     elif [ "$(echo "$cost >= 7" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 7" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "pint" "pints")
-        echo "$emoji $count $unit @ yuengling®"
+        echo "$emoji $count yuenglings®"
     else
         local raw=$(echo "scale=6; $cost / 0.37" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "sip" "sips")
-        echo "$emoji $count $unit @ yuengling®"
+        echo "$emoji $count sips @ yuengling®"
     fi
 }
 
@@ -974,49 +901,15 @@ format_shackburger() {
     if [ "$(echo "$cost >= 9" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 9" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "shackburger" "shackburgers")
-        echo "$emoji $count $unit"
+        echo "$emoji $count shackburgers"
     else
         local raw=$(echo "scale=6; $cost / 0.90" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "bite" "bites")
-        echo "$emoji $count $unit @ shackburger®"
+        echo "$emoji $count bites @ shackburger®"
     fi
 }
 
-format_charmin() {
-    local cost=$1
-    local emoji="🧻"
-    # sheet $0.003, roll $1
-    if [ "$(echo "$cost >= 1" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 1" | bc)
-        local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "charmin" "charmins")
-        echo "$emoji $count $unit"
-    else
-        local raw=$(echo "scale=6; $cost / 0.003" | bc)
-        local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "sheet" "sheets")
-        echo "$emoji $count $unit @ charmin®"
-    fi
-}
 
-format_ample_hills() {
-    local cost=$1
-    local emoji="🍦"
-    # lick $0.14, scoop $7
-    if [ "$(echo "$cost >= 7" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 7" | bc)
-        local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "ample-hills" "ample-hills")
-        echo "$emoji $count ${unit}®"
-    else
-        local raw=$(echo "scale=6; $cost / 0.14" | bc)
-        local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "lick" "licks")
-        echo "$emoji $count $unit @ ample-hills®"
-    fi
-}
 
 format_auntie_annes() {
     local cost=$1
@@ -1025,13 +918,11 @@ format_auntie_annes() {
     if [ "$(echo "$cost >= 5" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 5" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "auntie-annes" "auntie-annes")
-        echo "$emoji $count ${unit}®"
+        echo "$emoji $count auntie-annes®"
     else
         local raw=$(echo "scale=6; $cost / 0.50" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "bite" "bites")
-        echo "$emoji $count $unit @ auntie-annes®"
+        echo "$emoji $count bites @ auntie-annes®"
     fi
 }
 
@@ -1042,18 +933,15 @@ format_nathans() {
     if [ "$(echo "$cost >= 456" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 456" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "joey-chestnut" "joey-chestnuts")
-        echo "$emoji $count $unit @ nathan's®"
+        echo "$emoji $count joey-chestnuts @ nathan's®"
     elif [ "$(echo "$cost >= 6" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 6" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "dog" "dogs")
-        echo "$emoji $count $unit @ nathan's®"
+        echo "$emoji $count dogs @ nathan's®"
     else
         local raw=$(echo "scale=6; $cost / 1" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "bite" "bites")
-        echo "$emoji $count $unit @ nathan's®"
+        echo "$emoji $count bites @ nathan's®"
     fi
 }
 
@@ -1064,13 +952,11 @@ format_ess_a_bagel() {
     if [ "$(echo "$cost >= 4" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 4" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "ess-a-bagel" "ess-a-bagels")
-        echo "$emoji $count ${unit}®"
+        echo "$emoji $count ess-a-bagels®"
     else
         local raw=$(echo "scale=6; $cost / 0.33" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "bite" "bites")
-        echo "$emoji $count $unit @ ess-a-bagel®"
+        echo "$emoji $count bites @ ess-a-bagel®"
     fi
 }
 
@@ -1081,13 +967,11 @@ format_nami_nori() {
     if [ "$(echo "$cost >= 8" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 8" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "nami-nori" "nami-noris")
-        echo "$emoji $count ${unit}®"
+        echo "$emoji $count nami-noris®"
     else
         local raw=$(echo "scale=6; $cost / 1" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "bite" "bites")
-        echo "$emoji $count $unit @ nami-nori®"
+        echo "$emoji $count bites @ nami-nori®"
     fi
 }
 
@@ -1098,13 +982,11 @@ format_lugers() {
     if [ "$(echo "$cost >= 65" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 65" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "lugers" "lugers")
-        echo "$emoji $count ${unit}®"
+        echo "$emoji $count lugers®"
     else
         local raw=$(echo "scale=6; $cost / 1.63" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "bite" "bites")
-        echo "$emoji $count $unit @ lugers®"
+        echo "$emoji $count bites @ lugers®"
     fi
 }
 
@@ -1115,13 +997,11 @@ format_big_gulp() {
     if [ "$(echo "$cost >= 2.50" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 2.50" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "big-gulp" "big-gulps")
-        echo "$emoji $count ${unit}®"
+        echo "$emoji $count big-gulps®"
     else
         local raw=$(echo "scale=6; $cost / 0.04" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "sip" "sips")
-        echo "$emoji $count $unit @ big-gulp®"
+        echo "$emoji $count sips @ big-gulp®"
     fi
 }
 
@@ -1132,13 +1012,11 @@ format_carbone() {
     if [ "$(echo "$cost >= 40" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 40" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "carbone" "carbones")
-        echo "$emoji $count ${unit}®"
+        echo "$emoji $count carbones®"
     else
         local raw=$(echo "scale=6; $cost / 1.60" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "forkful" "forkfuls")
-        echo "$emoji $count $unit @ carbone®"
+        echo "$emoji $count forkfuls @ carbone®"
     fi
 }
 
@@ -1149,13 +1027,11 @@ format_redlobster() {
     if [ "$(echo "$cost >= 30" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 30" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "redlobster" "redlobsters")
-        echo "$emoji $count ${unit}®"
+        echo "$emoji $count redlobsters®"
     else
         local raw=$(echo "scale=6; $cost / 1.20" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "forkful" "forkfuls")
-        echo "$emoji $count $unit @ redlobster®"
+        echo "$emoji $count forkfuls @ redlobster®"
     fi
 }
 
@@ -1166,13 +1042,11 @@ format_sweetgreen() {
     if [ "$(echo "$cost >= 15" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 15" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "sweetgreen" "sweetgreens")
-        echo "$emoji $count ${unit}®"
+        echo "$emoji $count sweetgreens®"
     else
         local raw=$(echo "scale=6; $cost / 0.50" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "forkful" "forkfuls")
-        echo "$emoji $count $unit @ sweetgreen®"
+        echo "$emoji $count forkfuls @ sweetgreen®"
     fi
 }
 
@@ -1183,33 +1057,27 @@ format_equinox() {
     if [ "$(echo "$cost >= 3120" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 3120" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "yr" "yrs")
-        echo "$emoji $count$unit @ equinox®"
+        echo "$emoji ${count}yrs @ equinox®"
     elif [ "$(echo "$cost >= 260" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 260" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "mo" "mos")
-        echo "$emoji $count$unit @ equinox®"
+        echo "$emoji ${count}mos @ equinox®"
     elif [ "$(echo "$cost >= 60.67" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 60.67" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "wk" "wks")
-        echo "$emoji $count$unit @ equinox®"
+        echo "$emoji ${count}wks @ equinox®"
     elif [ "$(echo "$cost >= 8.67" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 8.67" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "d" "d")
-        echo "$emoji $count$unit @ equinox®"
+        echo "$emoji ${count}d @ equinox®"
     elif [ "$(echo "$cost >= 0.36" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 0.36" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "h" "h")
-        echo "$emoji $count$unit @ equinox®"
+        echo "$emoji ${count}h @ equinox®"
     else
         local raw=$(echo "scale=6; $cost / 0.006" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "m" "m")
-        echo "$emoji $count$unit @ equinox®"
+        echo "$emoji ${count}m @ equinox®"
     fi
 }
 
@@ -1220,33 +1088,27 @@ format_soulcycle() {
     if [ "$(echo "$cost >= 444000" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 444000" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "yr" "yrs")
-        echo "$emoji $count$unit @ soulcycle®"
+        echo "$emoji ${count}yrs @ soulcycle®"
     elif [ "$(echo "$cost >= 36480" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 36480" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "mo" "mo")
-        echo "$emoji $count$unit @ soulcycle®"
+        echo "$emoji ${count}mo @ soulcycle®"
     elif [ "$(echo "$cost >= 1216" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 1216" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "d" "d")
-        echo "$emoji $count$unit @ soulcycle®"
+        echo "$emoji ${count}d @ soulcycle®"
     elif [ "$(echo "$cost >= 50.67" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 50.67" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "h" "h")
-        echo "$emoji $count$unit @ soulcycle®"
+        echo "$emoji ${count}h @ soulcycle®"
     elif [ "$(echo "$cost >= 0.84" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 0.84" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "m" "m")
-        echo "$emoji $count$unit @ soulcycle®"
+        echo "$emoji ${count}m @ soulcycle®"
     else
         local raw=$(echo "scale=6; $cost / 0.014" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "s" "s")
-        echo "$emoji $count$unit @ soulcycle®"
+        echo "$emoji ${count}s @ soulcycle®"
     fi
 }
 
@@ -1257,13 +1119,11 @@ format_levain() {
     if [ "$(echo "$cost >= 5" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 5" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "levain" "levains")
-        echo "$emoji $count ${unit}®"
+        echo "$emoji $count levains®"
     else
         local raw=$(echo "scale=6; $cost / 0.83" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "bite" "bites")
-        echo "$emoji $count $unit @ levain®"
+        echo "$emoji $count bites @ levain®"
     fi
 }
 
@@ -1274,13 +1134,11 @@ format_chipotle() {
     if [ "$(echo "$cost >= 12" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 12" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "burrito" "burritos")
-        echo "$emoji $count $unit @ chipotle®"
+        echo "$emoji $count burritos @ chipotle®"
     else
         local raw=$(echo "scale=6; $cost / 0.80" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "bite" "bites")
-        echo "$emoji $count $unit @ chipotle®"
+        echo "$emoji $count bites @ chipotle®"
     fi
 }
 
@@ -1291,13 +1149,11 @@ format_juice_press() {
     if [ "$(echo "$cost >= 11" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 11" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "juice-press" "juice-presses")
-        echo "$emoji $count ${unit}®"
+        echo "$emoji $count juice-presses®"
     else
         local raw=$(echo "scale=6; $cost / 0.58" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "sip" "sips")
-        echo "$emoji $count $unit @ juice-press®"
+        echo "$emoji $count sips @ juice-press®"
     fi
 }
 
@@ -1308,57 +1164,14 @@ format_pommes_frites() {
     if [ "$(echo "$cost >= 9" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 9" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "pommes-frites" "pommes-frites")
-        echo "$emoji $count ${unit}®"
+        echo "$emoji $count pommes-frites®"
     else
         local raw=$(echo "scale=6; $cost / 0.36" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "fry" "fries")
-        echo "$emoji $count $unit @ pommes-frites®"
+        echo "$emoji $count fries @ pommes-frites®"
     fi
 }
 
-format_blood() {
-    local cost=$1
-    local emoji="🩸"
-    # drop $0.02, tsp $2.08, tbsp $6.25, oz $12.50, cup $100, pint $200, gallon $1600
-    if [ "$(echo "$cost >= 1600" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 1600" | bc)
-        local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "gallon" "gallons")
-        echo "$emoji $count $unit @ blood®"
-    elif [ "$(echo "$cost >= 200" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 200" | bc)
-        local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "pint" "pints")
-        echo "$emoji $count $unit @ blood®"
-    elif [ "$(echo "$cost >= 100" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 100" | bc)
-        local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "cup" "cups")
-        echo "$emoji $count $unit @ blood®"
-    elif [ "$(echo "$cost >= 12.50" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 12.50" | bc)
-        local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "oz" "oz")
-        echo "$emoji $count $unit @ blood®"
-    elif [ "$(echo "$cost >= 6.25" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 6.25" | bc)
-        local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "tbsp" "tbsp")
-        echo "$emoji $count $unit @ blood®"
-    elif [ "$(echo "$cost >= 2.08" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 2.08" | bc)
-        local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "tsp" "tsp")
-        echo "$emoji $count $unit @ blood®"
-    else
-        local raw=$(echo "scale=6; $cost / 0.02" | bc)
-        local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "drop" "drops")
-        echo "$emoji $count $unit @ blood®"
-    fi
-}
 
 format_cronut() {
     local cost=$1
@@ -1367,13 +1180,11 @@ format_cronut() {
     if [ "$(echo "$cost >= 7.75" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 7.75" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "cronut" "cronuts")
-        echo "$emoji $count ${unit}®"
+        echo "$emoji $count cronuts®"
     else
         local raw=$(echo "scale=6; $cost / 0.97" | bc)
         local count=$(format_count "$raw")
-        local unit=$(pluralize "$count" "bite" "bites")
-        echo "$emoji $count $unit @ cronut®"
+        echo "$emoji $count bites @ cronut®"
     fi
 }
 
@@ -1383,8 +1194,7 @@ format_apple_music() {
     # stream $0.004
     local raw=$(echo "scale=6; $cost / 0.004" | bc)
     local count=$(format_count "$raw")
-    local unit=$(pluralize "$count" "stream" "streams")
-    echo "$emoji $count $unit @ apple-music®"
+    echo "$emoji $count streams @ apple-music®"
 }
 
 # Single-unit format (no sub-units, just {count} {brand}®)
@@ -1412,26 +1222,23 @@ format_fun_cost() {
         2) format_tacoria "$cost" ;;
         3) format_yuengling "$cost" ;;
         4) format_shackburger "$cost" ;;
-        9) format_charmin "$cost" ;;
-        12) format_ample_hills "$cost" ;;
-        13) format_auntie_annes "$cost" ;;
-        15) format_nathans "$cost" ;;
-        16) format_ess_a_bagel "$cost" ;;
-        17) format_nami_nori "$cost" ;;
-        18) format_lugers "$cost" ;;
-        20) format_big_gulp "$cost" ;;
-        21) format_carbone "$cost" ;;
-        22) format_redlobster "$cost" ;;
-        23) format_sweetgreen "$cost" ;;
-        24) format_equinox "$cost" ;;
-        25) format_soulcycle "$cost" ;;
-        26) format_levain "$cost" ;;
-        29) format_chipotle "$cost" ;;
-        30) format_juice_press "$cost" ;;
-        31) format_pommes_frites "$cost" ;;
-        36) format_blood "$cost" ;;
-        38) format_cronut "$cost" ;;
-        39) format_apple_music "$cost" ;;
+        11) format_auntie_annes "$cost" ;;
+        13) format_nathans "$cost" ;;
+        14) format_ess_a_bagel "$cost" ;;
+        15) format_nami_nori "$cost" ;;
+        16) format_lugers "$cost" ;;
+        18) format_big_gulp "$cost" ;;
+        19) format_carbone "$cost" ;;
+        20) format_redlobster "$cost" ;;
+        21) format_sweetgreen "$cost" ;;
+        22) format_equinox "$cost" ;;
+        23) format_soulcycle "$cost" ;;
+        24) format_levain "$cost" ;;
+        25) format_chipotle "$cost" ;;
+        26) format_juice_press "$cost" ;;
+        27) format_pommes_frites "$cost" ;;
+        32) format_cronut "$cost" ;;
+        33) format_apple_music "$cost" ;;
         *)
             # Single-unit items
             local emoji="${FUN_EMOJI[$item_idx]}"
@@ -1442,7 +1249,7 @@ format_fun_cost() {
     esac
 }
 
-# Format absurd cost items (fraction chasing 1)
+# Format absurd cost items (decimal chasing 1)
 format_absurd_cost() {
     local cost=$1
     local item_idx=${2:-$(( ($(date +%s) / 10) % ${#ABSURD_EMOJI[@]} ))}
@@ -1467,7 +1274,7 @@ add_leading_zero() {
 
 # Build rotating metric display
 # 10-cycle pattern: 4 session → 1 all-time normal 🏆 → 4 session → 1 all-time absurd 🏆 → repeat
-# Session: water(1), power(7), utility(3), fun_cost(28 session-tier ≤$20)
+# Session: water(1), power(7), utility(3), fun_cost(24 session-tier ≤$20)
 METRIC_INFO=""
 if [ "$SESSION_TOKENS" -gt 0 ] 2>/dev/null || [ "$ALL_TIME_TOKENS" -gt 0 ] 2>/dev/null; then
     if [ "$IS_ALLTIME" -eq 1 ]; then
@@ -1479,14 +1286,20 @@ if [ "$SESSION_TOKENS" -gt 0 ] 2>/dev/null || [ "$ALL_TIME_TOKENS" -gt 0 ] 2>/de
             # All-time absurd: rotate through absurd items
             METRIC_INFO="${DIM}$(format_absurd_cost $USE_COST $ALLTIME_ABSURD_INDEX)${TROPHY}${RESET}"
         else
-            # All-time normal: 12 cost + coal + reactor = 14 item cycle
-            ALLTIME_NORMAL_CYCLE=$((NOW_DIV_10 % 14))
-            if [ "$ALLTIME_NORMAL_CYCLE" -eq 12 ]; then
+            # All-time normal: 10 cost + coal + reactor + tokens + cost + data = 15 item cycle
+            ALLTIME_NORMAL_CYCLE=$((NOW_DIV_10 % 15))
+            if [ "$ALLTIME_NORMAL_CYCLE" -eq 10 ]; then
                 # Coal (fun power index 6)
                 METRIC_INFO="${DIM}$(format_fun_power $USE_TOKENS 6)${TROPHY}${RESET}"
-            elif [ "$ALLTIME_NORMAL_CYCLE" -eq 13 ]; then
+            elif [ "$ALLTIME_NORMAL_CYCLE" -eq 11 ]; then
                 # Reactor output (fun power index 7)
                 METRIC_INFO="${DIM}$(format_fun_power $USE_TOKENS 7)${TROPHY}${RESET}"
+            elif [ "$ALLTIME_NORMAL_CYCLE" -eq 12 ]; then
+                METRIC_INFO="${DIM}🎟️ $(format_number $USE_TOKENS)${TROPHY}${RESET}"
+            elif [ "$ALLTIME_NORMAL_CYCLE" -eq 13 ]; then
+                METRIC_INFO="${DIM}💰 \$$(printf "%.2f" "$USE_COST")${TROPHY}${RESET}"
+            elif [ "$ALLTIME_NORMAL_CYCLE" -eq 14 ]; then
+                METRIC_INFO="${DIM}📡 $(format_data $USE_TOKENS)${TROPHY}${RESET}"
             else
                 ALLTIME_COST_IDX=${ALLTIME_COST_ITEMS[$ALLTIME_NORMAL_CYCLE]}
                 METRIC_INFO="${DIM}$(format_fun_cost $USE_COST $ALLTIME_COST_IDX)${TROPHY}${RESET}"

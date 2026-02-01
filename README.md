@@ -9,7 +9,7 @@ A cute, informative status line for Claude Code with rotating environmental metr
 │    bar              + git status    changed  trend
 └─ context icon (✨💭🧠💾)
 
-    73.5K/150K  ·  🍕 3 joe's®  ·  Opus 4.5
+    73.5K/168K  ·  🍕 3 joe's®  ·  Opus 4.5
     └────┬────┘    └─────┬─────┘   └───┬───┘
       context         rotating       model
       tokens          metric
@@ -29,12 +29,11 @@ A cute, informative status line for Claude Code with rotating environmental metr
 - **Lines changed** (+added/-removed)
 - **Rotating environmental metrics** (10-cycle pattern, 10s each):
   - 💧 Standard water (cups, gallons, etc.)
-  - 🪣🛁🏊 Fun water (bucket, bathtub, pool)
   - ⚡ Standard power (watt-hours, kilowatt-hours)
-  - 🔌💡🏠🚗🏢🪨☢️ Fun power (phone, hue-light, home, 4xe, 395-hudson, coal, reactor)
+  - 🔌💡🏠🏢🚗✈️🪨☢️ Fun power (phone, hue-light, home, 395-hudson, 4xe, a320neo, coal, reactor)
   - 🎟️ Token count, 💰 Cost, 📡 Data
-  - ☕🍕🌮... Fun cost (40 normal items)
-  - 🚐🧟🏝️🚢🏪💀🚁✈️ Absurd items (8 items, all-time only)
+  - ☕🍕🌮... Fun cost (34 normal items)
+  - 🚐🧟🏝️🏪🚁☕ Absurd items (7 items, all-time only)
   - **Rotation:** 4 session → 1 all-time normal 🏆 → 4 session → 1 all-time absurd 🏆
 - **Session duration**
 - **Smart pace indicator** with trend arrows showing where you're headed:
@@ -66,15 +65,15 @@ The rotating metrics help visualize the environmental cost of AI inference:
 
 ### Fun Cost Conversions
 
-The cost metric rotates through fun items (NY/NJ 2026 prices). Values < 1 snap to easy fractions (1/2, 1/3, 1/4, 1/5, 1/10, 1/20, etc.).
+The cost metric rotates through fun items (NY/NJ 2026 prices). Values < 1 use 2 significant digits (e.g., 0.33, 0.1, 0.045).
 
 Many items have **multi-unit scaling** - they pick the appropriate unit based on cost:
-- Joe's: bite ($0.33) → slice ($4) → pie ($32)
+- Joe's: bite ($0.33) → joe's ($4)
 - Nathan's: bite ($1) → dog ($6) → joey-chestnut ($456)
-- Starbucks: sip ($0.31) → venti ($5.50) → franchise ($315K) → ceo-pay ($57M)
-- Blood: drop ($0.02) → tsp → tbsp → oz → cup → pint → gallon ($1,600)
+- Starbucks: sip ($0.31) → starbucks ($5.50)
+- Yuengling: sip ($0.37) → yuengling ($7) → keg ($200)
 
-**Normal Items (40)** - shown in session + all-time normal:
+**Normal Items (34)** - shown in session + all-time normal:
 
 | Emoji | Item | Price |
 |-------|------|-------|
@@ -86,11 +85,9 @@ Many items have **multi-unit scaling** - they pick the appropriate unit based on
 | 🍌 | chiquitas® | $0.30 |
 | 🍿 | alamos® | $18 |
 | 🎮 | gta6s® | $70 |
-| 📚 | strands® | $17 |
 | 🧻 | charmins® | $1 |
 | 🖍️ | crayolas® | $0.11 |
 | 🥑 | haas® | $2 |
-| 🍦 | ample-hills® | $7 |
 | 🥨 | auntie-annes® | $5 |
 | 🦪 | blue-points® | $3.50 |
 | 🌭 | nathans® | $6 |
@@ -105,8 +102,6 @@ Many items have **multi-unit scaling** - they pick the appropriate unit based on
 | 🏋️ | equinoxs® | $260 |
 | 🚴 | soulcycles® | $38 |
 | 🍪 | levains® | $5 |
-| 🥜 | nuts4nuts® | $5 |
-| 📰 | nytimes® | $7 |
 | 🌯 | chipotles® | $12 |
 | 🧃 | juice-presses® | $11 |
 | 🍟 | pommes-frites® | $9 |
@@ -114,56 +109,42 @@ Many items have **multi-unit scaling** - they pick the appropriate unit based on
 | 🚋 | njts® | $5.90 |
 | 🖱️ | magic-mice® | $99 |
 | 📱 | iphones® | $999 |
-| 🩸 | pints-o-blood® | drop→tsp→tbsp→oz→cup→pint→gallon |
-| 🧸 | paddingtons® | $30 |
 | 🥐 | cronuts® | $7.75 |
 | 🎵 | apple-music® | $0.004/stream |
 
-**Absurd Items (8)** - all-time only, fraction chasing 1:
+**Absurd Items (7)** - all-time only, decimal chasing 1:
 
 | Emoji | Item | Price |
 |-------|------|-------|
 | 🚐 | sprinters® | $50,000 |
 | 🧟 | thrillers® | $1,600,000 |
 | 🏝️ | private-islands® | $18,000,000 |
-| 🚢 | supertankers® | $150,000,000 |
 | 🏪 | chipotle-franchises® | $1,000,000 |
-| 🩸 | body of blood® | $2,000 |
 | 🚁 | h130s® | $3,500,000 |
-| ✈️ | g550s® | $60,000,000 |
+| ☕ | starbucks-franchises® | $315,000 |
+| ☕ | starbucks-ceo-pays® | $57,000,000 |
 
 Multi-unit items scale up through thresholds. So instead of `💰 $12.50`, you might see:
-- `🍕 3 slices @ joe's®` or `🍕 1.5 pies @ joe's®`
-- `🌭 2 dogs @ nathan's®` or `🌭 1/10th joey-chestnut @ nathan's®`
-- `🩸 5 cups @ blood®` or `🩸 1 pint @ blood®`
-
-### Fun Water Conversions
-
-The water metric also rotates through relatable comparisons:
-
-| Emoji | Item | Tokens |
-|-------|------|--------|
-| 🪣 | buckets (5 gal) | 3.8M |
-| 🛁 | bathtubs (50 gal) | 38M |
-| 🏊 | swimming-pools (20k gal) | 15B |
-
-So instead of `💧 2.5 gallons`, you might see `🪣 1/2 bucket` or `🛁 1/10th bathtub`!
+- `🍕 3 joe's®` or `🍕 6 bites @ joe's®`
+- `🌭 2 dogs @ nathan's®` or `🌭 0.022 joey-chestnuts @ nathan's®`
+- `🍺 2 yuenglings®` or `🍺 0.5 kegs @ yuengling®`
 
 ### Fun Power Conversions
 
-The power metric shows equivalent device runtime (or mass for coal):
+The power metric shows equivalent device runtime, distance, or mass:
 
-| Emoji | Item | Power | Example |
-|-------|------|-------|---------|
+| Emoji | Item | Rate | Example |
+|-------|------|------|---------|
 | 🔌 | phone-charging | 5W | `🔌 833h phone-charging` |
 | 💡 | hue-light® | 10W | `💡 417h hue-light®` |
 | 🏠 | home-power | 1kW | `🏠 4.2h home-power` |
-| 🚗 | 4xe® | 7kW | `🚗 36m 4xe®` |
 | 🏢 | 395-hudson® | 2MW | `🏢 7.5s 395-hudson®` |
-| 🪨 | coal | ~1 lb/kWh | `🪨 4.2 lbs coal` |
+| 🚗 | 4xe® | 1.45 mi/kWh | `🚗 6.0mi 4xe®` |
+| ✈️ | a320neo® | 0.019 mi/kWh | `✈️ 421ft a320neo®` |
+| 🪨 | coal | ~1 lb/kWh | `🪨 4.2 lbs coal` (scales to tons at 2000 lbs) |
 | ☢️ | reactor-output | 1GW | `☢️ 15ms reactor-output` |
 
-This shows how long a device would run (or generate) the energy your session consumed. Coal is special - it shows mass burned instead of time.
+Session displays phone, hue-light, home, 395-hudson, 4xe, and a320neo. Coal and reactor are all-time only.
 
 Each terminal window shows different metrics and fun items simultaneously (based on time), so the display rotates through all options.
 
@@ -173,8 +154,8 @@ The statusline tracks cumulative usage across all sessions by scanning JSONL fil
 
 The 🏆 trophy indicates all-time totals. The 10-cycle rotation shows:
 - **Cycles 0-3, 5-8:** Session metrics (no trophy)
-- **Cycle 4:** All-time normal item with 🏆 (e.g., `🍕 39 joe's® 🏆`)
-- **Cycle 9:** All-time absurd item with 🏆 (e.g., `🏝️ 1/100Kth private-island® 🏆`)
+- **Cycle 4:** All-time normal with 🏆 — 15-item rotation: 10 fun cost items + coal + reactor + tokens + cost + data
+- **Cycle 9:** All-time absurd item with 🏆 (e.g., `🏝️ 0.0015 private-islands® 🏆`)
 
 ## Smart Pace Indicator
 
