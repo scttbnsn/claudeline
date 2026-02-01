@@ -18,10 +18,12 @@ A cute, informative status line for Claude Code with rotating environmental metr
 ## Features
 
 - **Context bar** scaled to auto-compact threshold (~75% of context window):
-  - ✨ Green (0-29%) - plenty of room
-  - 💭 Yellow (30-59%) - getting cozy
-  - 🧠 Orange (60-89%) - consider compacting
-  - 💾 Red (90%+) - about to auto-compact
+  - ✨ Cyan (0-17%) - plenty of room
+  - ✨ Lime (18-34%) - cruising
+  - 💭 Yellow (35-49%) - getting cozy
+  - 🧠 Orange (50-67%) - consider compacting
+  - 🔥 Coral (68-87%) - getting hot
+  - 💾 Red (88%+) - about to auto-compact
 - **24-bit true color** palette (vibey 2025 colors)
 - **Repo/branch** with git status indicators (`*`=unstaged, `+`=staged, `↑↓`=ahead/behind)
 - **Lines changed** (+added/-removed)
@@ -228,7 +230,7 @@ The display alternates between emoji+arrow (9 cycles) and raw percentage (1 cycl
 
 | Range | Bar | Color |
 |-------|-----|-------|
-| 1-12% | ▁ | cyan |
+| 1-12% | ▁ | jade |
 | 13-25% | ▂ | teal |
 | 26-37% | ▃ | green |
 | 38-50% | ▄ | yellow |

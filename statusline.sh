@@ -11,27 +11,33 @@ DIM="\033[2m"
 # Accent colors
 PINK="\033[38;2;255;110;199m"      # #FF6EC7
 PURPLE="\033[38;2;187;134;252m"    # #BB86FC
-CYAN="\033[38;2;92;200;255m"       # #5CC8FF - sky blue
+SKY="\033[38;2;92;200;255m"        # #5CC8FF
 BLUE="\033[38;2;130;170;255m"      # #82AAFF
-# Context tier colors (6-level gradient: cyan → lime → yellow → orange → coral → red)
-CTX_CYAN="\033[38;2;100;255;218m"    # #64FFDA - cyan
-CTX_LIME="\033[38;2;194;255;74m"     # #C2FF4A - neon lime
-CTX_YELLOW="\033[38;2;255;234;0m"    # #FFEA00 - electric yellow
-CTX_ORANGE="\033[38;2;255;165;0m"    # #FFA500 - orange
-CTX_CORAL="\033[38;2;254;117;63m"    # #FE753F - coral
-CTX_RED="\033[38;2;255;77;106m"      # #FF4D6A - hot pink red
+# Context tier colors (6-level gradient)
+CTX_CYAN="\033[38;2;100;255;218m"    # #64FFDA
+CTX_LIME="\033[38;2;194;255;74m"     # #C2FF4A
+CTX_YELLOW="\033[38;2;255;234;0m"    # #FFEA00
+CTX_ORANGE="\033[38;2;255;165;0m"    # #FFA500
+CTX_CORAL="\033[38;2;254;117;63m"    # #FE753F
+CTX_RED="\033[38;2;255;77;106m"      # #FF4D6A
+# Velocity arrow colors (5 levels)
+VEL_HOT="\033[38;2;255;77;106m"      # #FF4D6A
+VEL_WARM="\033[38;2;255;165;0m"      # #FFA500
+VEL_STABLE="\033[38;2;194;255;74m"   # #C2FF4A
+VEL_COOL="\033[38;2;0;200;170m"      # #00C8AA
+VEL_COLD="\033[38;2;100;255;218m"    # #64FFDA
 # Legacy (for other elements)
 GREEN="\033[38;2;194;255;74m"      # #C2FF4A
 RED="\033[38;2;255;77;106m"        # #FF4D6A
-# Burst bar gradient (8 levels: cyan → teal → green → yellow → orange → red → magenta → bright magenta)
-BURST_CYAN="\033[38;2;32;232;182m"        # #20E8B6 - jade
+# Burst bar gradient (8 levels)
+BURST_CYAN="\033[38;2;32;232;182m"        # #20E8B6
 BURST_TEAL="\033[38;2;0;200;170m"         # #00C8AA
 BURST_GREEN="\033[38;2;100;220;100m"      # #64DC64
 BURST_YELLOW="\033[38;2;255;234;0m"       # #FFEA00
 BURST_ORANGE="\033[38;2;255;165;0m"       # #FFA500
 BURST_RED="\033[38;2;255;77;106m"         # #FF4D6A
 BURST_MAGENTA="\033[38;2;255;0;255m"      # #FF00FF
-BURST_BRIGHT_MAG="\033[38;2;255;100;255m" # #FF64FF (bright)
+BURST_BRIGHT_MAG="\033[38;2;255;100;255m" # #FF64FF
 
 # Environmental impact rates (per million tokens)
 # Sources: arxiv:2304.03271 (water), arxiv:2505.09598 (energy), updated 2026
@@ -272,11 +278,11 @@ get_trend_arrow() {
 
     # Map code to colored arrow
     case "$arrow_code" in
-        hot)    echo -e "${CTX_RED}↑${RESET}" ;;
-        warm)   echo -e "${CTX_ORANGE}↗${RESET}" ;;
-        cold)   echo -e "${CYAN}↓${RESET}" ;;
-        cool)   echo -e "${BURST_TEAL}↘${RESET}" ;;
-        *)      echo -e "${CTX_LIME}→${RESET}" ;;
+        hot)    echo -e "${VEL_HOT}↑${RESET}" ;;
+        warm)   echo -e "${VEL_WARM}↗${RESET}" ;;
+        cold)   echo -e "${VEL_COLD}↓${RESET}" ;;
+        cool)   echo -e "${VEL_COOL}↘${RESET}" ;;
+        *)      echo -e "${VEL_STABLE}→${RESET}" ;;
     esac
 }
 
@@ -1541,9 +1547,9 @@ SEP="${DIM}  ·  ${RESET}"
 
 # Combine repo/branch (repo first)
 if [ -n "$BRANCH" ]; then
-    REPO_BRANCH="${CYAN}${DIR_NAME}${DIM}/${RESET}${PURPLE}${BRANCH}${RESET}"
+    REPO_BRANCH="${SKY}${DIR_NAME}${DIM}/${RESET}${PURPLE}${BRANCH}${RESET}"
 else
-    REPO_BRANCH="${CYAN}${DIR_NAME}${RESET}"
+    REPO_BRANCH="${SKY}${DIR_NAME}${RESET}"
 fi
 
 # Get usage data from API (utilization resets_at extra_utilization burst_utilization)
@@ -1557,7 +1563,7 @@ if [ -n "$WEEKLY_USAGE" ]; then
 fi
 
 # Burst indicator (💥 with colored bar, only when > 0%)
-# 8 levels: ▁▂▃▄▅▆▇█ with color gradient cyan→teal→green→yellow→orange→red→magenta→bright magenta
+# 8 levels: ▁▂▃▄▅▆▇█ with color gradient jade→teal→green→yellow→orange→red→magenta→bright magenta
 BURST_INDICATOR=""
 if [ -n "$BURST_USAGE" ] && [ "$BURST_USAGE" != "null" ]; then
     BURST_PCT=$(printf "%.0f" "$BURST_USAGE" 2>/dev/null)
