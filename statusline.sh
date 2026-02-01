@@ -276,7 +276,7 @@ get_trend_arrow() {
         warm)   echo -e "${CTX_ORANGE}↗${RESET}" ;;
         cold)   echo -e "${CYAN}↓${RESET}" ;;
         cool)   echo -e "${BURST_TEAL}↘${RESET}" ;;
-        *)      echo -e "${CTX_GREEN}→${RESET}" ;;
+        *)      echo -e "${CTX_LIME}→${RESET}" ;;
     esac
 }
 
