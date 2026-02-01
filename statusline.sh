@@ -570,7 +570,7 @@ if [ -n "$GIT_ROOT" ]; then
         # Parse status lines for staged/unstaged (pure bash, no grep)
         # Status lines start after first line; check first two chars of each
         REST="${GIT_STATUS_OUT#*$'\n'}"
-        local has_unstaged="" has_staged=""
+        has_unstaged="" has_staged=""
         while IFS= read -r line; do
             [ -z "$line" ] && continue
             [ -z "$has_unstaged" ] && case "${line:1:1}" in [MADRC]) has_unstaged=1;; esac
