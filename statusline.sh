@@ -483,8 +483,9 @@ ALLTIME_NORMAL_INDEX=$((NOW_DIV_10 % 40))
 ALLTIME_ABSURD_INDEX=$((NOW_DIV_10 % 8))
 
 # Calculate context percentage (scaled to auto-compact threshold)
-# 155K is the actual compression trigger point (out of 220K total context)
-AUTO_COMPACT_THRESHOLD=155000
+# 168K is the actual compression trigger point (out of 200K total context)
+# Changed in Claude Code v2.1.23 - stopped subtracting maxOutputTokens from threshold
+AUTO_COMPACT_THRESHOLD=168000
 if [ "$CURRENT_TOKENS" -gt 0 ] 2>/dev/null; then
     PERCENT_USED=$((CURRENT_TOKENS * 100 / AUTO_COMPACT_THRESHOLD))
     [ "$PERCENT_USED" -gt 100 ] && PERCENT_USED=100
@@ -492,14 +493,14 @@ else
     PERCENT_USED=0
 fi
 
-# Color-code context based on usage (30/30/30/10 split, last 10% = about to compact)
-if [ "$PERCENT_USED" -lt 30 ]; then
+# Color-code context based on usage (40/25/23/12 split, adjusted for ~35K startup overhead)
+if [ "$PERCENT_USED" -lt 40 ]; then
     CTX_COLOR=$CTX_GREEN
     CTX_ICON="✨"
-elif [ "$PERCENT_USED" -lt 60 ]; then
+elif [ "$PERCENT_USED" -lt 65 ]; then
     CTX_COLOR=$CTX_YELLOW
     CTX_ICON="💭"
-elif [ "$PERCENT_USED" -lt 90 ]; then
+elif [ "$PERCENT_USED" -lt 88 ]; then
     CTX_COLOR=$CTX_ORANGE
     CTX_ICON="🧠"
 else
