@@ -139,7 +139,7 @@ get_oauth_token() {
 }
 
 # Get usage data from API (cached for 60 seconds)
-# Returns: utilization resets_at extra_utilization (space-separated)
+# Returns: utilization resets_at burst_util burst_resets extra_used extra_limit (space-separated)
 get_usage_data() {
     local now=$(date +%s)
     local cache_age=999999
@@ -174,16 +174,14 @@ get_usage_data() {
     # Extract all fields, using _ as placeholder for null/missing values
     local utilization=$(echo "$response" | jq -r '.seven_day.utilization // "_"' 2>/dev/null)
     local resets_at=$(echo "$response" | jq -r '.seven_day.resets_at // "_"' 2>/dev/null)
-    local extra_util=$(echo "$response" | jq -r '.extra_usage.utilization // "_"' 2>/dev/null)
     local burst_util=$(echo "$response" | jq -r '.five_hour.utilization // "_"' 2>/dev/null)
     local burst_resets=$(echo "$response" | jq -r '.five_hour.resets_at // "_"' 2>/dev/null)
     local extra_used=$(echo "$response" | jq -r '.extra_usage.used_credits // "_"' 2>/dev/null)
     local extra_limit=$(echo "$response" | jq -r '.extra_usage.monthly_limit // "_"' 2>/dev/null)
 
     if [ -n "$utilization" ] && [ "$utilization" != "_" ]; then
-        # Cache: utilization resets_at extra_util burst_util burst_resets extra_used extra_limit
-        echo -e "$now\n$utilization $resets_at $extra_util $burst_util $burst_resets $extra_used $extra_limit" > "$API_CACHE"
-        echo "$utilization $resets_at $extra_util $burst_util $burst_resets $extra_used $extra_limit"
+        echo -e "$now\n$utilization $resets_at $burst_util $burst_resets $extra_used $extra_limit" > "$API_CACHE"
+        echo "$utilization $resets_at $burst_util $burst_resets $extra_used $extra_limit"
     else
         # Return stale cache if API fails
         [ -f "$API_CACHE" ] && tail -1 "$API_CACHE" 2>/dev/null
@@ -570,17 +568,17 @@ if [ -n "$GIT_ROOT" ]; then
         GIT_STATUS=""
 
         # Parse status lines for staged/unstaged (pure bash, no grep)
-        # Status lines start after first line; check first char of each
+        # Status lines start after first line; check first two chars of each
         REST="${GIT_STATUS_OUT#*$'\n'}"
+        local has_unstaged="" has_staged=""
         while IFS= read -r line; do
             [ -z "$line" ] && continue
-            # First char = staged status, second char = unstaged status
-            case "${line:1:1}" in [MADRC]) GIT_STATUS+="*"; break;; esac
+            [ -z "$has_unstaged" ] && case "${line:1:1}" in [MADRC]) has_unstaged=1;; esac
+            [ -z "$has_staged" ] && case "${line:0:1}" in [MADRC]) has_staged=1;; esac
+            [ -n "$has_unstaged" ] && [ -n "$has_staged" ] && break
         done <<< "$REST"
-        while IFS= read -r line; do
-            [ -z "$line" ] && continue
-            case "${line:0:1}" in [MADRC]) GIT_STATUS+="+"; break;; esac
-        done <<< "$REST"
+        [ -n "$has_unstaged" ] && GIT_STATUS+="*"
+        [ -n "$has_staged" ] && GIT_STATUS+="+"
 
         # Extract ahead/behind from first line
         [[ "$FIRST_LINE" =~ ahead\ ([0-9]+) ]] && GIT_STATUS+="↑${BASH_REMATCH[1]}"
@@ -637,7 +635,7 @@ format_count() {
         printf "%.1fK" "$(echo "$raw_count / 1000" | bc -l)"
     elif [ "$(echo "$raw_count >= 1" | bc)" -eq 1 ]; then
         local count=$(printf "%.1f" "$raw_count")
-        echo "$count" | sed 's/\.0$//'
+        echo "${count%.0}"
     else
         # For values < 1, use 2 significant digits so you can watch it grow
         printf "%.2g" "$raw_count"
@@ -667,8 +665,7 @@ format_water() {
     else
         val=$(printf "%.1f" "$(echo "scale=1; $tokens / 760000" | bc)"); unit="gallons"
     fi
-    # Trim .0 for whole numbers
-    val=$(echo "$val" | sed 's/\.0$//')
+    val="${val%.0}"
     echo "$val $unit"
 }
 
@@ -687,8 +684,7 @@ format_power() {
     else
         val=$(printf "%.1f" "$(echo "scale=1; $wh / 1000000" | bc)"); unit="megawatt-hours"
     fi
-    # Trim .0 for whole numbers
-    val=$(echo "$val" | sed 's/\.0$//')
+    val="${val%.0}"
     echo "$val $unit"
 }
 
@@ -709,8 +705,7 @@ format_data() {
     else
         val=$(printf "%.1f" "$(echo "scale=1; $bytes / 1073741824" | bc)"); unit="GB"
     fi
-    # Trim .0 for whole numbers
-    val=$(echo "$val" | sed 's/\.0$//')
+    val="${val%.0}"
     echo "${val}${unit}"
 }
 
@@ -750,15 +745,15 @@ format_fun_power() {
         local dist_val dist_unit
         if [ "$(echo "$miles >= 1" | bc)" -eq 1 ]; then
             dist_val=$(printf "%.1f" "$miles")
-            dist_val=$(echo "$dist_val" | sed 's/\.0$//')
+            dist_val="${dist_val%.0}"
             dist_unit="mi"
         elif [ "$(echo "$feet >= 1" | bc)" -eq 1 ]; then
             dist_val=$(printf "%.1f" "$feet")
-            dist_val=$(echo "$dist_val" | sed 's/\.0$//')
+            dist_val="${dist_val%.0}"
             dist_unit="ft"
         else
             dist_val=$(printf "%.1f" "$cm")
-            dist_val=$(echo "$dist_val" | sed 's/\.0$//')
+            dist_val="${dist_val%.0}"
             dist_unit="cm"
         fi
         echo "$emoji ${dist_val}${dist_unit} $name"
@@ -788,23 +783,23 @@ format_fun_power() {
     local time_val time_unit
     if [ "$(echo "$hours >= 1" | bc)" -eq 1 ]; then
         time_val=$(printf "%.1f" "$hours")
-        time_val=$(echo "$time_val" | sed 's/\.0$//')
+        time_val="${time_val%.0}"
         time_unit="h"
     elif [ "$(echo "$hours * 60 >= 1" | bc)" -eq 1 ]; then
         time_val=$(printf "%.1f" "$(echo "$hours * 60" | bc)")
-        time_val=$(echo "$time_val" | sed 's/\.0$//')
+        time_val="${time_val%.0}"
         time_unit="m"
     elif [ "$(echo "$hours * 3600 >= 1" | bc)" -eq 1 ]; then
         time_val=$(printf "%.1f" "$(echo "$hours * 3600" | bc)")
-        time_val=$(echo "$time_val" | sed 's/\.0$//')
+        time_val="${time_val%.0}"
         time_unit="s"
     elif [ "$(echo "$hours * 3600000 >= 1" | bc)" -eq 1 ]; then
         time_val=$(printf "%.1f" "$(echo "$hours * 3600000" | bc)")
-        time_val=$(echo "$time_val" | sed 's/\.0$//')
+        time_val="${time_val%.0}"
         time_unit="ms"
     else
         time_val=$(printf "%.1f" "$(echo "$hours * 3600000000" | bc)")
-        time_val=$(echo "$time_val" | sed 's/\.0$//')
+        time_val="${time_val%.0}"
         time_unit="µs"
     fi
 
@@ -1191,10 +1186,10 @@ format_cronut() {
 format_apple_music() {
     local cost=$1
     local emoji="🎵"
-    # stream $0.004
+    # $0.004/stream
     local raw=$(echo "scale=6; $cost / 0.004" | bc)
     local count=$(format_count "$raw")
-    echo "$emoji $count streams @ apple-music®"
+    echo "$emoji $count apple-musics®"
 }
 
 # Single-unit format (no sub-units, just {count} {brand}®)
@@ -1372,7 +1367,7 @@ else
 fi
 
 # Get usage data from API
-read -r WEEKLY_USAGE RESETS_AT _ BURST_USAGE BURST_RESETS EXTRA_USED EXTRA_LIMIT <<< "$(get_usage_data)"
+read -r WEEKLY_USAGE RESETS_AT BURST_USAGE BURST_RESETS EXTRA_USED EXTRA_LIMIT <<< "$(get_usage_data)"
 
 # Smart pace indicator (trend-based)
 PACE_INDICATOR=""

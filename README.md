@@ -110,7 +110,7 @@ Many items have **multi-unit scaling** - they pick the appropriate unit based on
 | 🖱️ | magic-mice® | $99 |
 | 📱 | iphones® | $999 |
 | 🥐 | cronuts® | $7.75 |
-| 🎵 | apple-music® | $0.004/stream |
+| 🎵 | apple-musics® | $0.004 |
 
 **Absurd Items (7)** - all-time only, decimal chasing 1:
 
