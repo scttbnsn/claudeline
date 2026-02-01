@@ -176,13 +176,14 @@ get_usage_data() {
     local resets_at=$(echo "$response" | jq -r '.seven_day.resets_at // "_"' 2>/dev/null)
     local extra_util=$(echo "$response" | jq -r '.extra_usage.utilization // "_"' 2>/dev/null)
     local burst_util=$(echo "$response" | jq -r '.five_hour.utilization // "_"' 2>/dev/null)
+    local burst_resets=$(echo "$response" | jq -r '.five_hour.resets_at // "_"' 2>/dev/null)
     local extra_used=$(echo "$response" | jq -r '.extra_usage.used_credits // "_"' 2>/dev/null)
     local extra_limit=$(echo "$response" | jq -r '.extra_usage.monthly_limit // "_"' 2>/dev/null)
 
     if [ -n "$utilization" ] && [ "$utilization" != "_" ]; then
-        # Cache: utilization resets_at extra_util burst_util extra_used extra_limit
-        echo -e "$now\n$utilization $resets_at $extra_util $burst_util $extra_used $extra_limit" > "$API_CACHE"
-        echo "$utilization $resets_at $extra_util $burst_util $extra_used $extra_limit"
+        # Cache: utilization resets_at extra_util burst_util burst_resets extra_used extra_limit
+        echo -e "$now\n$utilization $resets_at $extra_util $burst_util $burst_resets $extra_used $extra_limit" > "$API_CACHE"
+        echo "$utilization $resets_at $extra_util $burst_util $burst_resets $extra_used $extra_limit"
     else
         # Return stale cache if API fails
         [ -f "$API_CACHE" ] && tail -1 "$API_CACHE" 2>/dev/null
@@ -1556,7 +1557,7 @@ else
 fi
 
 # Get usage data from API
-read -r WEEKLY_USAGE RESETS_AT _ BURST_USAGE EXTRA_USED EXTRA_LIMIT <<< "$(get_usage_data)"
+read -r WEEKLY_USAGE RESETS_AT _ BURST_USAGE BURST_RESETS EXTRA_USED EXTRA_LIMIT <<< "$(get_usage_data)"
 
 # Smart pace indicator (trend-based)
 PACE_INDICATOR=""
@@ -1588,7 +1589,25 @@ if [ -n "$BURST_USAGE" ] && [ "$BURST_USAGE" != "_" ] && [ "$BURST_USAGE" != "nu
         else
             BURST_BAR="█"; BURST_COLOR="$BURST_BRIGHT_MAG"
         fi
-        BURST_INDICATOR="💥${BURST_COLOR}${BURST_BAR}${RESET}"
+        # At 88%+: show reset countdown instead of bar
+        if [ "$BURST_PCT" -ge 88 ] && [ -n "$BURST_RESETS" ] && [ "$BURST_RESETS" != "_" ] && [ "$BURST_RESETS" != "null" ]; then
+            local burst_reset_epoch
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                burst_reset_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S" "${BURST_RESETS%%.*}" +%s 2>/dev/null)
+            else
+                burst_reset_epoch=$(date -d "$BURST_RESETS" +%s 2>/dev/null)
+            fi
+            if [ -n "$burst_reset_epoch" ]; then
+                local now_epoch=$(date +%s)
+                local secs_left=$((burst_reset_epoch - now_epoch))
+                local mins=$(( (secs_left + 59) / 60 ))
+                BURST_INDICATOR="💥${BURST_COLOR}${BURST_BAR} ${DIM}-${mins}m${RESET}"
+            else
+                BURST_INDICATOR="💥${BURST_COLOR}${BURST_BAR}${RESET}"
+            fi
+        else
+            BURST_INDICATOR="💥${BURST_COLOR}${BURST_BAR}${RESET}"
+        fi
     fi
 fi
 
