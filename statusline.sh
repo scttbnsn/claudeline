@@ -535,6 +535,8 @@ fi
 # Build mini progress bar (10 chars wide)
 BAR_WIDTH=10
 FILLED=$((PERCENT_USED * BAR_WIDTH / 100))
+# At 95%+ show full bar - integer division makes 99% show 9/10 which looks wrong
+[ "$PERCENT_USED" -ge 95 ] && FILLED=$BAR_WIDTH
 EMPTY=$((BAR_WIDTH - FILLED))
 
 # Use block characters for the bar
@@ -1591,17 +1593,21 @@ if [ -n "$BURST_USAGE" ] && [ "$BURST_USAGE" != "_" ] && [ "$BURST_USAGE" != "nu
         fi
         # At 88%+: show reset countdown instead of bar
         if [ "$BURST_PCT" -ge 88 ] && [ -n "$BURST_RESETS" ] && [ "$BURST_RESETS" != "_" ] && [ "$BURST_RESETS" != "null" ]; then
-            local burst_reset_epoch
+            burst_reset_epoch=""
             if [[ "$OSTYPE" == "darwin"* ]]; then
                 burst_reset_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S" "${BURST_RESETS%%.*}" +%s 2>/dev/null)
             else
                 burst_reset_epoch=$(date -d "$BURST_RESETS" +%s 2>/dev/null)
             fi
             if [ -n "$burst_reset_epoch" ]; then
-                local now_epoch=$(date +%s)
-                local secs_left=$((burst_reset_epoch - now_epoch))
-                local mins=$(( (secs_left + 59) / 60 ))
-                BURST_INDICATOR="💥${BURST_COLOR}${BURST_BAR} ${DIM}-${mins}m${RESET}"
+                now_epoch=$(date +%s)
+                secs_left=$((burst_reset_epoch - now_epoch))
+                if [ "$secs_left" -gt 0 ]; then
+                    mins=$(( (secs_left + 59) / 60 ))
+                    BURST_INDICATOR="💥${BURST_COLOR}${BURST_BAR} ${DIM}-${mins}m${RESET}"
+                else
+                    BURST_INDICATOR="💥${BURST_COLOR}${BURST_BAR}${RESET}"
+                fi
             else
                 BURST_INDICATOR="💥${BURST_COLOR}${BURST_BAR}${RESET}"
             fi
