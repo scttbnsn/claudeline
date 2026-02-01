@@ -454,7 +454,7 @@ NOW=$(date +%s)
 NOW_DIV_10=$((NOW / 10))
 
 # 10-cycle rotation pattern: 4 session → 1 all-time normal 🏆 → 4 session → 1 all-time absurd 🏆 → repeat
-# Session metrics: water(1), power(6), utility(3), fun_cost(28 session-tier) = 38 total
+# Session metrics: water(1), power(7), utility(3), fun_cost(28 session-tier) = 39 total
 CYCLE_POS=$((NOW_DIV_10 % 10))
 if [ "$CYCLE_POS" -eq 4 ]; then
     IS_ALLTIME=1
@@ -474,19 +474,19 @@ SESSION_COST_ITEMS=(0 1 2 3 4 5 6 8 9 10 11 12 13 14 15 16 17 20 23 26 27 28 29 
 ALLTIME_COST_ITEMS=(7 18 19 21 22 24 25 32 34 35 36 37)
 
 # Session metric: 4 equal categories, rotate items within each
-# Categories: 0=water(1), 1=power(6), 2=utility(3), 3=fun_cost(28 session-tier)
+# Categories: 0=water(1), 1=power(7), 2=utility(3), 3=fun_cost(28 session-tier)
 CATEGORY_INDEX=$((NOW_DIV_10 % 4))
 # Item within category rotates on slower cycle (every 40s = 4 categories * 10s)
 ITEM_CYCLE=$((NOW_DIV_10 / 4))
 WATER_ITEM_INDEX=0                         # standard water only (bathtubs/pools in all-time)
-POWER_ITEM_INDEX=$((ITEM_CYCLE % 6))      # 0=standard, 1-5=fun power (no coal/reactor)
+POWER_ITEM_INDEX=$((ITEM_CYCLE % 7))      # 0=standard, 1-6=fun power (no coal/reactor)
 UTILITY_ITEM_INDEX=$((ITEM_CYCLE % 3))    # 0=tokens, 1=money, 2=data
 FUN_COST_ITEM_INDEX=${SESSION_COST_ITEMS[$((ITEM_CYCLE % ${#SESSION_COST_ITEMS[@]}))]}  # session-tier only (price <= $20)
 
 # All-time item indices (rotate through items within their category)
 # ALLTIME_COST_ITEMS has 12 items (price > $20), ABSURD_EMOJI has 8 items
-# ALLTIME_NORMAL_INDEX computed inline in display block (14-item cycle: 12 cost + coal + reactor)
-ALLTIME_ABSURD_INDEX=$((NOW_DIV_10 % 8))
+# ALLTIME_COST_ITEMS has 12 items (price > $20), ABSURD_EMOJI has 7 items
+ALLTIME_ABSURD_INDEX=$((NOW_DIV_10 % 7))
 
 # Calculate context percentage (scaled to auto-compact threshold)
 # 168K is the actual compression trigger point (out of 200K total context)
@@ -736,11 +736,12 @@ format_data() {
     echo "${val}${unit}"
 }
 
-# Fun power conversions (time to power devices, or mass for coal)
-# Phone=5W, Hue=10W, Home=1kW, 4xe=7kW, 395-hudson=2MW, Coal=1lb/kWh (special), Reactor=1GW
-FUN_POWER_EMOJI=("🔌" "💡" "🏠" "🚗" "🏢" "🪨" "☢️")
-FUN_POWER_NAME=("phone-charging" "hue-light®" "home-power" "4xe®" "395-hudson®" "coal" "reactor-output")
-FUN_POWER_WATTS=(5 10 1000 7000 2000000 0 1000000000)
+# Fun power conversions (time to power devices, distance for 4xe/jet, mass for coal)
+# Session: Phone=5W, Hue=10W, Home=1kW, 395-hudson=2MW, 4xe=1.45mi/kWh (-1), A320neo=0.01942mi/kWh (-2)
+# All-time: Coal=1lb/kWh (special:0), Reactor=1GW
+FUN_POWER_EMOJI=("🔌" "💡" "🏠" "🏢" "🚗" "✈️" "🪨" "☢️")
+FUN_POWER_NAME=("phone-charging" "hue-light®" "home-power" "395-hudson®" "4xe®" "a320neo®" "coal" "reactor-output")
+FUN_POWER_WATTS=(5 10 1000 2000000 -1 -2 0 1000000000)
 
 format_fun_power() {
     local tokens=$1
@@ -754,6 +755,37 @@ format_fun_power() {
     local emoji="${FUN_POWER_EMOJI[$item_idx]}"
     local name="${FUN_POWER_NAME[$item_idx]}"
     local watts="${FUN_POWER_WATTS[$item_idx]}"
+
+    # Special case: distance-based items (4xe=-1 @ 1.45mi/kWh, jet=-2 @ 0.00673mi/kWh)
+    if [ "$watts" -eq -1 ] || [ "$watts" -eq -2 ]; then
+        local kwh=$(echo "scale=6; $wh / 1000" | bc)
+        [[ "$kwh" == .* ]] && kwh="0$kwh"
+        local mi_per_kwh="1.45"
+        [ "$watts" -eq -2 ] && mi_per_kwh="0.01942"
+        local miles=$(echo "scale=6; $kwh * $mi_per_kwh" | bc)
+        [[ "$miles" == .* ]] && miles="0$miles"
+        local feet=$(echo "scale=1; $miles * 5280" | bc)
+        [[ "$feet" == .* ]] && feet="0$feet"
+        local cm=$(echo "scale=1; $miles * 160934.4" | bc)
+        [[ "$cm" == .* ]] && cm="0$cm"
+
+        local dist_val dist_unit
+        if [ "$(echo "$miles >= 1" | bc)" -eq 1 ]; then
+            dist_val=$(printf "%.1f" "$miles")
+            dist_val=$(echo "$dist_val" | sed 's/\.0$//')
+            dist_unit="mi"
+        elif [ "$(echo "$feet >= 1" | bc)" -eq 1 ]; then
+            dist_val=$(printf "%.1f" "$feet")
+            dist_val=$(echo "$dist_val" | sed 's/\.0$//')
+            dist_unit="ft"
+        else
+            dist_val=$(printf "%.1f" "$cm")
+            dist_val=$(echo "$dist_val" | sed 's/\.0$//')
+            dist_unit="cm"
+        fi
+        echo "$emoji ${dist_val}${dist_unit} $name"
+        return
+    fi
 
     # Special case: coal shows mass burned (lbs) at ~1 lb/kWh
     if [ "$watts" -eq 0 ]; then
@@ -802,9 +834,9 @@ FUN_NAME=("starbucks®" "joe's®" "tacorias®" "yuenglings®" "shackburgers®" "
 FUN_PRICE=(5.50 4 4.60 7 9 0.30 18 70 17 1 0.11 2 7 5 3.50 6 4 8 65 75 2.50 40 30 15 260 38 5 5 7 12 11 9 35 5.90 99 999 200 30 7.75 0.004)
 
 # Fun money conversions - ABSURD items (all-time only, fraction chasing 1)
-ABSURD_EMOJI=("🚐" "🧟" "🏝️" "🚢" "🏪" "🩸" "🚁" "✈️")
-ABSURD_NAME=("sprinters®" "thrillers®" "private-islands®" "supertankers®" "chipotle-franchises®" "body @ blood®" "h130s®" "g550s®")
-ABSURD_PRICE=(50000 1600000 18000000 150000000 1000000 2000 3500000 60000000)
+ABSURD_EMOJI=("🚐" "🧟" "🏝️" "🚢" "🏪" "🩸" "🚁")
+ABSURD_NAME=("sprinters®" "thrillers®" "private-islands®" "supertankers®" "chipotle-franchises®" "body @ blood®" "h130s®")
+ABSURD_PRICE=(50000 1600000 18000000 150000000 1000000 2000 3500000)
 
 # Helper: pluralize unit (add 's' unless count is exactly 1)
 pluralize() {
@@ -1415,7 +1447,7 @@ add_leading_zero() {
 
 # Build rotating metric display
 # 10-cycle pattern: 4 session → 1 all-time normal 🏆 → 4 session → 1 all-time absurd 🏆 → repeat
-# Session: water(1), power(6), utility(3), fun_cost(28 session-tier ≤$20)
+# Session: water(1), power(7), utility(3), fun_cost(28 session-tier ≤$20)
 METRIC_INFO=""
 if [ "$SESSION_TOKENS" -gt 0 ] 2>/dev/null || [ "$ALL_TIME_TOKENS" -gt 0 ] 2>/dev/null; then
     if [ "$IS_ALLTIME" -eq 1 ]; then
@@ -1430,11 +1462,11 @@ if [ "$SESSION_TOKENS" -gt 0 ] 2>/dev/null || [ "$ALL_TIME_TOKENS" -gt 0 ] 2>/de
             # All-time normal: 12 cost + coal + reactor = 14 item cycle
             ALLTIME_NORMAL_CYCLE=$((NOW_DIV_10 % 14))
             if [ "$ALLTIME_NORMAL_CYCLE" -eq 12 ]; then
-                # Coal (fun power index 5)
-                METRIC_INFO="${DIM}$(format_fun_power $USE_TOKENS 5)${TROPHY}${RESET}"
-            elif [ "$ALLTIME_NORMAL_CYCLE" -eq 13 ]; then
-                # Reactor output (fun power index 6)
+                # Coal (fun power index 6)
                 METRIC_INFO="${DIM}$(format_fun_power $USE_TOKENS 6)${TROPHY}${RESET}"
+            elif [ "$ALLTIME_NORMAL_CYCLE" -eq 13 ]; then
+                # Reactor output (fun power index 7)
+                METRIC_INFO="${DIM}$(format_fun_power $USE_TOKENS 7)${TROPHY}${RESET}"
             else
                 ALLTIME_COST_IDX=${ALLTIME_COST_ITEMS[$ALLTIME_NORMAL_CYCLE]}
                 METRIC_INFO="${DIM}$(format_fun_cost $USE_COST $ALLTIME_COST_IDX)${TROPHY}${RESET}"
