@@ -454,7 +454,7 @@ NOW=$(date +%s)
 NOW_DIV_10=$((NOW / 10))
 
 # 10-cycle rotation pattern: 4 session → 1 all-time normal 🏆 → 4 session → 1 all-time absurd 🏆 → repeat
-# Session metrics: water, fun_water(3), power, fun_power(7), tokens, money, data, fun_cost(40) = 54 total
+# Session metrics: water(1), power(6), utility(3), fun_cost(28 session-tier) = 38 total
 CYCLE_POS=$((NOW_DIV_10 % 10))
 if [ "$CYCLE_POS" -eq 4 ]; then
     IS_ALLTIME=1
@@ -467,19 +467,25 @@ else
     IS_ABSURD=0
 fi
 
+# Session-tier fun cost items (price <= $20) — shown during session display
+SESSION_COST_ITEMS=(0 1 2 3 4 5 6 8 9 10 11 12 13 14 15 16 17 20 23 26 27 28 29 30 31 33 38 39)
+
+# All-time-tier fun cost items (price > $20) — shown during all-time normal display
+ALLTIME_COST_ITEMS=(7 18 19 21 22 24 25 32 34 35 36 37)
+
 # Session metric: 4 equal categories, rotate items within each
-# Categories: 0=water(4), 1=power(8), 2=utility(3), 3=fun_cost(40)
+# Categories: 0=water(1), 1=power(6), 2=utility(3), 3=fun_cost(28 session-tier)
 CATEGORY_INDEX=$((NOW_DIV_10 % 4))
 # Item within category rotates on slower cycle (every 40s = 4 categories * 10s)
 ITEM_CYCLE=$((NOW_DIV_10 / 4))
-WATER_ITEM_INDEX=$((ITEM_CYCLE % 4))      # 0=standard, 1-3=fun water
-POWER_ITEM_INDEX=$((ITEM_CYCLE % 8))      # 0=standard, 1-7=fun power
+WATER_ITEM_INDEX=0                         # standard water only (bathtubs/pools in all-time)
+POWER_ITEM_INDEX=$((ITEM_CYCLE % 6))      # 0=standard, 1-5=fun power (no coal/reactor)
 UTILITY_ITEM_INDEX=$((ITEM_CYCLE % 3))    # 0=tokens, 1=money, 2=data
-FUN_COST_ITEM_INDEX=$((ITEM_CYCLE % 40))  # 0-39=fun cost items
+FUN_COST_ITEM_INDEX=${SESSION_COST_ITEMS[$((ITEM_CYCLE % ${#SESSION_COST_ITEMS[@]}))]}  # session-tier only (price <= $20)
 
 # All-time item indices (rotate through items within their category)
-# FUN_EMOJI has 40 items, ABSURD_EMOJI has 8 items
-ALLTIME_NORMAL_INDEX=$((NOW_DIV_10 % 40))
+# ALLTIME_COST_ITEMS has 12 items (price > $20), ABSURD_EMOJI has 8 items
+# ALLTIME_NORMAL_INDEX computed inline in display block (14-item cycle: 12 cost + coal + reactor)
 ALLTIME_ABSURD_INDEX=$((NOW_DIV_10 % 8))
 
 # Calculate context percentage (scaled to auto-compact threshold)
@@ -602,7 +608,7 @@ format_number() {
 # Format a decimal as a human-friendly count (K/M suffix, or 1/Nth fractions for values < 1)
 # Input: raw decimal value (e.g., 0.004)
 # Output: formatted string (e.g., "1/3rd" or "1.5K")
-# Snap targets for fractions: 1/2, 1/3, 1/4, 1/5, 1/10, 1/20, 1/50, 1/100, 1/1K, 1/10K, 1/100K, 1/1M
+# Snap targets for fractions: 1/2, 1/3, 1/4, 1/5, 1/10, 1/20, 1/50, 1/100 (returns "<1/100th" if smaller)
 format_count() {
     local raw_count=$1
     [[ "$raw_count" == .* ]] && raw_count="0$raw_count"
@@ -615,13 +621,18 @@ format_count() {
         local count=$(printf "%.1f" "$raw_count")
         echo "$count" | sed 's/\.0$//'
     else
-        # For values < 1, snap to easy fraction targets
-        # Snap targets (as denominators): 2, 3, 4, 5, 10, 20, 50, 100, 1K, 10K, 100K, 1M
+        # For values < 1, snap to easy fraction targets (capped at 1/100)
         local exact_denom=$(echo "1 / $raw_count" | bc -l)
         [[ "$exact_denom" == .* ]] && exact_denom="0$exact_denom"
 
-        # Find closest snap target
-        local snap_targets=(2 3 4 5 10 20 50 100 1000 10000 100000 1000000)
+        # Floor check: if exact_denom > 150, value is too small for readable fractions
+        if [ "$(echo "$exact_denom > 150" | bc)" -eq 1 ]; then
+            echo "<1/100th"
+            return
+        fi
+
+        # Find closest snap target (capped at 100)
+        local snap_targets=(2 3 4 5 10 20 50 100)
         local best_denom=2
         local best_diff=999999999
 
@@ -635,16 +646,6 @@ format_count() {
         done
 
         [ "$best_denom" -le 1 ] && echo "1" && return
-
-        # Format denominator with K/M suffix for large values
-        local denom_str
-        if [ "$best_denom" -ge 1000000 ]; then
-            denom_str="$((best_denom / 1000000))M"
-        elif [ "$best_denom" -ge 1000 ]; then
-            denom_str="$((best_denom / 1000))K"
-        else
-            denom_str="$best_denom"
-        fi
 
         # Ordinal suffix (3rd, 22nd, etc. but 11th, 12th, 13th; 1/2 has no suffix)
         local suffix="th"
@@ -661,7 +662,7 @@ format_count() {
             fi
         fi
 
-        echo "1/${denom_str}${suffix}"
+        echo "1/${best_denom}${suffix}"
     fi
 }
 
@@ -691,27 +692,6 @@ format_water() {
     # Trim .0 for whole numbers
     val=$(echo "$val" | sed 's/\.0$//')
     echo "$val $unit"
-}
-
-# Fun water conversions (rotate through these)
-# Bucket(5gal)=3.8M, Bathtub(50gal)=38M, Pool(20kgal)=15B tokens
-FUN_WATER_EMOJI=("🪣" "🛁" "🏊")
-FUN_WATER_NAME=("buckets" "bathtubs" "swimming-pools")
-FUN_WATER_TOKENS=(3800000 38000000 15000000000)
-
-format_fun_water() {
-    local tokens=$1
-    local item_idx=${2:-$(( ($(date +%s) / 10) % ${#FUN_WATER_EMOJI[@]} ))}  # Optional: explicit item index
-    [ "$tokens" -eq 0 ] && echo "💧 0 drops" && return
-
-    local emoji="${FUN_WATER_EMOJI[$item_idx]}"
-    local name="${FUN_WATER_NAME[$item_idx]}"
-    local divisor="${FUN_WATER_TOKENS[$item_idx]}"
-
-    local raw_count=$(echo "scale=6; $tokens / $divisor" | bc)
-    local count=$(format_count "$raw_count")
-
-    echo "$emoji $count $name"
 }
 
 # Format power with dynamic units (Wh → kWh → MWh)
@@ -1435,7 +1415,7 @@ add_leading_zero() {
 
 # Build rotating metric display
 # 10-cycle pattern: 4 session → 1 all-time normal 🏆 → 4 session → 1 all-time absurd 🏆 → repeat
-# Session metrics: 0=water, 1-3=fun_water, 4=power, 5-11=fun_power, 12=tokens, 13=money, 14=data, 15-54=fun_cost
+# Session: water(1), power(6), utility(3), fun_cost(28 session-tier ≤$20)
 METRIC_INFO=""
 if [ "$SESSION_TOKENS" -gt 0 ] 2>/dev/null || [ "$ALL_TIME_TOKENS" -gt 0 ] 2>/dev/null; then
     if [ "$IS_ALLTIME" -eq 1 ]; then
@@ -1447,8 +1427,18 @@ if [ "$SESSION_TOKENS" -gt 0 ] 2>/dev/null || [ "$ALL_TIME_TOKENS" -gt 0 ] 2>/de
             # All-time absurd: rotate through absurd items
             METRIC_INFO="${DIM}$(format_absurd_cost $USE_COST $ALLTIME_ABSURD_INDEX)${TROPHY}${RESET}"
         else
-            # All-time normal: rotate through normal fun cost items
-            METRIC_INFO="${DIM}$(format_fun_cost $USE_COST $ALLTIME_NORMAL_INDEX)${TROPHY}${RESET}"
+            # All-time normal: 12 cost + coal + reactor = 14 item cycle
+            ALLTIME_NORMAL_CYCLE=$((NOW_DIV_10 % 14))
+            if [ "$ALLTIME_NORMAL_CYCLE" -eq 12 ]; then
+                # Coal (fun power index 5)
+                METRIC_INFO="${DIM}$(format_fun_power $USE_TOKENS 5)${TROPHY}${RESET}"
+            elif [ "$ALLTIME_NORMAL_CYCLE" -eq 13 ]; then
+                # Reactor output (fun power index 6)
+                METRIC_INFO="${DIM}$(format_fun_power $USE_TOKENS 6)${TROPHY}${RESET}"
+            else
+                ALLTIME_COST_IDX=${ALLTIME_COST_ITEMS[$ALLTIME_NORMAL_CYCLE]}
+                METRIC_INFO="${DIM}$(format_fun_cost $USE_COST $ALLTIME_COST_IDX)${TROPHY}${RESET}"
+            fi
         fi
     else
         # Session display: 4 equal categories (25% each)
@@ -1457,12 +1447,8 @@ if [ "$SESSION_TOKENS" -gt 0 ] 2>/dev/null || [ "$ALL_TIME_TOKENS" -gt 0 ] 2>/de
         TROPHY=""
 
         case $CATEGORY_INDEX in
-            0)  # Water category (25%)
-                if [ "$WATER_ITEM_INDEX" -eq 0 ]; then
-                    METRIC_INFO="${DIM}💧 $(format_water $USE_TOKENS)${RESET}"
-                else
-                    METRIC_INFO="${DIM}$(format_fun_water $USE_TOKENS $((WATER_ITEM_INDEX - 1)))${RESET}"
-                fi
+            0)  # Water category (25%): standard water only
+                METRIC_INFO="${DIM}💧 $(format_water $USE_TOKENS)${RESET}"
                 ;;
             1)  # Power category (25%)
                 if [ "$POWER_ITEM_INDEX" -eq 0 ]; then
