@@ -44,8 +44,8 @@ A cute, informative status line for Claude Code with rotating environmental metr
   - Trend uses **rolling window** with linear regression for accurate direction detection
   - At limit shows reset countdown: `🚨 -1.2d`
   - Alternates with raw % every 10th update
-- **Burst indicator** (💥) with colored 8-level bar (▁▂▃▄▅▆▇█) for 5-hour rate limit, only when > 0%
-- **Credit indicator** (💳) showing monthly extra usage percentage
+- **Burst indicator** (💥) with colored 8-level bar (▁▂▃▄▅▆▇█) for 5-hour rate limit, reset countdown at 88%+
+- **Credit indicator** (💳) showing remaining overage balance, only when at weekly limit
 - **Model name** (dimmed, at end)
 
 ## Environmental Impact
@@ -237,9 +237,11 @@ The display alternates between emoji+arrow (9 cycles) and raw percentage (1 cycl
 | 51-62% | ▅ | orange |
 | 63-75% | ▆ | red |
 | 76-87% | ▇ | magenta |
-| 88%+ | █ | bright magenta |
+| 88%+ | █ -135m | bright magenta + reset countdown |
 
-**💳 Credit** (monthly extra usage) - Only shown when > 0%
+At 88%+, a dimmed countdown shows minutes until the 5-hour window resets.
+
+**💳 Credit** (overage balance) - Only shown when weekly usage hits 100%. Displays remaining dollars and % of monthly cap: `💳$465/$500 (7%)`
 
 ## Installation
 
