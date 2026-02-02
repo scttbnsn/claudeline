@@ -862,11 +862,11 @@ format_tacoria() {
     if [ "$(echo "$cost >= 4.60" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 4.60" | bc)
         local count=$(format_count "$raw")
-        echo "$emoji $count tacos @ tacoria®"
+        echo "$emoji $count tacorias®"
     else
         local raw=$(echo "scale=6; $cost / 1.15" | bc)
         local count=$(format_count "$raw")
-        echo "$emoji $count bites @ tacoria®"
+        echo "$emoji $count bites @ tacorias®"
     fi
 }
 
@@ -896,7 +896,7 @@ format_shackburger() {
     if [ "$(echo "$cost >= 9" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 9" | bc)
         local count=$(format_count "$raw")
-        echo "$emoji $count shackburgers"
+        echo "$emoji $count shackburgers®"
     else
         local raw=$(echo "scale=6; $cost / 0.90" | bc)
         local count=$(format_count "$raw")
@@ -932,7 +932,7 @@ format_nathans() {
     elif [ "$(echo "$cost >= 6" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 6" | bc)
         local count=$(format_count "$raw")
-        echo "$emoji $count dogs @ nathan's®"
+        echo "$emoji $count nathan's®"
     else
         local raw=$(echo "scale=6; $cost / 1" | bc)
         local count=$(format_count "$raw")
@@ -1129,7 +1129,7 @@ format_chipotle() {
     if [ "$(echo "$cost >= 12" | bc)" -eq 1 ]; then
         local raw=$(echo "scale=6; $cost / 12" | bc)
         local count=$(format_count "$raw")
-        echo "$emoji $count burritos @ chipotle®"
+        echo "$emoji $count chipotles®"
     else
         local raw=$(echo "scale=6; $cost / 0.80" | bc)
         local count=$(format_count "$raw")
