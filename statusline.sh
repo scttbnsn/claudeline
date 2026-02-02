@@ -1282,7 +1282,9 @@ if [ "$SESSION_TOKENS" -gt 0 ] 2>/dev/null || [ "$ALL_TIME_TOKENS" -gt 0 ] 2>/de
             METRIC_INFO="${DIM}$(format_absurd_cost $USE_COST $ALLTIME_ABSURD_INDEX)${TROPHY}${RESET}"
         else
             # All-time normal: 10 cost + coal + reactor + tokens + cost + data = 15 item cycle
-            ALLTIME_NORMAL_CYCLE=$((NOW_DIV_10 % 15))
+            # Use NOW_DIV_10/10 so cycle advances each time the outer 10-pos cycle completes
+            # (avoids modular conflict with CYCLE_POS which also uses NOW_DIV_10)
+            ALLTIME_NORMAL_CYCLE=$(( (NOW_DIV_10 / 10) % 15 ))
             if [ "$ALLTIME_NORMAL_CYCLE" -eq 10 ]; then
                 # Coal (fun power index 6)
                 METRIC_INFO="${DIM}$(format_fun_power $USE_TOKENS 6)${TROPHY}${RESET}"
