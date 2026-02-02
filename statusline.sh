@@ -424,11 +424,10 @@ get_smart_pace_indicator() {
 
 # Extract all values in a single jq call (11 calls → 1)
 # Use tab delimiter to handle spaces in values (e.g. "Claude Opus 4.5")
-IFS=$'\t' read -r MODEL CONTEXT_SIZE CURRENT_DIR LINES_ADDED LINES_REMOVED \
+IFS=$'\t' read -r MODEL CURRENT_DIR LINES_ADDED LINES_REMOVED \
     TOTAL_INPUT TOTAL_OUTPUT DURATION_MS TOTAL_COST CURRENT_TOKENS <<< \
     "$(echo "$input" | jq -r '[
         (.model.display_name // "Claude"),
-        (.context_window.context_window_size // 200000),
         (.workspace.current_dir // ""),
         (.cost.total_lines_added // 0),
         (.cost.total_lines_removed // 0),
@@ -494,7 +493,7 @@ FUN_COST_ITEM_INDEX=${SESSION_COST_ITEMS[$((ITEM_CYCLE % ${#SESSION_COST_ITEMS[@
 
 # All-time item indices (rotate through items within their category)
 # Normal: 10 cost + coal + reactor + tokens + cost + data = 15; Absurd: 7 items
-ALLTIME_ABSURD_INDEX=$((NOW_DIV_10 % ${#ABSURD_EMOJI[@]}))
+# NOTE: ALLTIME_ABSURD_INDEX is computed after ABSURD_EMOJI is defined (below array defs)
 
 # Calculate context percentage (scaled to auto-compact threshold)
 # 168K is the actual compression trigger point (out of 200K total context)
@@ -821,6 +820,7 @@ FUN_PRICE=(5.50 4 4.60 7 9 0.30 18 70 1 0.11 2 5 3.50 6 4 8 65 75 2.50 40 30 15 
 ABSURD_EMOJI=("🚐" "🧟" "🏝️" "🏪" "🚁" "☕" "☕")
 ABSURD_NAME=("sprinters®" "thrillers®" "private-islands®" "chipotle-franchises®" "h130s®" "starbucks-franchises®" "starbucks-ceo-pays®")
 ABSURD_PRICE=(50000 1600000 18000000 1000000 3500000 315000 57000000)
+ALLTIME_ABSURD_INDEX=$((NOW_DIV_10 % ${#ABSURD_EMOJI[@]}))
 
 # Multi-unit format functions
 # Format: {count} {unit} @ {brand}® for sub-units, {count} {brand}® for main unit
@@ -1258,13 +1258,6 @@ format_absurd_cost() {
     local count=$(format_count "$raw_count")
 
     echo "$emoji $count $name"
-}
-
-# Add leading zero for bc output like ".5" -> "0.5"
-add_leading_zero() {
-    local val=$1
-    [[ "$val" == .* ]] && val="0$val"
-    echo "$val"
 }
 
 # Build rotating metric display
