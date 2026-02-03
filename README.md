@@ -161,24 +161,26 @@ The 🏆 trophy indicates all-time totals. The 10-cycle rotation shows:
 
 Compares your actual weekly usage against where you *should* be based on time elapsed in the 7-day rolling window. Uses the Anthropic OAuth API to fetch real-time usage data.
 
-**The math:** `ratio = actual% / expected%` where `expected = (days_elapsed / 7) * 100`
+**The math:** Two signals, take the worse one:
+- **Burn rate** (velocity): `(pct / days_elapsed) × 7 / 100` — how fast you're going
+- **Pressure** (position): `days_remaining / budget_remaining_in_days` — remaining runway
 
-For example, if you're at 27% usage with 1.2 days elapsed:
-- Expected: (1.2/7) × 100 = 17%
-- Ratio: 27/17 = 1.58 → 🔥 (running hot)
+`effective = max(burn_rate, pressure)`
+
+Both signals agree on over/under pace (`> 1.0` = over, `< 1.0` = under), but pressure amplifies urgency when budget is thin. For example, at 91% on Monday 8pm with reset Thursday 1pm: burn rate is 1.48 (🥵) but pressure is 4.29 — you have 9% left for 2.7 days (🚨).
 
 **Pace emoji** (where you are):
 
-| Ratio | Emoji | State |
+| Effective Rate | Emoji | State |
 |-------|-------|-------|
 | < 0.3 | ❄️ | Way under pace |
 | 0.3-0.6 | 🧊 | Under pace |
-| 0.6-0.8 | 🙂 | Comfortable |
-| 0.8-1.1 | 👌 | On pace |
-| 1.1-1.3 | ♨️ | Slightly hot |
-| 1.3-1.5 | 🥵 | Hot |
-| 1.5-2.0 | 🔥 | Very hot |
-| ≥ 2.0 | 🚨 | Critical |
+| 0.6-0.85 | 🙂 | Comfortable |
+| 0.85-1.15 | 👌 | On pace |
+| 1.15-1.4 | ♨️ | Warming |
+| 1.4-1.8 | 🥵 | Hot |
+| 1.8-2.5 | 🔥 | Very hot |
+| ≥ 2.5 | 🚨 | Critical |
 
 **Trend arrow** (where you're headed):
 
