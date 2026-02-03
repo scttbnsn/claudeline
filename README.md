@@ -7,7 +7,7 @@ A cute, informative status line for Claude Code with rotating environmental metr
 │  └────┬────┘     └─────┬─────┘   └───┬──┘   └─┬──┘  └─┬┘   └─┬──┘    └──┬───┘
 │    context          repo/branch     lines    pace  burst  credit    duration
 │    bar              + git status    changed  trend
-└─ context icon (✨💭🧠💾)
+└─ context icon (✨💭🧠🔥💾 or ✨💭💾🪫⚠️)
 
     73.5K/168K  ·  🍕 3 joe's®  ·  Opus 4.5
     └────┬────┘    └─────┬─────┘   └───┬───┘
@@ -17,13 +17,19 @@ A cute, informative status line for Claude Code with rotating environmental metr
 
 ## Features
 
-- **Context bar** scaled to auto-compact threshold (~75% of context window):
-  - ✨ Cyan (0-17%) - plenty of room
-  - ✨ Lime (18-34%) - cruising
-  - 💭 Yellow (35-49%) - getting cozy
-  - 🧠 Orange (50-67%) - consider compacting
-  - 🔥 Coral (68-87%) - getting hot
-  - 💾 Red (88%+) - about to auto-compact
+- **Context bar** adapts to your auto-compact setting (reads `~/.claude.json`):
+  - **Auto-compact ON** (default): scales to 168K (the compression trigger, ~75% of 220K window)
+  - **Auto-compact OFF**: scales to 220K (full context window)
+  - 6-tier color gradient with mode-aware icons at high tiers:
+
+  | Range | Color | Icon (auto-compact ON) | Icon (auto-compact OFF) |
+  |-------|-------|----------------------|------------------------|
+  | 0-17% | Cyan | ✨ | ✨ |
+  | 18-34% | Lime | ✨ | ✨ |
+  | 35-49% | Yellow | 💭 | 💭 |
+  | 50-67% | Orange | 🧠 | 💾 compact hint |
+  | 68-87% | Coral | 🔥 | 🪫 running low |
+  | 88%+ | Red | 💾 about to auto-compact | ⚠️ hard wall ahead |
 - **24-bit true color** palette (vibey 2025 colors)
 - **Repo/branch** with git status indicators (`*`=unstaged, `+`=staged, `↑↓`=ahead/behind)
 - **Lines changed** (+added/-removed)
@@ -209,20 +215,20 @@ The display alternates between emoji+arrow (9 cycles) and raw percentage (1 cycl
 
 ## Burst & Credit Indicators
 
-**💥 Burst** (5-hour rate limit) - Colored bar indicator, only shown when > 0%
+**💥 Burst** (5-hour rate limit) - Colored bar mapped directly to API utilization %, only shown when > 0%
 
 | Range | Bar | Color |
 |-------|-----|-------|
-| 1-12% | ▁ | jade |
-| 13-25% | ▂ | teal |
-| 26-37% | ▃ | green |
-| 38-50% | ▄ | yellow |
-| 51-62% | ▅ | orange |
-| 63-75% | ▆ | red |
-| 76-87% | ▇ | magenta |
-| 88%+ | █ -135m | bright magenta + reset countdown |
+| 1-12% | ▁ | cyan |
+| 13-24% | ▂ | teal |
+| 25-37% | ▃ | green |
+| 38-49% | ▄ | yellow |
+| 50-62% | ▅ | orange |
+| 63-74% | ▆ | red |
+| 75-87% | ▇ -135m | magenta + reset countdown |
+| 88%+ | █ -90m | bright magenta + reset countdown |
 
-At 88%+, a dimmed countdown shows minutes until the 5-hour window resets.
+At 75%+, a dimmed countdown shows minutes until the 5-hour window resets.
 
 **💳 Credit** (overage balance) - Only shown when weekly usage hits 100%. Displays remaining dollars and % of monthly cap: `💳$465/$500 (7%)`
 

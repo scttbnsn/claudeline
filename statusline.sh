@@ -54,6 +54,15 @@ USAGE_HISTORY="$CACHE_DIR/.usage-history"
 TREND_WINDOW=900   # 15 minutes in seconds
 mkdir -p "$CACHE_DIR" 2>/dev/null
 
+# Read auto-compact setting from Claude Code config
+CLAUDE_JSON="$HOME/.claude.json"
+if [ -f "$CLAUDE_JSON" ]; then
+    AUTO_COMPACT_ON=$(jq -r 'if has("autoCompactEnabled") then (.autoCompactEnabled | tostring) else "true" end' "$CLAUDE_JSON" 2>/dev/null)
+else
+    AUTO_COMPACT_ON="true"
+fi
+[ "$AUTO_COMPACT_ON" != "false" ] && AUTO_COMPACT_ON="true"
+
 # Pricing per million tokens (LiteLLM rates)
 # Sonnet: input=$3, output=$15, cache_write=$3.75, cache_read=$0.30
 # Opus: input=$15, output=$75, cache_write=$18.75, cache_read=$1.50
@@ -122,11 +131,11 @@ get_jsonl_totals() {
 # macOS `date -j -f` ignores timezone in input — TZ=UTC fixes this
 # GNU `date -d` handles +00:00 natively when full string is passed
 parse_iso_epoch() {
-    local ts="$1"
     if [[ "$OSTYPE" == "darwin"* ]]; then
-        TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "${ts%%.*}" +%s 2>/dev/null
+        # First 19 chars = YYYY-MM-DDTHH:MM:SS, strips fractional secs / Z / +offset
+        TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "${1:0:19}" +%s 2>/dev/null
     else
-        date -d "$ts" +%s 2>/dev/null
+        date -d "$1" +%s 2>/dev/null
     fi
 }
 
@@ -151,7 +160,7 @@ get_oauth_token() {
 }
 
 # Get usage data from API (cached for 60 seconds)
-# Returns: utilization resets_at burst_util burst_resets extra_used extra_limit (space-separated)
+# Returns: utilization resets_at burst_util burst_resets extra_util (space-separated)
 get_usage_data() {
     local now=$(date +%s)
     local cache_age=999999
@@ -188,12 +197,11 @@ get_usage_data() {
     local resets_at=$(echo "$response" | jq -r '.seven_day.resets_at // "_"' 2>/dev/null)
     local burst_util=$(echo "$response" | jq -r '.five_hour.utilization // "_"' 2>/dev/null)
     local burst_resets=$(echo "$response" | jq -r '.five_hour.resets_at // "_"' 2>/dev/null)
-    local extra_used=$(echo "$response" | jq -r '.extra_usage.used_credits // "_"' 2>/dev/null)
-    local extra_limit=$(echo "$response" | jq -r '.extra_usage.monthly_limit // "_"' 2>/dev/null)
+    local extra_util=$(echo "$response" | jq -r '.extra_usage.utilization // "_"' 2>/dev/null)
 
     if [ -n "$utilization" ] && [ "$utilization" != "_" ]; then
-        echo -e "$now\n$utilization $resets_at $burst_util $burst_resets $extra_used $extra_limit" > "$API_CACHE"
-        echo "$utilization $resets_at $burst_util $burst_resets $extra_used $extra_limit"
+        echo -e "$now\n$utilization $resets_at $burst_util $burst_resets $extra_util" > "$API_CACHE"
+        echo "$utilization $resets_at $burst_util $burst_resets $extra_util"
     else
         # Return stale cache if API fails
         [ -f "$API_CACHE" ] && tail -1 "$API_CACHE" 2>/dev/null
@@ -489,10 +497,14 @@ FUN_COST_ITEM_INDEX=${SESSION_COST_ITEMS[$((ITEM_CYCLE % ${#SESSION_COST_ITEMS[@
 # Normal: 10 cost + coal + reactor + tokens + cost + data = 15; Absurd: 7 items
 # NOTE: ALLTIME_ABSURD_INDEX is computed after ABSURD_EMOJI is defined (below array defs)
 
-# Calculate context percentage (scaled to auto-compact threshold)
-# 168K is the actual compression trigger point (out of 200K total context)
-# Changed in Claude Code v2.1.23 - stopped subtracting maxOutputTokens from threshold
-AUTO_COMPACT_THRESHOLD=168000
+# Calculate context percentage (scaled to context limit)
+# When auto-compact is ON:  168K (compression trigger, ~75% of 220K window)
+# When auto-compact is OFF: 220K (full context window, user must compact manually)
+if [ "$AUTO_COMPACT_ON" = "true" ]; then
+    AUTO_COMPACT_THRESHOLD=168000
+else
+    AUTO_COMPACT_THRESHOLD=220000
+fi
 if [ "$CURRENT_TOKENS" -gt 0 ] 2>/dev/null; then
     PERCENT_USED=$((CURRENT_TOKENS * 100 / AUTO_COMPACT_THRESHOLD))
     [ "$PERCENT_USED" -gt 100 ] && PERCENT_USED=100
@@ -519,6 +531,18 @@ elif [ "$PERCENT_USED" -lt 88 ]; then
 else
     CTX_COLOR=$CTX_RED
     CTX_ICON="💾"
+fi
+
+# Override high-tier icons when auto-compact is off
+# Signal "you need to manually compact" instead of "auto-compact coming"
+if [ "$AUTO_COMPACT_ON" = "false" ]; then
+    if [ "$PERCENT_USED" -ge 88 ]; then
+        CTX_ICON="⚠️"      # About to hit hard wall
+    elif [ "$PERCENT_USED" -ge 68 ]; then
+        CTX_ICON="🪫"      # Running out of context
+    elif [ "$PERCENT_USED" -ge 50 ]; then
+        CTX_ICON="💾"      # Save/compact hint
+    fi
 fi
 
 # Build mini progress bar (10 chars wide)
@@ -1356,7 +1380,7 @@ else
 fi
 
 # Get usage data from API
-read -r WEEKLY_USAGE RESETS_AT BURST_USAGE BURST_RESETS EXTRA_USED EXTRA_LIMIT <<< "$(get_usage_data)"
+read -r WEEKLY_USAGE RESETS_AT BURST_USAGE BURST_RESETS EXTRA_UTIL <<< "$(get_usage_data)"
 
 # Smart pace indicator (trend-based)
 PACE_INDICATOR=""
@@ -1382,61 +1406,48 @@ if [ -n "$BURST_USAGE" ] && [ "$BURST_USAGE" != "_" ] && [ "$BURST_USAGE" != "nu
                 secs_left=$((burst_reset_epoch - now_epoch))
                 if [ "$secs_left" -gt 0 ]; then
                     mins=$(( (secs_left + 59) / 60 ))
-                    BURST_INDICATOR="💥💥 ${DIM}-${mins}m${RESET}"
+                    BURST_INDICATOR="💥🤑 ${DIM}-${mins}m${RESET}"
                 else
-                    BURST_INDICATOR="💥💥"
+                    BURST_INDICATOR="💥🤑"
                 fi
             else
-                BURST_INDICATOR="💥💥"
+                BURST_INDICATOR="💥🤑"
             fi
         else
-        # Burn rate for 5-hour window (18000 seconds)
-        # burn_rate = (pct / fraction_of_window_elapsed), 1.0 = on pace to hit 100% at reset
-        # Short window makes burn rate sufficient — no pressure signal needed (unlike 7-day)
-        burst_rate=10000  # * 10000 for integer math, default 1.0
-        burst_reset_epoch=""
-        secs_left=0
-
-        if [ -n "$BURST_RESETS" ] && [ "$BURST_RESETS" != "_" ] && [ "$BURST_RESETS" != "null" ]; then
-            burst_reset_epoch=$(parse_iso_epoch "$BURST_RESETS")
-        fi
-        if [ -n "$burst_reset_epoch" ]; then
-            now_epoch=$(date +%s)
-            secs_left=$((burst_reset_epoch - now_epoch))
-            secs_elapsed=$((18000 - secs_left))
-
-            # burst_rate_x10k = BURST_PCT * 5000000 / elapsed_x10k
-            elapsed_x10k=$(( secs_elapsed * 10000 / 18000 ))
-            if [ "$elapsed_x10k" -gt 100 ]; then
-                burst_rate=$(( BURST_PCT * 5000000 / elapsed_x10k ))
-            elif [ "$BURST_PCT" -gt 0 ]; then
-                burst_rate=100000  # 10.0 — very early, any usage is hot
-            fi
-        fi
-
-        # Map burn rate to bar + color (same thresholds as weekly emoji)
-        if [ "$burst_rate" -lt 3000 ]; then
+        # Map raw burst percentage to bar + color (8-level gradient)
+        # Directly reflects API utilization — no burn rate extrapolation
+        if [ "$BURST_PCT" -lt 13 ]; then
             BURST_BAR="▁"; BURST_COLOR="$BURST_CYAN"
-        elif [ "$burst_rate" -lt 6000 ]; then
+        elif [ "$BURST_PCT" -lt 25 ]; then
             BURST_BAR="▂"; BURST_COLOR="$BURST_TEAL"
-        elif [ "$burst_rate" -lt 8500 ]; then
+        elif [ "$BURST_PCT" -lt 38 ]; then
             BURST_BAR="▃"; BURST_COLOR="$BURST_GREEN"
-        elif [ "$burst_rate" -lt 11500 ]; then
+        elif [ "$BURST_PCT" -lt 50 ]; then
             BURST_BAR="▄"; BURST_COLOR="$BURST_YELLOW"
-        elif [ "$burst_rate" -lt 14000 ]; then
+        elif [ "$BURST_PCT" -lt 63 ]; then
             BURST_BAR="▅"; BURST_COLOR="$BURST_ORANGE"
-        elif [ "$burst_rate" -lt 18000 ]; then
+        elif [ "$BURST_PCT" -lt 75 ]; then
             BURST_BAR="▆"; BURST_COLOR="$BURST_RED"
-        elif [ "$burst_rate" -lt 25000 ]; then
+        elif [ "$BURST_PCT" -lt 88 ]; then
             BURST_BAR="▇"; BURST_COLOR="$BURST_MAGENTA"
         else
             BURST_BAR="█"; BURST_COLOR="$BURST_BRIGHT_MAG"
         fi
 
-        # Show countdown at top two bar levels (burn rate >= 1.8, i.e. ▇ or █)
-        if [ "$burst_rate" -ge 18000 ] && [ -n "$burst_reset_epoch" ] && [ "$secs_left" -gt 0 ]; then
-            mins=$(( (secs_left + 59) / 60 ))
-            BURST_INDICATOR="💥${BURST_COLOR}${BURST_BAR} ${DIM}-${mins}m${RESET}"
+        # Show countdown at top two levels (75%+)
+        burst_reset_epoch=""
+        if [ -n "$BURST_RESETS" ] && [ "$BURST_RESETS" != "_" ] && [ "$BURST_RESETS" != "null" ]; then
+            burst_reset_epoch=$(parse_iso_epoch "$BURST_RESETS")
+        fi
+        if [ "$BURST_PCT" -ge 75 ] && [ -n "$burst_reset_epoch" ]; then
+            now_epoch=$(date +%s)
+            secs_left=$((burst_reset_epoch - now_epoch))
+            if [ "$secs_left" -gt 0 ]; then
+                mins=$(( (secs_left + 59) / 60 ))
+                BURST_INDICATOR="💥${BURST_COLOR}${BURST_BAR}${RESET} ${DIM}-${mins}m${RESET}"
+            else
+                BURST_INDICATOR="💥${BURST_COLOR}${BURST_BAR}${RESET}"
+            fi
         else
             BURST_INDICATOR="💥${BURST_COLOR}${BURST_BAR}${RESET}"
         fi
@@ -1444,24 +1455,22 @@ if [ -n "$BURST_USAGE" ] && [ "$BURST_USAGE" != "_" ] && [ "$BURST_USAGE" != "nu
     fi
 fi
 
-# Credit indicator (💳) - only shown when at weekly limit (in overage)
-# Shows remaining balance and % of monthly cap used
+# Credit indicator (💳) - shown in overage (weekly or burst at 100%) with active credit spend
 CREDIT_INDICATOR=""
-WEEKLY_PCT=$(printf "%.0f" "$WEEKLY_USAGE" 2>/dev/null)
-if [ "$WEEKLY_PCT" -ge 100 ] 2>/dev/null && [ -n "$EXTRA_USED" ] && [ "$EXTRA_USED" != "_" ] && [ "$EXTRA_USED" != "null" ] && [ -n "$EXTRA_LIMIT" ] && [ "$EXTRA_LIMIT" != "_" ] && [ "$EXTRA_LIMIT" != "null" ]; then
-    # API returns cents, convert to dollars
-    EXTRA_REMAINING=$(echo "scale=0; ($EXTRA_LIMIT - $EXTRA_USED) / 100" | bc 2>/dev/null)
-    EXTRA_CAP=$(echo "scale=0; $EXTRA_LIMIT / 100" | bc 2>/dev/null)
-    EXTRA_SPENT_PCT=$(echo "scale=0; $EXTRA_USED * 100 / $EXTRA_LIMIT" | bc 2>/dev/null)
-    if [ -n "$EXTRA_REMAINING" ] && [ -n "$EXTRA_CAP" ]; then
-        CREDIT_INDICATOR="${DIM}💳\$${EXTRA_REMAINING}/\$${EXTRA_CAP} (${EXTRA_SPENT_PCT}%)${RESET}"
+if [ -n "$EXTRA_UTIL" ] && [ "$EXTRA_UTIL" != "_" ] && [ "$EXTRA_UTIL" != "null" ]; then
+    EXTRA_PCT=$(printf "%.0f" "$EXTRA_UTIL" 2>/dev/null)
+    WEEKLY_PCT=$(printf "%.0f" "$WEEKLY_USAGE" 2>/dev/null)
+    if [ "$EXTRA_PCT" -gt 0 ] 2>/dev/null; then
+        if [ "${WEEKLY_PCT:-0}" -ge 100 ] 2>/dev/null || [ "${BURST_PCT:-0}" -ge 100 ] 2>/dev/null; then
+            CREDIT_INDICATOR="${DIM}💳${EXTRA_PCT}%${RESET}"
+        fi
     fi
 fi
 
 # Build the status line (most important first, model at end)
 # Compose indicators section (pace + burst + credit)
 INDICATORS=""
-for ind in "$PACE_INDICATOR" "$BURST_INDICATOR" "$CREDIT_INDICATOR"; do
+for ind in "$PACE_INDICATOR" "$BURST_INDICATOR"; do
     if [ -n "$ind" ]; then
         if [ -n "$INDICATORS" ]; then
             INDICATORS="${INDICATORS}${SEP}${ind}"
@@ -1471,11 +1480,13 @@ for ind in "$PACE_INDICATOR" "$BURST_INDICATOR" "$CREDIT_INDICATOR"; do
     fi
 done
 
-# Line 1: Essential info (progress, repo, lines, pace, duration)
+# Line 1: Essential info (progress, repo, lines, pace, duration, credit)
+CREDIT_SUFFIX=""
+[ -n "$CREDIT_INDICATOR" ] && CREDIT_SUFFIX="${SEP}${CREDIT_INDICATOR}"
 if [ -n "$INDICATORS" ]; then
-    echo -e "${CTX_ICON} ${PROGRESS_BAR}${SEP}${REPO_BRANCH}${SEP}${LINES_INFO}${SEP}${INDICATORS}${SEP}${DURATION_INFO}"
+    echo -e "${CTX_ICON} ${PROGRESS_BAR}${SEP}${REPO_BRANCH}${SEP}${LINES_INFO}${SEP}${INDICATORS}${SEP}${DURATION_INFO}${CREDIT_SUFFIX}"
 else
-    echo -e "${CTX_ICON} ${PROGRESS_BAR}${SEP}${REPO_BRANCH}${SEP}${LINES_INFO}${SEP}${DURATION_INFO}"
+    echo -e "${CTX_ICON} ${PROGRESS_BAR}${SEP}${REPO_BRANCH}${SEP}${LINES_INFO}${SEP}${DURATION_INFO}${CREDIT_SUFFIX}"
 fi
 
 # Line 2: Context stats (under progress bar) + fun stats + model
