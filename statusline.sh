@@ -118,6 +118,18 @@ get_jsonl_totals() {
     cat "$JSONL_CACHE"
 }
 
+# Parse ISO 8601 timestamp to epoch seconds (handles UTC offset)
+# macOS `date -j -f` ignores timezone in input — TZ=UTC fixes this
+# GNU `date -d` handles +00:00 natively when full string is passed
+parse_iso_epoch() {
+    local ts="$1"
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "${ts%%.*}" +%s 2>/dev/null
+    else
+        date -d "$ts" +%s 2>/dev/null
+    fi
+}
+
 # Get OAuth token from macOS Keychain (or Linux config)
 get_oauth_token() {
     if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -288,10 +300,12 @@ get_trend_arrow() {
     esac
 }
 
-# Get smart pace indicator using BURN RATE (Google SRE method)
-# burn_rate = 1.0 means you'll hit exactly 100% at reset
-# burn_rate > 1.0 means you'll run out BEFORE reset (e.g., 2.0 = exhausts day 3.5)
-# burn_rate < 1.0 means you'll have budget left at reset
+# Get smart pace indicator using dual-signal approach:
+#   burn_rate = velocity: how fast you're going (1.0 = on pace for reset)
+#   pressure  = position: remaining time / remaining budget-days
+#   effective = max(burn_rate, pressure) — take the worse signal
+# Both agree on over/under (burn_rate > 1.0 ↔ pressure > 1.0), but pressure
+# amplifies urgency when budget is thin (e.g., 9% left for 2.7 days → pressure 4.29)
 # Uses 8-tier emoji scale: ❄️ → 🧊 → 🙂 → 👌 → ♨️ → 🥵 → 🔥 → 🚨
 # Trend arrows: ↑ (heating fast), ↗ (warming), → (stable), ↘ (cooling), ↓ (cooling fast)
 # If at limit (>=100%), shows time until reset: 🚨 -1.2d
@@ -309,15 +323,11 @@ get_smart_pace_indicator() {
     local week_start=0
     local days_elapsed_x10k=70000  # 7 days * 10000 (default: full week elapsed)
     local burn_rate_x10k=10000     # 1.0 * 10000 (default: on pace)
+    local pressure_x10k=10000      # 1.0 * 10000 (default: on pace)
 
     if [ -n "$resets_at" ] && [ "$resets_at" != "_" ] && [ "$resets_at" != "null" ]; then
-        # Parse ISO timestamp to epoch (works on macOS and Linux)
         local reset_epoch
-        if [[ "$OSTYPE" == "darwin"* ]]; then
-            reset_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S" "${resets_at%%.*}" +%s 2>/dev/null)
-        else
-            reset_epoch=$(date -d "$resets_at" +%s 2>/dev/null)
-        fi
+        reset_epoch=$(parse_iso_epoch "$resets_at")
 
         if [ -n "$reset_epoch" ] && [ "$reset_epoch" -gt "$now" ]; then
             local seconds_until_reset=$((reset_epoch - now))
@@ -337,6 +347,15 @@ get_smart_pace_indicator() {
                 burn_rate_x10k=100000  # 10.0
             else
                 burn_rate_x10k=0
+            fi
+
+            # Budget pressure: time_remaining / budget_remaining_in_days
+            # Amplifies signal when budget is thin (e.g., 9% left for 2.7 days)
+            local remaining=$((100 - pct))
+            if [ "$remaining" -gt 0 ] && [ "$days_until_x10k" -gt 0 ]; then
+                # pressure = days_until / (remaining * 7 / 100)
+                # pressure_x10k = days_until_x10k * 100 / (remaining * 7)
+                pressure_x10k=$(( days_until_x10k * 100 / (remaining * 7) ))
             fi
 
             # Format reset time suffix for when at limit (only place needing float)
@@ -369,38 +388,13 @@ get_smart_pace_indicator() {
     # Get trend arrow based on usage% velocity
     local arrow=$(get_trend_arrow "$usage" "$week_start")
 
-    # GRACE PERIOD: First 6 hours (0.25 days), use absolute thresholds only
-    # This prevents false alarms when burn rate is unstable due to small sample
-    # days_elapsed_x10k < 2500 means < 0.25 days
-    if [ "${days_elapsed_x10k:-0}" -lt 2500 ]; then
-        local emoji
-        if [ "$pct" -ge 30 ]; then
-            emoji="🚨"   # 30%+ in first 6 hours is critical
-        elif [ "$pct" -ge 20 ]; then
-            emoji="🔥"   # 20%+ is warning
-        elif [ "$pct" -ge 10 ]; then
-            emoji="♨️"   # 10%+ is warm
-        else
-            emoji="👌"   # Under 10% in first 6 hours is fine
-        fi
-        echo "${emoji}${arrow}"
-        return
-    fi
-
-    # GRADUATED MINIMUM: Higher absolute % required for alarm early in week
-    local min_for_alarm
-    if [ "${days_elapsed_x10k:-0}" -lt 10000 ]; then  # < 1 day
-        min_for_alarm=20   # Day 1: need 20%+ for alarm
-    elif [ "${days_elapsed_x10k:-0}" -lt 20000 ]; then  # < 2 days
-        min_for_alarm=15   # Day 2: need 15%+
-    else
-        min_for_alarm=10   # Day 3+: normal sensitivity
-    fi
-
-    # Map burn rate to emoji using integer comparison (burn_rate_x10k)
-    # burn_rate 1.0 = on pace, >1 = will run out before reset, <1 = will have leftover
+    # Effective rate = max(burn_rate, pressure)
+    # Burn rate captures velocity, pressure captures remaining runway
     local emoji
-    local br=${burn_rate_x10k:-10000}  # Default to 1.0 if not set
+    local br=${burn_rate_x10k:-10000}
+    if [ "${pressure_x10k:-10000}" -gt "$br" ]; then
+        br=$pressure_x10k
+    fi
     if [ "$br" -lt 3000 ]; then
         emoji="❄️"   # Way under - using < 30% of sustainable rate
     elif [ "$br" -lt 6000 ]; then
@@ -413,10 +407,10 @@ get_smart_pace_indicator() {
         emoji="♨️"   # Warming - will run out ~day 5-6
     elif [ "$br" -lt 18000 ]; then
         emoji="🥵"   # Hot - will run out ~day 4-5
-    elif [ "$br" -lt 25000 ] || [ "$pct" -lt "$min_for_alarm" ]; then
-        emoji="🔥"   # Very hot - will run out ~day 3-4 (or high rate but low absolute)
+    elif [ "$br" -lt 25000 ]; then
+        emoji="🔥"   # Very hot - will run out ~day 3-4
     else
-        emoji="🚨"   # Alarm - burn_rate >= 2.5 AND pct >= min_for_alarm
+        emoji="🚨"   # Alarm - effective rate >= 2.5
     fi
 
     echo "${emoji}${arrow}"
@@ -1371,52 +1365,82 @@ if [ -n "$WEEKLY_USAGE" ]; then
 fi
 
 # Burst indicator (💥 with colored bar, only when > 0%)
-# 8 levels: ▁▂▃▄▅▆▇█ with color gradient jade→teal→green→yellow→orange→red→magenta→bright magenta
+# Uses effective rate (max of burn_rate, pressure) for 5-hour window — same approach as weekly pace
+# 8 levels: ▁▂▃▄▅▆▇█ with color gradient cyan→teal→green→yellow→orange→red→magenta→bright magenta
 BURST_INDICATOR=""
 if [ -n "$BURST_USAGE" ] && [ "$BURST_USAGE" != "_" ] && [ "$BURST_USAGE" != "null" ]; then
     BURST_PCT=$(printf "%.0f" "$BURST_USAGE" 2>/dev/null)
     if [ "$BURST_PCT" -gt 0 ] 2>/dev/null; then
-        # Map percentage to bar and color
-        if [ "$BURST_PCT" -le 12 ]; then
-            BURST_BAR="▁"; BURST_COLOR="$BURST_CYAN"
-        elif [ "$BURST_PCT" -le 25 ]; then
-            BURST_BAR="▂"; BURST_COLOR="$BURST_TEAL"
-        elif [ "$BURST_PCT" -le 37 ]; then
-            BURST_BAR="▃"; BURST_COLOR="$BURST_GREEN"
-        elif [ "$BURST_PCT" -le 50 ]; then
-            BURST_BAR="▄"; BURST_COLOR="$BURST_YELLOW"
-        elif [ "$BURST_PCT" -le 62 ]; then
-            BURST_BAR="▅"; BURST_COLOR="$BURST_ORANGE"
-        elif [ "$BURST_PCT" -le 75 ]; then
-            BURST_BAR="▆"; BURST_COLOR="$BURST_RED"
-        elif [ "$BURST_PCT" -le 87 ]; then
-            BURST_BAR="▇"; BURST_COLOR="$BURST_MAGENTA"
-        else
-            BURST_BAR="█"; BURST_COLOR="$BURST_BRIGHT_MAG"
-        fi
-        # At 88%+: show reset countdown instead of bar
-        if [ "$BURST_PCT" -ge 88 ] && [ -n "$BURST_RESETS" ] && [ "$BURST_RESETS" != "_" ] && [ "$BURST_RESETS" != "null" ]; then
+        # At limit: full bar + countdown, skip effective rate math
+        if [ "$BURST_PCT" -ge 100 ]; then
             burst_reset_epoch=""
-            if [[ "$OSTYPE" == "darwin"* ]]; then
-                burst_reset_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S" "${BURST_RESETS%%.*}" +%s 2>/dev/null)
-            else
-                burst_reset_epoch=$(date -d "$BURST_RESETS" +%s 2>/dev/null)
+            if [ -n "$BURST_RESETS" ] && [ "$BURST_RESETS" != "_" ] && [ "$BURST_RESETS" != "null" ]; then
+                burst_reset_epoch=$(parse_iso_epoch "$BURST_RESETS")
             fi
             if [ -n "$burst_reset_epoch" ]; then
                 now_epoch=$(date +%s)
                 secs_left=$((burst_reset_epoch - now_epoch))
                 if [ "$secs_left" -gt 0 ]; then
                     mins=$(( (secs_left + 59) / 60 ))
-                    BURST_INDICATOR="💥${BURST_COLOR}${BURST_BAR} ${DIM}-${mins}m${RESET}"
+                    BURST_INDICATOR="💥💥 ${DIM}-${mins}m${RESET}"
                 else
-                    BURST_INDICATOR="💥${BURST_COLOR}${BURST_BAR}${RESET}"
+                    BURST_INDICATOR="💥💥"
                 fi
             else
-                BURST_INDICATOR="💥${BURST_COLOR}${BURST_BAR}${RESET}"
+                BURST_INDICATOR="💥💥"
             fi
+        else
+        # Burn rate for 5-hour window (18000 seconds)
+        # burn_rate = (pct / fraction_of_window_elapsed), 1.0 = on pace to hit 100% at reset
+        # Short window makes burn rate sufficient — no pressure signal needed (unlike 7-day)
+        burst_rate=10000  # * 10000 for integer math, default 1.0
+        burst_reset_epoch=""
+        secs_left=0
+
+        if [ -n "$BURST_RESETS" ] && [ "$BURST_RESETS" != "_" ] && [ "$BURST_RESETS" != "null" ]; then
+            burst_reset_epoch=$(parse_iso_epoch "$BURST_RESETS")
+        fi
+        if [ -n "$burst_reset_epoch" ]; then
+            now_epoch=$(date +%s)
+            secs_left=$((burst_reset_epoch - now_epoch))
+            secs_elapsed=$((18000 - secs_left))
+
+            # burst_rate_x10k = BURST_PCT * 5000000 / elapsed_x10k
+            elapsed_x10k=$(( secs_elapsed * 10000 / 18000 ))
+            if [ "$elapsed_x10k" -gt 100 ]; then
+                burst_rate=$(( BURST_PCT * 5000000 / elapsed_x10k ))
+            elif [ "$BURST_PCT" -gt 0 ]; then
+                burst_rate=100000  # 10.0 — very early, any usage is hot
+            fi
+        fi
+
+        # Map burn rate to bar + color (same thresholds as weekly emoji)
+        if [ "$burst_rate" -lt 3000 ]; then
+            BURST_BAR="▁"; BURST_COLOR="$BURST_CYAN"
+        elif [ "$burst_rate" -lt 6000 ]; then
+            BURST_BAR="▂"; BURST_COLOR="$BURST_TEAL"
+        elif [ "$burst_rate" -lt 8500 ]; then
+            BURST_BAR="▃"; BURST_COLOR="$BURST_GREEN"
+        elif [ "$burst_rate" -lt 11500 ]; then
+            BURST_BAR="▄"; BURST_COLOR="$BURST_YELLOW"
+        elif [ "$burst_rate" -lt 14000 ]; then
+            BURST_BAR="▅"; BURST_COLOR="$BURST_ORANGE"
+        elif [ "$burst_rate" -lt 18000 ]; then
+            BURST_BAR="▆"; BURST_COLOR="$BURST_RED"
+        elif [ "$burst_rate" -lt 25000 ]; then
+            BURST_BAR="▇"; BURST_COLOR="$BURST_MAGENTA"
+        else
+            BURST_BAR="█"; BURST_COLOR="$BURST_BRIGHT_MAG"
+        fi
+
+        # Show countdown at top two bar levels (burn rate >= 1.8, i.e. ▇ or █)
+        if [ "$burst_rate" -ge 18000 ] && [ -n "$burst_reset_epoch" ] && [ "$secs_left" -gt 0 ]; then
+            mins=$(( (secs_left + 59) / 60 ))
+            BURST_INDICATOR="💥${BURST_COLOR}${BURST_BAR} ${DIM}-${mins}m${RESET}"
         else
             BURST_INDICATOR="💥${BURST_COLOR}${BURST_BAR}${RESET}"
         fi
+        fi  # end else (not at limit)
     fi
 fi
 
