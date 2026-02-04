@@ -18,8 +18,8 @@ A cute, informative status line for Claude Code with rotating environmental metr
 ## Features
 
 - **Context bar** adapts to your auto-compact setting (reads `~/.claude.json`):
-  - **Auto-compact ON** (default): scales to 168K (the compression trigger, ~75% of 220K window)
-  - **Auto-compact OFF**: scales to 220K (full context window)
+  - **Auto-compact ON** (default): scales to 168K (the compression trigger, ~84% of 200K window)
+  - **Auto-compact OFF**: scales to 200K (full context window)
   - 6-tier color gradient with mode-aware icons at high tiers:
 
   | Range | Color | Icon (auto-compact ON) | Icon (auto-compact OFF) |
@@ -33,14 +33,14 @@ A cute, informative status line for Claude Code with rotating environmental metr
 - **24-bit true color** palette (vibey 2025 colors)
 - **Repo/branch** with git status indicators (`*`=unstaged, `+`=staged, `↑↓`=ahead/behind)
 - **Lines changed** (+added/-removed)
-- **Rotating environmental metrics** (10-cycle pattern, 10s each):
+- **Rotating environmental metrics** (8-cycle pattern, 10s each):
   - 💧 Standard water (cups, gallons, etc.)
   - ⚡ Standard power (watt-hours, kilowatt-hours)
   - 🔌💡🏠🏢🚗✈️🪨☢️ Fun power (phone, hue-light, home, 395-hudson, 4xe, a320neo, coal, reactor)
   - 🎟️ Token count, 💰 Cost, 📡 Data
   - ☕🍕🌮... Fun cost (34 normal items)
   - 🚐🧟🏝️🏪🚁☕ Absurd items (7 items, all-time only)
-  - **Rotation:** 4 session → 1 all-time normal 🏆 → 4 session → 1 all-time absurd 🏆
+  - **Rotation:** 3 session → 1 all-time normal 🏆 → 3 session → 1 all-time absurd 🏆
 - **Session duration**
 - **Smart pace indicator** with trend arrows showing where you're headed:
   - **Pace:** ❄️🧊🙂👌♨️🥵🔥🚨 (8-tier scale based on actual/expected ratio)
@@ -158,10 +158,10 @@ Each terminal window shows different metrics and fun items simultaneously (based
 
 The statusline tracks cumulative usage across all sessions by scanning JSONL files in `~/.claude/projects/`.
 
-The 🏆 trophy indicates all-time totals. The 10-cycle rotation shows:
-- **Cycles 0-3, 5-8:** Session metrics (no trophy)
-- **Cycle 4:** All-time normal with 🏆 — 15-item rotation: 10 fun cost items + coal + reactor + tokens + cost + data
-- **Cycle 9:** All-time absurd item with 🏆 (e.g., `🏝️ 0.0015 private-islands® 🏆`)
+The 🏆 trophy indicates all-time totals. The 8-cycle rotation shows:
+- **Cycles 0-2, 4-6:** Session metrics (no trophy)
+- **Cycle 3:** All-time normal with 🏆 — 15-item rotation: 10 fun cost items + coal + reactor + tokens + cost + data
+- **Cycle 7:** All-time absurd item with 🏆 (e.g., `🏝️ 0.0015 private-islands® 🏆`)
 
 ## Smart Pace Indicator
 

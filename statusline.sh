@@ -501,12 +501,12 @@ FUN_COST_ITEM_INDEX=${SESSION_COST_ITEMS[$((ITEM_CYCLE % ${#SESSION_COST_ITEMS[@
 # NOTE: ALLTIME_ABSURD_INDEX is computed after ABSURD_EMOJI is defined (below array defs)
 
 # Calculate context percentage (scaled to context limit)
-# When auto-compact is ON:  168K (compression trigger, ~75% of 220K window)
-# When auto-compact is OFF: 220K (full context window, user must compact manually)
+# When auto-compact is ON:  168K (compression trigger, ~84% of 200K window)
+# When auto-compact is OFF: 200K (full context window, user must compact manually)
 if [ "$AUTO_COMPACT_ON" = "true" ]; then
     AUTO_COMPACT_THRESHOLD=168000
 else
-    AUTO_COMPACT_THRESHOLD=220000
+    AUTO_COMPACT_THRESHOLD=200000
 fi
 if [ "$CURRENT_TOKENS" -gt 0 ] 2>/dev/null; then
     PERCENT_USED=$((CURRENT_TOKENS * 100 / AUTO_COMPACT_THRESHOLD))
@@ -517,7 +517,7 @@ fi
 
 # Color-code context based on usage
 # Auto-compact ON:  6-tier gradient scaled to 168K compact threshold
-# Auto-compact OFF: 8-tier gradient scaled to 220K with hyper-pink past compact zone
+# Auto-compact OFF: 8-tier gradient scaled to 200K with hyper-pink past compact zone
 if [ "$AUTO_COMPACT_ON" = "true" ]; then
     if [ "$PERCENT_USED" -lt 18 ]; then
         CTX_COLOR=$CTX_CYAN;    CTX_ICON="✨"
@@ -533,23 +533,23 @@ if [ "$AUTO_COMPACT_ON" = "true" ]; then
         CTX_COLOR=$CTX_RED;     CTX_ICON="💾"
     fi
 else
-    # 8-tier for 220K: red/💾 at 150-170K, hyper-pink past compact zone
-    if [ "$PERCENT_USED" -lt 14 ]; then
+    # 8-tier for 200K: red/💾 at 150-170K, hyper-pink past compact zone
+    if [ "$PERCENT_USED" -lt 15 ]; then
         CTX_COLOR=$CTX_CYAN;      CTX_ICON="✨"   # 0-30K
-    elif [ "$PERCENT_USED" -lt 27 ]; then
+    elif [ "$PERCENT_USED" -lt 30 ]; then
         CTX_COLOR=$CTX_LIME;      CTX_ICON="🌱"   # 30-60K
-    elif [ "$PERCENT_USED" -lt 45 ]; then
+    elif [ "$PERCENT_USED" -lt 50 ]; then
         CTX_COLOR=$CTX_YELLOW;    CTX_ICON="💭"   # 60-100K
-    elif [ "$PERCENT_USED" -lt 59 ]; then
+    elif [ "$PERCENT_USED" -lt 65 ]; then
         CTX_COLOR=$CTX_ORANGE;    CTX_ICON="🧠"   # 100-130K
-    elif [ "$PERCENT_USED" -lt 68 ]; then
+    elif [ "$PERCENT_USED" -lt 75 ]; then
         CTX_COLOR=$CTX_CORAL;     CTX_ICON="🔥"   # 130-150K
-    elif [ "$PERCENT_USED" -lt 77 ]; then
+    elif [ "$PERCENT_USED" -lt 85 ]; then
         CTX_COLOR=$CTX_RED;       CTX_ICON="💾"   # 150-170K
-    elif [ "$PERCENT_USED" -lt 89 ]; then
-        CTX_COLOR=$CTX_HOT_PINK;  CTX_ICON="🫠"   # 170-195K  past compact
+    elif [ "$PERCENT_USED" -lt 95 ]; then
+        CTX_COLOR=$CTX_HOT_PINK;  CTX_ICON="🫠"   # 170-190K  past compact
     else
-        CTX_COLOR=$CTX_MAGENTA;   CTX_ICON="💀"   # 195-220K  near hard wall
+        CTX_COLOR=$CTX_MAGENTA;   CTX_ICON="💀"   # 190-200K  near hard wall
     fi
 fi
 
