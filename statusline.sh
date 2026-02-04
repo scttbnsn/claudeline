@@ -96,8 +96,10 @@ get_jsonl_totals() {
     fi
 
     # Calculate totals using perl (faster and more portable than jq/awk)
+    # find -print0 + xargs -0 cat feeds all JSONL into a single perl process
+    # so totals accumulate correctly and filenames with spaces are safe
     local result=$(find "$HOME/.claude/projects" "$HOME/.config/claude/projects" \
-        -name "*.jsonl" -type f 2>/dev/null | xargs perl -ne '
+        -name "*.jsonl" -type f -print0 2>/dev/null | xargs -0 cat 2>/dev/null | perl -ne '
         if (/"message".*"usage"/) {
             $is_opus = /claude-opus|opus-4/ ? 1 : 0;
             $input = /"input_tokens":(\d+)/ ? $1 : 0;
