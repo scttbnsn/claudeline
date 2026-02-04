@@ -13,13 +13,15 @@ PINK="\033[38;2;255;110;199m"      # #FF6EC7
 PURPLE="\033[38;2;187;134;252m"    # #BB86FC
 SKY="\033[38;2;92;200;255m"        # #5CC8FF
 BLUE="\033[38;2;130;170;255m"      # #82AAFF
-# Context tier colors (6-level gradient)
+# Context tier colors (8-level gradient: 6 base + 2 hyper-pink past compact)
 CTX_CYAN="\033[38;2;100;255;218m"    # #64FFDA
 CTX_LIME="\033[38;2;194;255;74m"     # #C2FF4A
 CTX_YELLOW="\033[38;2;255;234;0m"    # #FFEA00
 CTX_ORANGE="\033[38;2;255;165;0m"    # #FFA500
 CTX_CORAL="\033[38;2;254;117;63m"    # #FE753F
 CTX_RED="\033[38;2;255;77;106m"      # #FF4D6A
+CTX_HOT_PINK="\033[38;2;255;110;199m"  # #FF6EC7
+CTX_MAGENTA="\033[38;2;255;0;255m"     # #FF00FF
 # Velocity arrow colors (5 levels)
 VEL_HOT="\033[38;2;255;77;106m"      # #FF4D6A
 VEL_WARM="\033[38;2;255;165;0m"      # #FFA500
@@ -464,13 +466,14 @@ ALL_TIME_COST="$((ALL_TIME_COST_CENTS / 100)).$((ALL_TIME_COST_CENTS % 100))"
 NOW=$(date +%s)
 NOW_DIV_10=$((NOW / 10))
 
-# 10-cycle rotation pattern: 4 session → 1 all-time normal 🏆 → 4 session → 1 all-time absurd 🏆 → repeat
+# 8-cycle rotation pattern: 3 session → 1 all-time normal 🏆 → 3 session → 1 all-time absurd 🏆 → repeat
 # Session metrics: water(1), power(7), utility(3), fun_cost(28 session-tier) = 39 total
-CYCLE_POS=$((NOW_DIV_10 % 10))
-if [ "$CYCLE_POS" -eq 4 ]; then
+CYCLE_LEN=8
+CYCLE_POS=$((NOW_DIV_10 % CYCLE_LEN))
+if [ "$CYCLE_POS" -eq 3 ]; then
     IS_ALLTIME=1
     IS_ABSURD=0
-elif [ "$CYCLE_POS" -eq 9 ]; then
+elif [ "$CYCLE_POS" -eq 7 ]; then
     IS_ALLTIME=1
     IS_ABSURD=1
 else
@@ -512,36 +515,41 @@ else
     PERCENT_USED=0
 fi
 
-# Color-code context based on usage (6-tier gradient)
-if [ "$PERCENT_USED" -lt 18 ]; then
-    CTX_COLOR=$CTX_CYAN
-    CTX_ICON="✨"
-elif [ "$PERCENT_USED" -lt 35 ]; then
-    CTX_COLOR=$CTX_LIME
-    CTX_ICON="✨"
-elif [ "$PERCENT_USED" -lt 50 ]; then
-    CTX_COLOR=$CTX_YELLOW
-    CTX_ICON="💭"
-elif [ "$PERCENT_USED" -lt 68 ]; then
-    CTX_COLOR=$CTX_ORANGE
-    CTX_ICON="🧠"
-elif [ "$PERCENT_USED" -lt 88 ]; then
-    CTX_COLOR=$CTX_CORAL
-    CTX_ICON="🔥"
+# Color-code context based on usage
+# Auto-compact ON:  6-tier gradient scaled to 168K compact threshold
+# Auto-compact OFF: 8-tier gradient scaled to 220K with hyper-pink past compact zone
+if [ "$AUTO_COMPACT_ON" = "true" ]; then
+    if [ "$PERCENT_USED" -lt 18 ]; then
+        CTX_COLOR=$CTX_CYAN;    CTX_ICON="✨"
+    elif [ "$PERCENT_USED" -lt 35 ]; then
+        CTX_COLOR=$CTX_LIME;    CTX_ICON="🌱"
+    elif [ "$PERCENT_USED" -lt 50 ]; then
+        CTX_COLOR=$CTX_YELLOW;  CTX_ICON="💭"
+    elif [ "$PERCENT_USED" -lt 68 ]; then
+        CTX_COLOR=$CTX_ORANGE;  CTX_ICON="🧠"
+    elif [ "$PERCENT_USED" -lt 88 ]; then
+        CTX_COLOR=$CTX_CORAL;   CTX_ICON="🔥"
+    else
+        CTX_COLOR=$CTX_RED;     CTX_ICON="💾"
+    fi
 else
-    CTX_COLOR=$CTX_RED
-    CTX_ICON="💾"
-fi
-
-# Override high-tier icons when auto-compact is off
-# Signal "you need to manually compact" instead of "auto-compact coming"
-if [ "$AUTO_COMPACT_ON" = "false" ]; then
-    if [ "$PERCENT_USED" -ge 88 ]; then
-        CTX_ICON="⚠️"      # About to hit hard wall
-    elif [ "$PERCENT_USED" -ge 68 ]; then
-        CTX_ICON="🪫"      # Running out of context
-    elif [ "$PERCENT_USED" -ge 50 ]; then
-        CTX_ICON="💾"      # Save/compact hint
+    # 8-tier for 220K: red/💾 at 150-170K, hyper-pink past compact zone
+    if [ "$PERCENT_USED" -lt 14 ]; then
+        CTX_COLOR=$CTX_CYAN;      CTX_ICON="✨"   # 0-30K
+    elif [ "$PERCENT_USED" -lt 27 ]; then
+        CTX_COLOR=$CTX_LIME;      CTX_ICON="🌱"   # 30-60K
+    elif [ "$PERCENT_USED" -lt 45 ]; then
+        CTX_COLOR=$CTX_YELLOW;    CTX_ICON="💭"   # 60-100K
+    elif [ "$PERCENT_USED" -lt 59 ]; then
+        CTX_COLOR=$CTX_ORANGE;    CTX_ICON="🧠"   # 100-130K
+    elif [ "$PERCENT_USED" -lt 68 ]; then
+        CTX_COLOR=$CTX_CORAL;     CTX_ICON="🔥"   # 130-150K
+    elif [ "$PERCENT_USED" -lt 77 ]; then
+        CTX_COLOR=$CTX_RED;       CTX_ICON="💾"   # 150-170K
+    elif [ "$PERCENT_USED" -lt 89 ]; then
+        CTX_COLOR=$CTX_HOT_PINK;  CTX_ICON="🫠"   # 170-195K  past compact
+    else
+        CTX_COLOR=$CTX_MAGENTA;   CTX_ICON="💀"   # 195-220K  near hard wall
     fi
 fi
 
@@ -1279,7 +1287,7 @@ format_absurd_cost() {
 }
 
 # Build rotating metric display
-# 10-cycle pattern: 4 session → 1 all-time normal 🏆 → 4 session → 1 all-time absurd 🏆 → repeat
+# 8-cycle pattern: 3 session → 1 all-time normal 🏆 → 3 session → 1 all-time absurd 🏆 → repeat
 # Session: water(1), power(7), utility(3), fun_cost(24 session-tier ≤$20)
 METRIC_INFO=""
 if [ "$SESSION_TOKENS" -gt 0 ] 2>/dev/null || [ "$ALL_TIME_TOKENS" -gt 0 ] 2>/dev/null; then
@@ -1293,9 +1301,9 @@ if [ "$SESSION_TOKENS" -gt 0 ] 2>/dev/null || [ "$ALL_TIME_TOKENS" -gt 0 ] 2>/de
             METRIC_INFO="${DIM}$(format_absurd_cost $USE_COST $ALLTIME_ABSURD_INDEX)${TROPHY}${RESET}"
         else
             # All-time normal: 10 cost + coal + reactor + tokens + cost + data = 15 item cycle
-            # Use NOW_DIV_10/10 so cycle advances each time the outer 10-pos cycle completes
+            # Use NOW_DIV_10/CYCLE_LEN so cycle advances each time the outer cycle completes
             # (avoids modular conflict with CYCLE_POS which also uses NOW_DIV_10)
-            ALLTIME_NORMAL_CYCLE=$(( (NOW_DIV_10 / 10) % 15 ))
+            ALLTIME_NORMAL_CYCLE=$(( (NOW_DIV_10 / CYCLE_LEN) % 15 ))
             if [ "$ALLTIME_NORMAL_CYCLE" -eq 10 ]; then
                 # Coal (fun power index 6)
                 METRIC_INFO="${DIM}$(format_fun_power $USE_TOKENS 6)${TROPHY}${RESET}"
