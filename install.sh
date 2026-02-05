@@ -76,31 +76,11 @@ if [ -f "$SETTINGS_PATH" ]; then
     # Backup existing settings
     cp "$SETTINGS_PATH" "$SETTINGS_PATH.backup"
 
-    # Check if statusLine already configured
-    if jq -e '.statusLine' "$SETTINGS_PATH" > /dev/null 2>&1; then
-        echo -e "${YELLOW}!${NC} statusLine already configured in settings.json"
-        echo -e "  ${DIM}Backup saved to $SETTINGS_PATH.backup${NC}"
-
-        # Ask to overwrite (but in non-interactive curl pipe, just skip)
-        if [ -t 0 ]; then
-            read -p "  Overwrite? [y/N] " -n 1 -r
-            echo
-            if [[ $REPLY =~ ^[Yy]$ ]]; then
-                jq --argjson sl "$STATUSLINE_CONFIG" '.statusLine = $sl' "$SETTINGS_PATH" > "$SETTINGS_PATH.tmp"
-                mv "$SETTINGS_PATH.tmp" "$SETTINGS_PATH"
-                echo -e "${GREEN}✓${NC} Updated settings.json"
-            else
-                echo -e "${DIM}  Skipped settings.json update${NC}"
-            fi
-        else
-            echo -e "${DIM}  Run interactively to overwrite, or edit manually${NC}"
-        fi
-    else
-        # Add statusLine to existing config
-        jq --argjson sl "$STATUSLINE_CONFIG" '. + {statusLine: $sl}' "$SETTINGS_PATH" > "$SETTINGS_PATH.tmp"
-        mv "$SETTINGS_PATH.tmp" "$SETTINGS_PATH"
-        echo -e "${GREEN}✓${NC} Added statusLine to settings.json"
-    fi
+    # Always update statusLine to point to the correct script
+    jq --argjson sl "$STATUSLINE_CONFIG" '.statusLine = $sl' "$SETTINGS_PATH" > "$SETTINGS_PATH.tmp"
+    mv "$SETTINGS_PATH.tmp" "$SETTINGS_PATH"
+    echo -e "${GREEN}✓${NC} Updated settings.json"
+    echo -e "  ${DIM}Backup saved to $SETTINGS_PATH.backup${NC}"
 else
     # Create new settings.json
     echo "{\"statusLine\": $STATUSLINE_CONFIG}" | jq . > "$SETTINGS_PATH"
