@@ -518,7 +518,7 @@ else
 fi
 
 # Color-code context based on usage
-# Auto-compact ON:  6-tier gradient scaled to 168K compact threshold
+# Auto-compact ON:  7-tier gradient scaled to 168K compact threshold
 # Auto-compact OFF: 8-tier gradient scaled to 200K with hyper-pink past compact zone
 if [ "$AUTO_COMPACT_ON" = "true" ]; then
     if [ "$PERCENT_USED" -lt 18 ]; then
@@ -531,6 +531,8 @@ if [ "$AUTO_COMPACT_ON" = "true" ]; then
         CTX_COLOR=$CTX_ORANGE;  CTX_ICON="🧠"
     elif [ "$PERCENT_USED" -lt 88 ]; then
         CTX_COLOR=$CTX_CORAL;   CTX_ICON="🔥"
+    elif [ "$PERCENT_USED" -lt 95 ]; then
+        CTX_COLOR=$CTX_HOT_PINK; CTX_ICON="🫠"
     else
         CTX_COLOR=$CTX_RED;     CTX_ICON="💾"
     fi

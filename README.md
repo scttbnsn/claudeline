@@ -7,7 +7,7 @@ A cute, informative status line for Claude Code with rotating environmental metr
 │  └────┬────┘     └─────┬─────┘   └───┬──┘   └─┬──┘  └─┬┘   └─┬──┘    └──┬───┘
 │    context          repo/branch     lines    pace  burst  credit    duration
 │    bar              + git status    changed  trend
-└─ context icon (✨💭🧠🔥💾 or ✨💭💾🪫⚠️)
+└─ context icon (✨🌱💭🧠🔥🫠💾)
 
     73.5K/168K  ·  🍕 3 joe's®  ·  Opus 4.5
     └────┬────┘    └─────┬─────┘   └───┬───┘
@@ -20,16 +20,32 @@ A cute, informative status line for Claude Code with rotating environmental metr
 - **Context bar** adapts to your auto-compact setting (reads `~/.claude.json`):
   - **Auto-compact ON** (default): scales to 168K (the compression trigger, ~84% of 200K window)
   - **Auto-compact OFF**: scales to 200K (full context window)
-  - 6-tier color gradient with mode-aware icons at high tiers:
+  - Color gradient with mode-aware tiers:
 
-  | Range | Color | Icon (auto-compact ON) | Icon (auto-compact OFF) |
-  |-------|-------|----------------------|------------------------|
-  | 0-17% | Cyan | ✨ | ✨ |
-  | 18-34% | Lime | ✨ | ✨ |
-  | 35-49% | Yellow | 💭 | 💭 |
-  | 50-67% | Orange | 🧠 | 💾 compact hint |
-  | 68-87% | Coral | 🔥 | 🪫 running low |
-  | 88%+ | Red | 💾 about to auto-compact | ⚠️ hard wall ahead |
+  **Auto-compact ON** (7 tiers, scaled to 168K):
+
+  | Range | Color | Icon | Meaning |
+  |-------|-------|------|---------|
+  | 0-17% | Cyan | ✨ | Fresh |
+  | 18-34% | Lime | 🌱 | Growing |
+  | 35-49% | Yellow | 💭 | Thinking |
+  | 50-67% | Orange | 🧠 | Working hard |
+  | 68-87% | Coral | 🔥 | Hot |
+  | 88-94% | Hot Pink | 🫠 | Melting — compact soon |
+  | 95%+ | Red | 💾 | About to auto-compact |
+
+  **Auto-compact OFF** (8 tiers, scaled to 200K):
+
+  | Range | Color | Icon | Meaning |
+  |-------|-------|------|---------|
+  | 0-14% | Cyan | ✨ | Fresh |
+  | 15-29% | Lime | 🌱 | Growing |
+  | 30-49% | Yellow | 💭 | Thinking |
+  | 50-64% | Orange | 🧠 | Working hard |
+  | 65-74% | Coral | 🔥 | Hot |
+  | 75-84% | Red | 💾 | Compact zone |
+  | 85-94% | Hot Pink | 🫠 | Past compact zone |
+  | 95%+ | Magenta | 💀 | Near hard wall |
 - **24-bit true color** palette (vibey 2025 colors)
 - **Repo/branch** with git status indicators (`*`=unstaged, `+`=staged, `↑↓`=ahead/behind)
 - **Lines changed** (+added/-removed)
