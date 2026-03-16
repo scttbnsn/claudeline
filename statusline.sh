@@ -22,6 +22,8 @@ CTX_CORAL="\033[38;2;254;117;63m"    # #FE753F
 CTX_RED="\033[38;2;255;77;106m"      # #FF4D6A
 CTX_HOT_PINK="\033[38;2;255;110;199m"  # #FF6EC7
 CTX_MAGENTA="\033[38;2;255;0;255m"     # #FF00FF
+CTX_VIOLET="\033[38;2;190;60;255m"     # #BE3CFF
+CTX_WHITE_HOT="\033[38;2;255;200;255m" # #FFC8FF
 # Velocity arrow colors (5 levels)
 VEL_HOT="\033[38;2;255;77;106m"      # #FF4D6A
 VEL_WARM="\033[38;2;255;165;0m"      # #FFA500
@@ -552,9 +554,9 @@ if [ "$AUTO_COMPACT_ON" = "true" ]; then
     elif [ "$PERCENT_USED" -lt 92 ]; then
         CTX_COLOR=$CTX_MAGENTA;   CTX_ICON="🫠"
     elif [ "$PERCENT_USED" -lt 97 ]; then
-        CTX_COLOR=$CTX_MAGENTA;   CTX_ICON="💀"
+        CTX_COLOR=$CTX_VIOLET;    CTX_ICON="💀"
     else
-        CTX_COLOR=$CTX_MAGENTA;   CTX_ICON="💾"
+        CTX_COLOR=$CTX_WHITE_HOT; CTX_ICON="💾"
     fi
 else
     # 8-tier for full window: red/💾 at 75-85%, hyper-pink past compact zone
