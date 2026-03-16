@@ -9,7 +9,6 @@ RESET="\033[0m"
 BOLD="\033[1m"
 DIM="\033[2m"
 # Accent colors
-PINK="\033[38;2;255;110;199m"      # #FF6EC7
 PURPLE="\033[38;2;187;134;252m"    # #BB86FC
 SKY="\033[38;2;92;200;255m"        # #5CC8FF
 BLUE="\033[38;2;130;170;255m"      # #82AAFF
@@ -30,9 +29,10 @@ VEL_WARM="\033[38;2;255;165;0m"      # #FFA500
 VEL_STABLE="\033[38;2;194;255;74m"   # #C2FF4A
 VEL_COOL="\033[38;2;0;200;170m"      # #00C8AA
 VEL_COLD="\033[38;2;100;255;218m"    # #64FFDA
-# Legacy (for other elements)
-GREEN="\033[38;2;194;255;74m"      # #C2FF4A
-RED="\033[38;2;255;77;106m"        # #FF4D6A
+# Aliases (base colors used throughout)
+PINK="$CTX_HOT_PINK"
+GREEN="$CTX_LIME"
+RED="$CTX_RED"
 # Burst bar gradient (8 levels)
 BURST_CYAN="\033[38;2;32;232;182m"        # #20E8B6
 BURST_TEAL="\033[38;2;0;200;170m"         # #00C8AA
@@ -56,7 +56,7 @@ JSONL_CACHE="$CACHE_DIR/.jsonl-cache"
 TREND_CACHE="$CACHE_DIR/.trend-cache"
 USAGE_HISTORY="$CACHE_DIR/.usage-history"
 TREND_WINDOW=900   # 15 minutes in seconds
-mkdir -p "$CACHE_DIR" 2>/dev/null
+mkdir -p "$CACHE_DIR" 2>/dev/null && chmod 700 "$CACHE_DIR" 2>/dev/null
 
 # Read auto-compact setting from Claude Code config
 CLAUDE_JSON="$HOME/.claude.json"
@@ -97,36 +97,41 @@ get_jsonl_totals() {
         return
     fi
 
-    # Calculate totals using perl (faster and more portable than jq/awk)
-    # find -print0 + xargs -0 cat feeds all JSONL into a single perl process
-    # so totals accumulate correctly and filenames with spaces are safe
+    # Incremental scan: only process files modified since last cache
+    # Falls back to full scan when no cache exists
+    local find_args=(-name "*.jsonl" -type f -not -type l -print0)
+    local prev_totals="0 0 0 0 0 0"
+
+    if [ -f "$JSONL_CACHE" ] && [ "$cache_age" -lt 999999 ]; then
+        # Incremental: add new data to cached running totals
+        prev_totals=$(tail -1 "$JSONL_CACHE" 2>/dev/null)
+        find_args=(-name "*.jsonl" -type f -not -type l -newer "$JSONL_CACHE" -print0)
+    fi
+
+    read -r p_tok p_cost p_in p_out p_cw p_cr <<< "$prev_totals"
+
     local result=$(find "$HOME/.claude/projects" "$HOME/.config/claude/projects" \
-        -name "*.jsonl" -type f -print0 2>/dev/null | xargs -0 cat 2>/dev/null | perl -ne '
-        if (/"message".*"usage"/) {
-            $is_opus = /claude-opus|opus-4/ ? 1 : 0;
-            $input = /"input_tokens":(\d+)/ ? $1 : 0;
-            $output = /"output_tokens":(\d+)/ ? $1 : 0;
-            $cache_write = /"cache_creation_input_tokens":(\d+)/ ? $1 : 0;
-            $cache_read = /"cache_read_input_tokens":(\d+)/ ? $1 : 0;
-
-            # Cost in cents (price per M tokens / 10000)
+        "${find_args[@]}" 2>/dev/null | xargs -0 cat 2>/dev/null | perl -e '
+        use strict;
+        my ($pt,$pc,$pi,$po,$pw,$pr) = @ARGV;
+        my ($ti,$to,$tw,$tr,$tc) = ($pi,$po,$pw,$pr,$pc);
+        while (<STDIN>) {
+            next unless /"message".*"usage"/;
+            my $is_opus = /claude-opus|opus-4/ ? 1 : 0;
+            my $input = /"input_tokens":(\d+)/ ? $1 : 0;
+            my $output = /"output_tokens":(\d+)/ ? $1 : 0;
+            my $cache_write = /"cache_creation_input_tokens":(\d+)/ ? $1 : 0;
+            my $cache_read = /"cache_read_input_tokens":(\d+)/ ? $1 : 0;
             if ($is_opus) {
-                $cost = ($input * 15 + $output * 75 + $cache_write * 18.75 + $cache_read * 1.50) / 10000;
+                $tc += ($input * 15 + $output * 75 + $cache_write * 18.75 + $cache_read * 1.50) / 10000;
             } else {
-                $cost = ($input * 3 + $output * 15 + $cache_write * 3.75 + $cache_read * 0.30) / 10000;
+                $tc += ($input * 3 + $output * 15 + $cache_write * 3.75 + $cache_read * 0.30) / 10000;
             }
-
-            $tot_input += $input;
-            $tot_output += $output;
-            $tot_cache_write += $cache_write;
-            $tot_cache_read += $cache_read;
-            $tot_cost += $cost;
+            $ti += $input; $to += $output; $tw += $cache_write; $tr += $cache_read;
         }
-        END {
-            $tot_tokens = $tot_input + $tot_output + $tot_cache_write + $tot_cache_read;
-            printf "%d %.0f %d %d %d %d", $tot_tokens, $tot_cost, $tot_input, $tot_output, $tot_cache_write, $tot_cache_read;
-        }
-    ' 2>/dev/null)
+        my $tt = $ti + $to + $tw + $tr;
+        printf "%d %.0f %d %d %d %d", $tt, $tc, $ti, $to, $tw, $tr;
+    ' "$p_tok" "$p_cost" "$p_in" "$p_out" "$p_cw" "$p_cr" 2>/dev/null)
 
     # Cache the results (first line = timestamp, then data)
     echo -e "$now\n${result:-0 0 0 0 0 0}" > "$JSONL_CACHE"
@@ -190,24 +195,41 @@ get_usage_data() {
         return
     fi
 
-    # Detect Claude Code version for User-Agent
-    local cc_version
-    cc_version=$(claude --version 2>/dev/null | head -1 | grep -o '[0-9][0-9.]*' || echo "2.1.0")
+    # Detect Claude Code version (cached for 1 hour)
+    local version_cache="$CACHE_DIR/.cc-version"
+    local cc_version="2.1.0"
+    local ver_age=999999
+    if [ -f "$version_cache" ]; then
+        local ver_time=$(head -1 "$version_cache" 2>/dev/null || echo 0)
+        ver_age=$((now - ver_time))
+    fi
+    if [ "$ver_age" -lt 3600 ] && [ -f "$version_cache" ]; then
+        cc_version=$(tail -1 "$version_cache" 2>/dev/null)
+    else
+        cc_version=$(claude --version 2>/dev/null | head -1 | grep -o '[0-9][0-9.]*' || echo "2.1.0")
+        echo -e "$now\n$cc_version" > "$version_cache"
+    fi
 
-    local response=$(curl -s --max-time 3 \
+    local response=$(curl -s --max-time 3 --config - \
         -H "Accept: application/json" \
         -H "Content-Type: application/json" \
         -H "User-Agent: claude-code/${cc_version}" \
-        -H "Authorization: Bearer $token" \
         -H "anthropic-beta: oauth-2025-04-20" \
-        "https://api.anthropic.com/api/oauth/usage" 2>/dev/null)
+        "https://api.anthropic.com/api/oauth/usage" <<CURL_CONFIG
+header = "Authorization: Bearer $token"
+CURL_CONFIG
+    2>/dev/null)
 
-    # Extract all fields, using _ as placeholder for null/missing values
-    local utilization=$(echo "$response" | jq -r '.seven_day.utilization // "_"' 2>/dev/null)
-    local resets_at=$(echo "$response" | jq -r '.seven_day.resets_at // "_"' 2>/dev/null)
-    local burst_util=$(echo "$response" | jq -r '.five_hour.utilization // "_"' 2>/dev/null)
-    local burst_resets=$(echo "$response" | jq -r '.five_hour.resets_at // "_"' 2>/dev/null)
-    local extra_util=$(echo "$response" | jq -r '.extra_usage.utilization // "_"' 2>/dev/null)
+    # Extract all fields in a single jq call (5 → 1)
+    local utilization resets_at burst_util burst_resets extra_util
+    IFS=$'\t' read -r utilization resets_at burst_util burst_resets extra_util <<< \
+        "$(echo "$response" | jq -r '[
+            (.seven_day.utilization // "_"),
+            (.seven_day.resets_at // "_"),
+            (.five_hour.utilization // "_"),
+            (.five_hour.resets_at // "_"),
+            (.extra_usage.utilization // "_")
+        ] | @tsv' 2>/dev/null)"
 
     if [ -n "$utilization" ] && [ "$utilization" != "_" ]; then
         echo -e "$now\n$utilization $resets_at $burst_util $burst_resets $extra_util" > "$API_CACHE"
@@ -225,9 +247,8 @@ get_usage_data() {
 get_trend_arrow() {
     local current_usage=$1  # Current usage percentage (0-100)
     local week_start=${2:-0}  # Epoch when current week started (optional)
+    local now=${3:-$(date +%s)}  # Epoch timestamp (passed from caller)
     [[ "$current_usage" == .* ]] && current_usage="0$current_usage"
-
-    local now=$(date +%s)
 
     # Single awk call: append, prune, calculate velocity, return arrow code
     # This replaces ~10 subprocess calls (tail, head, wc, 2x awk, sort, 4x bc) with 1
@@ -331,9 +352,8 @@ get_trend_arrow() {
 get_smart_pace_indicator() {
     local usage=$1
     local resets_at=$2
+    local now=${3:-$(date +%s)}
     [ -z "$usage" ] && echo "" && return
-
-    local now=$(date +%s)
     local pct=$(printf "%.0f" "$usage" 2>/dev/null)
     pct=${pct:-0}
 
@@ -391,7 +411,7 @@ get_smart_pace_indicator() {
 
     # Alternate display: emoji+arrow 7 times, then raw % 3 times (every 10 sec update)
     # Check cycle FIRST so raw % always shows on its cycles, regardless of alarm state
-    local cycle=$(( ($(date +%s) / 10) % 10 ))
+    local cycle=$(( (now / 10) % 10 ))
     if [ "$cycle" -ge 7 ]; then
         echo "${DIM}${pct}%${RESET}"
         return
@@ -404,7 +424,7 @@ get_smart_pace_indicator() {
     fi
 
     # Get trend arrow based on usage% velocity
-    local arrow=$(get_trend_arrow "$usage" "$week_start")
+    local arrow=$(get_trend_arrow "$usage" "$week_start" "$now")
 
     # Effective rate = max(burn_rate, pressure)
     # Burn rate captures velocity, pressure captures remaining runway
@@ -455,10 +475,7 @@ IFS=$'\t' read -r MODEL CURRENT_DIR LINES_ADDED LINES_REMOVED \
 
 # Derived values (pure bash math, no bc)
 SESSION_TOKENS=$((TOTAL_INPUT + TOTAL_OUTPUT))
-# Convert cost to cents using bash string manipulation (avoid bc)
-TOTAL_COST_CENTS=${TOTAL_COST%.*}${TOTAL_COST#*.}
-TOTAL_COST_CENTS=$((10#${TOTAL_COST_CENTS:-0} * 100 / 100))
-TOTAL_COST_CENTS=${TOTAL_COST_CENTS:-0}
+TOTAL_COST_CENTS=$(awk "BEGIN{printf \"%.0f\", $TOTAL_COST * 100}")
 
 # Get all-time totals from JSONL files (cached)
 # Consolidate: 2 echo + 2 tail + 2 awk + 1 bc → 1 read (pure bash)
@@ -769,7 +786,7 @@ FUN_POWER_WATTS=(5 10 1000 2000000 -1 -2 0 1000000000)
 
 format_fun_power() {
     local tokens=$1
-    local item_idx=${2:-$(( ($(date +%s) / 10) % ${#FUN_POWER_EMOJI[@]} ))}  # Optional: explicit item index
+    local item_idx=${2:-$(( (NOW / 10) % ${#FUN_POWER_EMOJI[@]} ))}  # Optional: explicit item index
     [ "$tokens" -eq 0 ] && echo "⚡ 0h phone-charging" && return
 
     # Calculate Wh using KWH_PER_M rate
@@ -874,374 +891,77 @@ ABSURD_NAME=("sprinters®" "thrillers®" "private-islands®" "chipotle-franchise
 ABSURD_PRICE=(50000 1600000 18000000 1000000 3500000 315000 57000000)
 ALLTIME_ABSURD_INDEX=$((NOW_DIV_10 % ${#ABSURD_EMOJI[@]}))
 
-# Multi-unit format functions
-# Format: {count} {unit} @ {brand}® for sub-units, {count} {brand}® for main unit
-
-format_starbucks() {
-    local cost=$1
-    local emoji="☕"
-    # sip $0.31, starbucks (venti) $5.50
-    if [ "$(echo "$cost >= 5.50" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 5.50" | bc)
+# Generic two-tier format: sub-unit below price, main unit at/above
+format_two_tier() {
+    local cost=$1 emoji=$2 name=$3 price=$4 sub_name=$5 sub_price=$6
+    if [ "$(echo "$cost >= $price" | bc)" -eq 1 ]; then
+        local raw=$(echo "scale=6; $cost / $price" | bc)
         local count=$(format_count "$raw")
-        echo "$emoji $count starbucks®"
+        echo "$emoji $count $name"
     else
-        local raw=$(echo "scale=6; $cost / 0.31" | bc)
+        local raw=$(echo "scale=6; $cost / $sub_price" | bc)
         local count=$(format_count "$raw")
-        echo "$emoji $count sips @ starbucks®"
+        echo "$emoji $count $sub_name @ ${name%s®}®"
     fi
 }
 
-format_joes() {
-    local cost=$1
-    local emoji="🍕"
-    # bite $0.33, joe's (slice) $4
-    if [ "$(echo "$cost >= 4" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 4" | bc)
+# Generic three-tier format: sub-unit, main unit, super-unit
+format_three_tier() {
+    local cost=$1 emoji=$2 name=$3 price=$4 sub_name=$5 sub_price=$6 super_name=$7 super_price=$8
+    if [ "$(echo "$cost >= $super_price" | bc)" -eq 1 ]; then
+        local raw=$(echo "scale=6; $cost / $super_price" | bc)
         local count=$(format_count "$raw")
-        echo "$emoji $count joe's®"
+        echo "$emoji $count $super_name @ ${name%s®}®"
+    elif [ "$(echo "$cost >= $price" | bc)" -eq 1 ]; then
+        local raw=$(echo "scale=6; $cost / $price" | bc)
+        local count=$(format_count "$raw")
+        echo "$emoji $count $name"
     else
-        local raw=$(echo "scale=6; $cost / 0.33" | bc)
+        local raw=$(echo "scale=6; $cost / $sub_price" | bc)
         local count=$(format_count "$raw")
-        echo "$emoji $count bites @ joe's®"
+        echo "$emoji $count $sub_name @ ${name%s®}®"
     fi
 }
 
-format_tacoria() {
-    local cost=$1
-    local emoji="🌮"
-    # bite $1.15, taco $4.60
-    if [ "$(echo "$cost >= 4.60" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 4.60" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count tacorias®"
-    else
-        local raw=$(echo "scale=6; $cost / 1.15" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count bites @ tacorias®"
-    fi
+# Generic time-tier format: picks largest fitting time unit
+# Args: cost emoji name tiers (space-separated "suffix:price" pairs, descending)
+format_time_tier() {
+    local cost=$1 emoji=$2 name=$3
+    shift 3
+    local tiers=("$@")
+    local i
+    for i in "${tiers[@]}"; do
+        local suffix="${i%%:*}"
+        local tier_price="${i#*:}"
+        if [ "$(echo "$cost >= $tier_price" | bc)" -eq 1 ]; then
+            local raw=$(echo "scale=6; $cost / $tier_price" | bc)
+            local count=$(format_count "$raw")
+            echo "$emoji ${count}${suffix} @ $name"
+            return
+        fi
+    done
 }
 
-format_yuengling() {
-    local cost=$1
-    local emoji="🍺"
-    # sip $0.37, yuengling (pint) $7, keg $200
-    if [ "$(echo "$cost >= 200" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 200" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count kegs @ yuengling®"
-    elif [ "$(echo "$cost >= 7" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 7" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count yuenglings®"
-    else
-        local raw=$(echo "scale=6; $cost / 0.37" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count sips @ yuengling®"
-    fi
-}
+# Sub-unit lookup: "idx:sub_name:sub_price" entries for two-tier items
+FUN_SUB_DATA=(
+    "0:sips:0.31" "1:bites:0.33" "2:bites:1.15" "4:bites:0.90"
+    "11:bites:0.50" "14:bites:0.33" "15:bites:1" "16:bites:1.63"
+    "18:sips:0.04" "19:forkfuls:1.60" "20:forkfuls:1.20" "21:forkfuls:0.50"
+    "24:bites:0.83" "25:bites:0.80" "26:sips:0.58" "27:fries:0.36" "32:bites:0.97"
+)
 
-format_shackburger() {
-    local cost=$1
-    local emoji="🍔"
-    # bite $0.90, shackburger $9
-    if [ "$(echo "$cost >= 9" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 9" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count shackburgers®"
-    else
-        local raw=$(echo "scale=6; $cost / 0.90" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count bites @ shackburger®"
-    fi
-}
-
-
-
-format_auntie_annes() {
-    local cost=$1
-    local emoji="🥨"
-    # bite $0.50, pretzel $5
-    if [ "$(echo "$cost >= 5" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 5" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count auntie-annes®"
-    else
-        local raw=$(echo "scale=6; $cost / 0.50" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count bites @ auntie-annes®"
-    fi
-}
-
-format_nathans() {
-    local cost=$1
-    local emoji="🌭"
-    # bite $1, dog $6, joey-chestnut $456
-    if [ "$(echo "$cost >= 456" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 456" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count joey-chestnuts @ nathan's®"
-    elif [ "$(echo "$cost >= 6" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 6" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count nathan's®"
-    else
-        local raw=$(echo "scale=6; $cost / 1" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count bites @ nathan's®"
-    fi
-}
-
-format_ess_a_bagel() {
-    local cost=$1
-    local emoji="🥯"
-    # bite $0.33, bagel $4
-    if [ "$(echo "$cost >= 4" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 4" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count ess-a-bagels®"
-    else
-        local raw=$(echo "scale=6; $cost / 0.33" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count bites @ ess-a-bagel®"
-    fi
-}
-
-format_nami_nori() {
-    local cost=$1
-    local emoji="🍣"
-    # bite $1, roll $8
-    if [ "$(echo "$cost >= 8" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 8" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count nami-noris®"
-    else
-        local raw=$(echo "scale=6; $cost / 1" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count bites @ nami-nori®"
-    fi
-}
-
-format_lugers() {
-    local cost=$1
-    local emoji="🥩"
-    # bite $1.63, steak $65
-    if [ "$(echo "$cost >= 65" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 65" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count lugers®"
-    else
-        local raw=$(echo "scale=6; $cost / 1.63" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count bites @ lugers®"
-    fi
-}
-
-format_big_gulp() {
-    local cost=$1
-    local emoji="🥤"
-    # sip $0.04, gulp $2.50
-    if [ "$(echo "$cost >= 2.50" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 2.50" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count big-gulps®"
-    else
-        local raw=$(echo "scale=6; $cost / 0.04" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count sips @ big-gulp®"
-    fi
-}
-
-format_carbone() {
-    local cost=$1
-    local emoji="🍝"
-    # forkful $1.60, pasta $40
-    if [ "$(echo "$cost >= 40" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 40" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count carbones®"
-    else
-        local raw=$(echo "scale=6; $cost / 1.60" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count forkfuls @ carbone®"
-    fi
-}
-
-format_redlobster() {
-    local cost=$1
-    local emoji="🦞"
-    # forkful $1.20, dinner $30
-    if [ "$(echo "$cost >= 30" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 30" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count redlobsters®"
-    else
-        local raw=$(echo "scale=6; $cost / 1.20" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count forkfuls @ redlobster®"
-    fi
-}
-
-format_sweetgreen() {
-    local cost=$1
-    local emoji="🥗"
-    # forkful $0.50, bowl $15
-    if [ "$(echo "$cost >= 15" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 15" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count sweetgreens®"
-    else
-        local raw=$(echo "scale=6; $cost / 0.50" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count forkfuls @ sweetgreen®"
-    fi
-}
-
-format_equinox() {
-    local cost=$1
-    local emoji="🏋️"
-    # Time-based: $/min=$0.006, $/hr=$0.36, $/day=$8.67, $/wk=$60.67, $/mo=$260, $/yr=$3120
-    if [ "$(echo "$cost >= 3120" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 3120" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji ${count}yrs @ equinox®"
-    elif [ "$(echo "$cost >= 260" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 260" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji ${count}mos @ equinox®"
-    elif [ "$(echo "$cost >= 60.67" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 60.67" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji ${count}wks @ equinox®"
-    elif [ "$(echo "$cost >= 8.67" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 8.67" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji ${count}d @ equinox®"
-    elif [ "$(echo "$cost >= 0.36" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 0.36" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji ${count}h @ equinox®"
-    else
-        local raw=$(echo "scale=6; $cost / 0.006" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji ${count}m @ equinox®"
-    fi
-}
-
-format_soulcycle() {
-    local cost=$1
-    local emoji="🚴"
-    # Time-based: $/sec=$0.014, $/min=$0.84, $/class(45m)=$38, $/day=$1216, $/mo=$36480, $/yr=$444000
-    if [ "$(echo "$cost >= 444000" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 444000" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji ${count}yrs @ soulcycle®"
-    elif [ "$(echo "$cost >= 36480" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 36480" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji ${count}mo @ soulcycle®"
-    elif [ "$(echo "$cost >= 1216" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 1216" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji ${count}d @ soulcycle®"
-    elif [ "$(echo "$cost >= 50.67" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 50.67" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji ${count}h @ soulcycle®"
-    elif [ "$(echo "$cost >= 0.84" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 0.84" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji ${count}m @ soulcycle®"
-    else
-        local raw=$(echo "scale=6; $cost / 0.014" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji ${count}s @ soulcycle®"
-    fi
-}
-
-format_levain() {
-    local cost=$1
-    local emoji="🍪"
-    # bite $0.83, levain $5
-    if [ "$(echo "$cost >= 5" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 5" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count levains®"
-    else
-        local raw=$(echo "scale=6; $cost / 0.83" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count bites @ levain®"
-    fi
-}
-
-format_chipotle() {
-    local cost=$1
-    local emoji="🌯"
-    # bite $0.80, burrito $12
-    if [ "$(echo "$cost >= 12" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 12" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count chipotles®"
-    else
-        local raw=$(echo "scale=6; $cost / 0.80" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count bites @ chipotle®"
-    fi
-}
-
-format_juice_press() {
-    local cost=$1
-    local emoji="🧃"
-    # sip $0.58, bottle $11
-    if [ "$(echo "$cost >= 11" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 11" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count juice-presses®"
-    else
-        local raw=$(echo "scale=6; $cost / 0.58" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count sips @ juice-press®"
-    fi
-}
-
-format_pommes_frites() {
-    local cost=$1
-    local emoji="🍟"
-    # fry $0.36, cone $9
-    if [ "$(echo "$cost >= 9" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 9" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count pommes-frites®"
-    else
-        local raw=$(echo "scale=6; $cost / 0.36" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count fries @ pommes-frites®"
-    fi
-}
-
-
-format_cronut() {
-    local cost=$1
-    local emoji="🥐"
-    # bite $0.97, cronut $7.75
-    if [ "$(echo "$cost >= 7.75" | bc)" -eq 1 ]; then
-        local raw=$(echo "scale=6; $cost / 7.75" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count cronuts®"
-    else
-        local raw=$(echo "scale=6; $cost / 0.97" | bc)
-        local count=$(format_count "$raw")
-        echo "$emoji $count bites @ cronut®"
-    fi
-}
-
-format_apple_music() {
-    local cost=$1
-    local emoji="🎵"
-    # $0.004/stream
-    local raw=$(echo "scale=6; $cost / 0.004" | bc)
-    local count=$(format_count "$raw")
-    echo "$emoji $count apple-musics®"
+# Lookup sub-unit data by index; sets _sub_name and _sub_price, returns 1 if not found
+_lookup_sub() {
+    local idx=$1
+    for entry in "${FUN_SUB_DATA[@]}"; do
+        if [ "${entry%%:*}" = "$idx" ]; then
+            local rest="${entry#*:}"
+            _sub_name="${rest%%:*}"
+            _sub_price="${rest#*:}"
+            return 0
+        fi
+    done
+    return 1
 }
 
 # Single-unit format (no sub-units, just {count} {brand}®)
@@ -1259,39 +979,35 @@ format_single_unit() {
 
 format_fun_cost() {
     local cost=$1
-    local item_idx=${2:-$(( ($(date +%s) / 10) % ${#FUN_EMOJI[@]} ))}
+    local item_idx=${2:-$(( (NOW / 10) % ${#FUN_EMOJI[@]} ))}
     [ "$cost" = "0" ] && echo "💰 \$0" && return
 
-    # Dispatch to multi-unit formatters or use single-unit
+    local emoji="${FUN_EMOJI[$item_idx]}"
+    local name="${FUN_NAME[$item_idx]}"
+    local price="${FUN_PRICE[$item_idx]}"
+
+    # Special multi-tier items
     case $item_idx in
-        0) format_starbucks "$cost" ;;
-        1) format_joes "$cost" ;;
-        2) format_tacoria "$cost" ;;
-        3) format_yuengling "$cost" ;;
-        4) format_shackburger "$cost" ;;
-        11) format_auntie_annes "$cost" ;;
-        13) format_nathans "$cost" ;;
-        14) format_ess_a_bagel "$cost" ;;
-        15) format_nami_nori "$cost" ;;
-        16) format_lugers "$cost" ;;
-        18) format_big_gulp "$cost" ;;
-        19) format_carbone "$cost" ;;
-        20) format_redlobster "$cost" ;;
-        21) format_sweetgreen "$cost" ;;
-        22) format_equinox "$cost" ;;
-        23) format_soulcycle "$cost" ;;
-        24) format_levain "$cost" ;;
-        25) format_chipotle "$cost" ;;
-        26) format_juice_press "$cost" ;;
-        27) format_pommes_frites "$cost" ;;
-        32) format_cronut "$cost" ;;
-        33) format_apple_music "$cost" ;;
+        3)  # yuengling: sip → pint → keg
+            format_three_tier "$cost" "$emoji" "$name" "$price" "sips" 0.37 "kegs" 200
+            ;;
+        13) # nathan's: bite → dog → joey-chestnut
+            format_three_tier "$cost" "$emoji" "$name" "$price" "bites" 1 "joey-chestnuts" 456
+            ;;
+        22) # equinox: time-based tiers
+            format_time_tier "$cost" "$emoji" "equinox®" "yrs:3120" "mos:260" "wks:60.67" "d:8.67" "h:0.36" "m:0.006"
+            ;;
+        23) # soulcycle: time-based tiers
+            format_time_tier "$cost" "$emoji" "soulcycle®" "yrs:444000" "mo:36480" "d:1216" "h:50.67" "m:0.84" "s:0.014"
+            ;;
         *)
-            # Single-unit items
-            local emoji="${FUN_EMOJI[$item_idx]}"
-            local name="${FUN_NAME[$item_idx]}"
-            local price="${FUN_PRICE[$item_idx]}"
-            format_single_unit "$cost" "$emoji" "$name" "$price"
+            # Two-tier items (sub-unit + main unit)
+            if _lookup_sub "$item_idx"; then
+                format_two_tier "$cost" "$emoji" "$name" "$price" "$_sub_name" "$_sub_price"
+            else
+                # Single-unit items (no sub-units)
+                format_single_unit "$cost" "$emoji" "$name" "$price"
+            fi
             ;;
     esac
 }
@@ -1299,7 +1015,7 @@ format_fun_cost() {
 # Format absurd cost items (decimal chasing 1)
 format_absurd_cost() {
     local cost=$1
-    local item_idx=${2:-$(( ($(date +%s) / 10) % ${#ABSURD_EMOJI[@]} ))}
+    local item_idx=${2:-$(( (NOW / 10) % ${#ABSURD_EMOJI[@]} ))}
     [ "$cost" = "0" ] && echo "💰 \$0" && return
 
     local emoji="${ABSURD_EMOJI[$item_idx]}"
@@ -1419,7 +1135,7 @@ read -r WEEKLY_USAGE RESETS_AT BURST_USAGE BURST_RESETS EXTRA_UTIL <<< "$(get_us
 # Smart pace indicator (trend-based)
 PACE_INDICATOR=""
 if [ -n "$WEEKLY_USAGE" ]; then
-    PACE_INDICATOR="$(get_smart_pace_indicator "$WEEKLY_USAGE" "$RESETS_AT")"
+    PACE_INDICATOR="$(get_smart_pace_indicator "$WEEKLY_USAGE" "$RESETS_AT" "$NOW")"
 fi
 
 # Burst indicator (💥 with colored bar, only when > 0%)
@@ -1436,7 +1152,7 @@ if [ -n "$BURST_USAGE" ] && [ "$BURST_USAGE" != "_" ] && [ "$BURST_USAGE" != "nu
                 burst_reset_epoch=$(parse_iso_epoch "$BURST_RESETS")
             fi
             if [ -n "$burst_reset_epoch" ]; then
-                now_epoch=$(date +%s)
+                now_epoch=$NOW
                 secs_left=$((burst_reset_epoch - now_epoch))
                 if [ "$secs_left" -gt 0 ]; then
                     mins=$(( (secs_left + 59) / 60 ))
@@ -1474,7 +1190,7 @@ if [ -n "$BURST_USAGE" ] && [ "$BURST_USAGE" != "_" ] && [ "$BURST_USAGE" != "nu
             burst_reset_epoch=$(parse_iso_epoch "$BURST_RESETS")
         fi
         if [ "$BURST_PCT" -ge 75 ] && [ -n "$burst_reset_epoch" ]; then
-            now_epoch=$(date +%s)
+            now_epoch=$NOW
             secs_left=$((burst_reset_epoch - now_epoch))
             if [ "$secs_left" -gt 0 ]; then
                 mins=$(( (secs_left + 59) / 60 ))
