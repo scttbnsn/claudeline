@@ -163,7 +163,7 @@ get_oauth_token() {
     fi
 }
 
-# Get usage data from API (cached for 60 seconds)
+# Get usage data from API (cached for 10 minutes)
 # Returns: utilization resets_at burst_util burst_resets extra_util (space-separated)
 get_usage_data() {
     local now=$(date +%s)
@@ -175,8 +175,8 @@ get_usage_data() {
         cache_age=$((now - cache_time))
     fi
 
-    # Return cached value if fresh (60 seconds)
-    if [ "$cache_age" -lt 60 ] && [ -f "$API_CACHE" ]; then
+    # Return cached value if fresh (600 seconds = 10 minutes — avoids API rate limits)
+    if [ "$cache_age" -lt 600 ] && [ -f "$API_CACHE" ]; then
         tail -1 "$API_CACHE" 2>/dev/null
         return
     fi
@@ -188,10 +188,14 @@ get_usage_data() {
         return
     fi
 
+    # Detect Claude Code version for User-Agent
+    local cc_version
+    cc_version=$(claude --version 2>/dev/null | head -1 | grep -o '[0-9][0-9.]*' || echo "2.1.0")
+
     local response=$(curl -s --max-time 3 \
         -H "Accept: application/json" \
         -H "Content-Type: application/json" \
-        -H "User-Agent: claude-code/2.0.32" \
+        -H "User-Agent: claude-code/${cc_version}" \
         -H "Authorization: Bearer $token" \
         -H "anthropic-beta: oauth-2025-04-20" \
         "https://api.anthropic.com/api/oauth/usage" 2>/dev/null)
@@ -383,10 +387,10 @@ get_smart_pace_indicator() {
         fi
     fi
 
-    # Alternate display: emoji+arrow 9 times, then raw % once (every 10 sec update)
-    # Check cycle FIRST so raw % always shows on cycle 9, regardless of alarm state
+    # Alternate display: emoji+arrow 7 times, then raw % 3 times (every 10 sec update)
+    # Check cycle FIRST so raw % always shows on its cycles, regardless of alarm state
     local cycle=$(( ($(date +%s) / 10) % 10 ))
-    if [ "$cycle" -eq 9 ]; then
+    if [ "$cycle" -ge 7 ]; then
         echo "${DIM}${pct}%${RESET}"
         return
     fi
@@ -431,7 +435,7 @@ get_smart_pace_indicator() {
 # Extract all values in a single jq call (11 calls → 1)
 # Use tab delimiter to handle spaces in values (e.g. "Claude Opus 4.5")
 IFS=$'\t' read -r MODEL CURRENT_DIR LINES_ADDED LINES_REMOVED \
-    TOTAL_INPUT TOTAL_OUTPUT DURATION_MS TOTAL_COST CURRENT_TOKENS <<< \
+    TOTAL_INPUT TOTAL_OUTPUT DURATION_MS TOTAL_COST CURRENT_TOKENS CONTEXT_WINDOW_SIZE <<< \
     "$(echo "$input" | jq -r '[
         (.model.display_name // "Claude"),
         (.workspace.current_dir // ""),
@@ -443,7 +447,8 @@ IFS=$'\t' read -r MODEL CURRENT_DIR LINES_ADDED LINES_REMOVED \
         (.cost.total_cost_usd // 0),
         ((.context_window.current_usage.input_tokens // 0) +
          (.context_window.current_usage.cache_creation_input_tokens // 0) +
-         (.context_window.current_usage.cache_read_input_tokens // 0))
+         (.context_window.current_usage.cache_read_input_tokens // 0)),
+        (.context_window.context_window_size // 200000)
     ] | @tsv')"
 
 # Derived values (pure bash math, no bc)
@@ -503,12 +508,21 @@ FUN_COST_ITEM_INDEX=${SESSION_COST_ITEMS[$((ITEM_CYCLE % ${#SESSION_COST_ITEMS[@
 # NOTE: ALLTIME_ABSURD_INDEX is computed after ABSURD_EMOJI is defined (below array defs)
 
 # Calculate context percentage (scaled to context limit)
-# When auto-compact is ON:  168K (compression trigger, ~84% of 200K window)
-# When auto-compact is OFF: 200K (full context window, user must compact manually)
-if [ "$AUTO_COMPACT_ON" = "true" ]; then
-    AUTO_COMPACT_THRESHOLD=168000
+# Detect 1M context from JSON field OR model display name (e.g. "Opus 4.6 1M context")
+# When auto-compact is ON:  ~84% of window (compression trigger)
+# When auto-compact is OFF: full window (user must compact manually)
+if [ "${CONTEXT_WINDOW_SIZE:-0}" -gt 200000 ] 2>/dev/null; then
+    : # Already set from JSON
+elif [[ "$MODEL" == *1[Mm]* ]] || [[ "$MODEL" == *1M* ]]; then
+    CONTEXT_WINDOW_SIZE=1000000
 else
-    AUTO_COMPACT_THRESHOLD=200000
+    CONTEXT_WINDOW_SIZE=${CONTEXT_WINDOW_SIZE:-200000}
+fi
+if [ "$AUTO_COMPACT_ON" = "true" ]; then
+    # Auto-compact triggers at ~84% of the context window
+    AUTO_COMPACT_THRESHOLD=$((CONTEXT_WINDOW_SIZE * 84 / 100))
+else
+    AUTO_COMPACT_THRESHOLD=$CONTEXT_WINDOW_SIZE
 fi
 if [ "$CURRENT_TOKENS" -gt 0 ] 2>/dev/null; then
     PERCENT_USED=$((CURRENT_TOKENS * 100 / AUTO_COMPACT_THRESHOLD))
@@ -518,42 +532,48 @@ else
 fi
 
 # Color-code context based on usage
-# Auto-compact ON:  7-tier gradient scaled to 168K compact threshold
-# Auto-compact OFF: 8-tier gradient scaled to 200K with hyper-pink past compact zone
+# Auto-compact ON:  10-tier gradient scaled to compact threshold (~84% of window)
+# Auto-compact OFF: 8-tier gradient scaled to full window with hyper-pink past compact zone
 if [ "$AUTO_COMPACT_ON" = "true" ]; then
-    if [ "$PERCENT_USED" -lt 18 ]; then
-        CTX_COLOR=$CTX_CYAN;    CTX_ICON="✨"
+    if [ "$PERCENT_USED" -lt 10 ]; then
+        CTX_COLOR=$CTX_CYAN;      CTX_ICON="✨"
+    elif [ "$PERCENT_USED" -lt 20 ]; then
+        CTX_COLOR=$CTX_LIME;      CTX_ICON="🌱"
     elif [ "$PERCENT_USED" -lt 35 ]; then
-        CTX_COLOR=$CTX_LIME;    CTX_ICON="🌱"
+        CTX_COLOR=$CTX_YELLOW;    CTX_ICON="💭"
     elif [ "$PERCENT_USED" -lt 50 ]; then
-        CTX_COLOR=$CTX_YELLOW;  CTX_ICON="💭"
-    elif [ "$PERCENT_USED" -lt 68 ]; then
-        CTX_COLOR=$CTX_ORANGE;  CTX_ICON="🧠"
-    elif [ "$PERCENT_USED" -lt 88 ]; then
-        CTX_COLOR=$CTX_CORAL;   CTX_ICON="🔥"
-    elif [ "$PERCENT_USED" -lt 95 ]; then
-        CTX_COLOR=$CTX_HOT_PINK; CTX_ICON="🫠"
+        CTX_COLOR=$CTX_ORANGE;    CTX_ICON="🧠"
+    elif [ "$PERCENT_USED" -lt 62 ]; then
+        CTX_COLOR=$CTX_CORAL;     CTX_ICON="⚡"
+    elif [ "$PERCENT_USED" -lt 74 ]; then
+        CTX_COLOR=$CTX_RED;       CTX_ICON="🔥"
+    elif [ "$PERCENT_USED" -lt 84 ]; then
+        CTX_COLOR=$CTX_HOT_PINK;  CTX_ICON="🌡️"
+    elif [ "$PERCENT_USED" -lt 92 ]; then
+        CTX_COLOR=$CTX_MAGENTA;   CTX_ICON="🫠"
+    elif [ "$PERCENT_USED" -lt 97 ]; then
+        CTX_COLOR=$CTX_MAGENTA;   CTX_ICON="💀"
     else
-        CTX_COLOR=$CTX_RED;     CTX_ICON="💾"
+        CTX_COLOR=$CTX_MAGENTA;   CTX_ICON="💾"
     fi
 else
-    # 8-tier for 200K: red/💾 at 150-170K, hyper-pink past compact zone
+    # 8-tier for full window: red/💾 at 75-85%, hyper-pink past compact zone
     if [ "$PERCENT_USED" -lt 15 ]; then
-        CTX_COLOR=$CTX_CYAN;      CTX_ICON="✨"   # 0-30K
+        CTX_COLOR=$CTX_CYAN;      CTX_ICON="✨"
     elif [ "$PERCENT_USED" -lt 30 ]; then
-        CTX_COLOR=$CTX_LIME;      CTX_ICON="🌱"   # 30-60K
+        CTX_COLOR=$CTX_LIME;      CTX_ICON="🌱"
     elif [ "$PERCENT_USED" -lt 50 ]; then
-        CTX_COLOR=$CTX_YELLOW;    CTX_ICON="💭"   # 60-100K
+        CTX_COLOR=$CTX_YELLOW;    CTX_ICON="💭"
     elif [ "$PERCENT_USED" -lt 65 ]; then
-        CTX_COLOR=$CTX_ORANGE;    CTX_ICON="🧠"   # 100-130K
+        CTX_COLOR=$CTX_ORANGE;    CTX_ICON="🧠"
     elif [ "$PERCENT_USED" -lt 75 ]; then
-        CTX_COLOR=$CTX_CORAL;     CTX_ICON="🔥"   # 130-150K
+        CTX_COLOR=$CTX_CORAL;     CTX_ICON="🔥"
     elif [ "$PERCENT_USED" -lt 85 ]; then
-        CTX_COLOR=$CTX_RED;       CTX_ICON="💾"   # 150-170K
+        CTX_COLOR=$CTX_RED;       CTX_ICON="💾"
     elif [ "$PERCENT_USED" -lt 95 ]; then
-        CTX_COLOR=$CTX_HOT_PINK;  CTX_ICON="🫠"   # 170-190K  past compact
+        CTX_COLOR=$CTX_HOT_PINK;  CTX_ICON="🫠"   # past compact zone
     else
-        CTX_COLOR=$CTX_MAGENTA;   CTX_ICON="💀"   # 190-200K  near hard wall
+        CTX_COLOR=$CTX_MAGENTA;   CTX_ICON="💀"   # near hard wall
     fi
 fi
 
