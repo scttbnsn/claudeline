@@ -101,6 +101,14 @@ set_context_tier() {
         fi
     done
 
+    if [ "${#tiers[@]}" -gt 0 ]; then
+        entry="${tiers[$((${#tiers[@]} - 1))]}"
+        IFS='|' read -r threshold color_var icon <<< "$entry"
+        CTX_COLOR=${!color_var}
+        CTX_ICON=$icon
+        return 0
+    fi
+
     return 1
 }
 
@@ -108,47 +116,32 @@ set_context_tier() {
 # Uses dynamic precision: more decimals for smaller values in each tier
 format_number() {
     local num=$1
-    local result
     # Handle empty or non-numeric input
     [[ -z "$num" || ! "$num" =~ ^[0-9]+$ ]] && { echo "0"; return; }
-    if [ "$num" -ge 1000000000000 ]; then
-        result=$(printf "%.1fT" "$(echo "$num / 1000000000000" | bc -l)")
-    elif [ "$num" -ge 1000000000 ]; then
-        result=$(printf "%.1fB" "$(echo "$num / 1000000000" | bc -l)")
+    if [ "$num" -ge 999950000000 ]; then
+        echo "$(format_tenths "$(mul_div_round "$num" 10 1000000000000)")T"
+    elif [ "$num" -ge 999950000 ]; then
+        echo "$(format_tenths "$(mul_div_round "$num" 10 1000000000)")B"
     elif [ "$num" -ge 10000000 ]; then
-        result=$(printf "%.1fM" "$(echo "$num / 1000000" | bc -l)")
+        echo "$(format_tenths "$(mul_div_round "$num" 10 1000000)")M"
     elif [ "$num" -ge 1000000 ]; then
-        result=$(printf "%.2fM" "$(echo "$num / 1000000" | bc -l)")
+        echo "$(format_hundredths "$(mul_div_round "$num" 100 1000000)")M"
     elif [ "$num" -ge 1000 ]; then
-        result=$(printf "%.1fK" "$(echo "$num / 1000" | bc -l)")
+        echo "$(format_tenths "$(mul_div_round "$num" 10 1000)")K"
     else
         echo "$num"
-        return
     fi
-    local suffix=${result: -1}
-    local mantissa=${result%$suffix}
-    if [[ "$mantissa" == *.0 ]]; then
-        mantissa=${mantissa%.0}
-    fi
-    echo "${mantissa}${suffix}"
 }
 
 # Format a decimal as a human-friendly count (K/M suffix, or 1/Nth fractions for values < 1)
 format_count() {
     local raw_count=$1
-    [[ "$raw_count" == .* ]] && raw_count="0$raw_count"
-
-    if [ "$(echo "$raw_count >= 1000000" | bc)" -eq 1 ]; then
-        printf "%.1fM" "$(echo "$raw_count / 1000000" | bc -l)"
-    elif [ "$(echo "$raw_count >= 1000" | bc)" -eq 1 ]; then
-        printf "%.1fK" "$(echo "$raw_count / 1000" | bc -l)"
-    elif [ "$(echo "$raw_count >= 1" | bc)" -eq 1 ]; then
-        local count
-        count=$(printf "%.1f" "$raw_count")
-        echo "${count%.0}"
-    else
-        printf "%.2g" "$raw_count"
+    local scaled
+    if ! scaled=$(decimal_to_scaled "$raw_count" 6); then
+        echo "0"
+        return
     fi
+    format_count_scaled6 "$scaled"
 }
 
 # Integer helpers for hot-path formatters
@@ -179,6 +172,11 @@ format_tenths() {
     fi
 }
 
+format_hundredths() {
+    local hundredths=$1
+    printf "%d.%02d" $((hundredths / 100)) $((hundredths % 100))
+}
+
 scaled6_to_decimal() {
     local scaled=$1
     printf "%d.%06d" $((scaled / 1000000)) $((scaled % 1000000))
@@ -187,6 +185,57 @@ scaled6_to_decimal() {
 scaled10_to_decimal() {
     local scaled=$1
     printf "%d.%010d" $((scaled / 10000000000)) $((scaled % 10000000000))
+}
+
+decimal_to_scaled() {
+    local value=$1
+    local scale=$2
+    local factor=1
+    local sign=1
+    local int_part frac_part frac_value
+    local i
+
+    [ -n "$value" ] || value=0
+    if [[ "$value" == -* ]]; then
+        sign=-1
+        value=${value#-}
+    fi
+    [[ "$value" == .* ]] && value="0$value"
+
+    if ! [[ "$value" =~ ^([0-9]+)(\.([0-9]+))?$ ]]; then
+        return 1
+    fi
+
+    int_part=${BASH_REMATCH[1]}
+    frac_part=${BASH_REMATCH[3]:-}
+    for ((i=0; i<scale; i++)); do
+        factor=$((factor * 10))
+    done
+    while [ ${#frac_part} -lt "$scale" ]; do
+        frac_part="${frac_part}0"
+    done
+    frac_part=${frac_part:0:$scale}
+    frac_value=0
+    if [ "$scale" -gt 0 ]; then
+        frac_value=$((10#${frac_part:-0}))
+    fi
+
+    printf '%s\n' $((sign * ((10#$int_part * factor) + frac_value)))
+}
+
+dollars_to_millis() {
+    decimal_to_scaled "$1" 3
+}
+
+ratio_to_scaled6() {
+    local numerator=$1
+    local denominator=$2
+
+    if [ "$denominator" -le 0 ]; then
+        echo 0
+        return
+    fi
+    mul_div_floor "$numerator" 1000000 "$denominator"
 }
 
 format_count_scaled6() {
@@ -262,13 +311,12 @@ format_data() {
         echo "${bytes}B"
         return
     elif [ "$bytes" -lt 1048576 ]; then
-        val=$(printf "%.1f" "$(echo "scale=1; $bytes / 1024" | bc)"); unit="KB"
+        val=$(format_tenths "$(mul_div_floor "$bytes" 10 1024)"); unit="KB"
     elif [ "$bytes" -lt 1073741824 ]; then
-        val=$(printf "%.1f" "$(echo "scale=1; $bytes / 1048576" | bc)"); unit="MB"
+        val=$(format_tenths "$(mul_div_floor "$bytes" 10 1048576)"); unit="MB"
     else
-        val=$(printf "%.1f" "$(echo "scale=1; $bytes / 1073741824" | bc)"); unit="GB"
+        val=$(format_tenths "$(mul_div_floor "$bytes" 10 1073741824)"); unit="GB"
     fi
-    val="${val%.0}"
     echo "${val}${unit}"
 }
 
@@ -397,58 +445,54 @@ ABSURD_NAME=("sprinters®" "thrillers®" "private-islands®" "chipotle-franchise
 ABSURD_PRICE=(50000 1600000 18000000 1000000 3500000 315000 57000000)
 
 format_two_tier() {
-    local cost=$1 emoji=$2 name=$3 price=$4 sub_name=$5 sub_price=$6
-    if [ "$(echo "$cost >= $price" | bc)" -eq 1 ]; then
-        local raw
-        raw=$(echo "scale=6; $cost / $price" | bc)
-        local count
-        count=$(format_count "$raw")
+    local cost_milli=$1 emoji=$2 name=$3 price=$4 sub_name=$5 sub_price=$6
+    local price_milli sub_price_milli count_scaled6 count
+    price_milli=$(dollars_to_millis "$price")
+    sub_price_milli=$(dollars_to_millis "$sub_price")
+    if [ "$cost_milli" -ge "$price_milli" ]; then
+        count_scaled6=$(ratio_to_scaled6 "$cost_milli" "$price_milli")
+        count=$(format_count_scaled6 "$count_scaled6")
         echo "$emoji $count $name"
     else
-        local raw
-        raw=$(echo "scale=6; $cost / $sub_price" | bc)
-        local count
-        count=$(format_count "$raw")
+        count_scaled6=$(ratio_to_scaled6 "$cost_milli" "$sub_price_milli")
+        count=$(format_count_scaled6 "$count_scaled6")
         echo "$emoji $count $sub_name @ ${name%s®}®"
     fi
 }
 
 format_three_tier() {
-    local cost=$1 emoji=$2 name=$3 price=$4 sub_name=$5 sub_price=$6 super_name=$7 super_price=$8
-    if [ "$(echo "$cost >= $super_price" | bc)" -eq 1 ]; then
-        local raw
-        raw=$(echo "scale=6; $cost / $super_price" | bc)
-        local count
-        count=$(format_count "$raw")
+    local cost_milli=$1 emoji=$2 name=$3 price=$4 sub_name=$5 sub_price=$6 super_name=$7 super_price=$8
+    local price_milli sub_price_milli super_price_milli count_scaled6 count
+    price_milli=$(dollars_to_millis "$price")
+    sub_price_milli=$(dollars_to_millis "$sub_price")
+    super_price_milli=$(dollars_to_millis "$super_price")
+    if [ "$cost_milli" -ge "$super_price_milli" ]; then
+        count_scaled6=$(ratio_to_scaled6 "$cost_milli" "$super_price_milli")
+        count=$(format_count_scaled6 "$count_scaled6")
         echo "$emoji $count $super_name @ ${name%s®}®"
-    elif [ "$(echo "$cost >= $price" | bc)" -eq 1 ]; then
-        local raw
-        raw=$(echo "scale=6; $cost / $price" | bc)
-        local count
-        count=$(format_count "$raw")
+    elif [ "$cost_milli" -ge "$price_milli" ]; then
+        count_scaled6=$(ratio_to_scaled6 "$cost_milli" "$price_milli")
+        count=$(format_count_scaled6 "$count_scaled6")
         echo "$emoji $count $name"
     else
-        local raw
-        raw=$(echo "scale=6; $cost / $sub_price" | bc)
-        local count
-        count=$(format_count "$raw")
+        count_scaled6=$(ratio_to_scaled6 "$cost_milli" "$sub_price_milli")
+        count=$(format_count_scaled6 "$count_scaled6")
         echo "$emoji $count $sub_name @ ${name%s®}®"
     fi
 }
 
 format_time_tier() {
-    local cost=$1 emoji=$2 name=$3
+    local cost_milli=$1 emoji=$2 name=$3
     shift 3
     local tiers=("$@")
-    local i
+    local i tier_price_milli count_scaled6 count
     for i in "${tiers[@]}"; do
         local suffix="${i%%:*}"
         local tier_price="${i#*:}"
-        if [ "$(echo "$cost >= $tier_price" | bc)" -eq 1 ]; then
-            local raw
-            raw=$(echo "scale=6; $cost / $tier_price" | bc)
-            local count
-            count=$(format_count "$raw")
+        tier_price_milli=$(dollars_to_millis "$tier_price")
+        if [ "$cost_milli" -ge "$tier_price_milli" ]; then
+            count_scaled6=$(ratio_to_scaled6 "$cost_milli" "$tier_price_milli")
+            count=$(format_count_scaled6 "$count_scaled6")
             echo "$emoji ${count}${suffix} @ $name"
             return
         fi
@@ -464,14 +508,20 @@ FUN_SUB_DATA=(
 
 _lookup_fun_item() {
     local item_id=$1
-    local entry rest
+    local emoji_var=$2
+    local name_var=$3
+    local price_var=$4
+    local entry rest found_emoji found_name found_price
     for entry in "${FUN_ITEM_DATA[@]}"; do
         if [ "${entry%%|*}" = "$item_id" ]; then
             rest="${entry#*|}"
-            _fun_emoji="${rest%%|*}"
+            found_emoji="${rest%%|*}"
             rest="${rest#*|}"
-            _fun_name="${rest%%|*}"
-            _fun_price="${rest#*|}"
+            found_name="${rest%%|*}"
+            found_price="${rest#*|}"
+            printf -v "$emoji_var" '%s' "$found_emoji"
+            printf -v "$name_var" '%s' "$found_name"
+            printf -v "$price_var" '%s' "$found_price"
             return 0
         fi
     done
@@ -480,12 +530,16 @@ _lookup_fun_item() {
 
 _lookup_sub() {
     local item_id=$1
-    local entry rest
+    local name_var=$2
+    local price_var=$3
+    local entry rest found_sub_name found_sub_price
     for entry in "${FUN_SUB_DATA[@]}"; do
         if [ "${entry%%:*}" = "$item_id" ]; then
             rest="${entry#*:}"
-            _sub_name="${rest%%:*}"
-            _sub_price="${rest#*:}"
+            found_sub_name="${rest%%:*}"
+            found_sub_price="${rest#*:}"
+            printf -v "$name_var" '%s' "$found_sub_name"
+            printf -v "$price_var" '%s' "$found_sub_price"
             return 0
         fi
     done
@@ -493,15 +547,15 @@ _lookup_sub() {
 }
 
 format_single_unit() {
-    local cost=$1
+    local cost_milli=$1
     local emoji=$2
     local name=$3
     local price=$4
 
-    local raw
-    raw=$(echo "scale=6; $cost / $price" | bc)
-    local count
-    count=$(format_count "$raw")
+    local price_milli count_scaled6 count
+    price_milli=$(dollars_to_millis "$price")
+    count_scaled6=$(ratio_to_scaled6 "$cost_milli" "$price_milli")
+    count=$(format_count_scaled6 "$count_scaled6")
 
     echo "$emoji $count $name"
 }
@@ -509,40 +563,42 @@ format_single_unit() {
 format_fun_cost() {
     local cost=$1
     local item_ref=${2:-$(( (NOW / 10) % ${#FUN_ITEM_DATA[@]} ))}
-    [ "$cost" = "0" ] && echo "💰 \$0" && return
+    local cost_milli
+    if ! cost_milli=$(dollars_to_millis "$cost"); then
+        echo "💰 \$0"
+        return
+    fi
+    [ "$cost_milli" -eq 0 ] && echo "💰 \$0" && return
 
     local item_id="$item_ref"
+    local emoji="" name="" price="" sub_name="" sub_price=""
     if [[ "$item_ref" =~ ^[0-9]+$ ]]; then
         item_id="${FUN_ITEM_DATA[$item_ref]%%|*}"
     fi
-    if ! _lookup_fun_item "$item_id"; then
+    if ! _lookup_fun_item "$item_id" emoji name price; then
         debug_log "Unknown fun cost item '$item_ref'; defaulting to starbucks"
         item_id="starbucks"
-        _lookup_fun_item "$item_id" || { echo "💰 \$0"; return; }
+        _lookup_fun_item "$item_id" emoji name price || { echo "💰 \$0"; return; }
     fi
-
-    local emoji="$_fun_emoji"
-    local name="$_fun_name"
-    local price="$_fun_price"
 
     case $item_id in
         yuengling)
-            format_three_tier "$cost" "$emoji" "$name" "$price" "sips" 0.37 "kegs" 200
+            format_three_tier "$cost_milli" "$emoji" "$name" "$price" "sips" 0.37 "kegs" 200
             ;;
         nathans)
-            format_three_tier "$cost" "$emoji" "$name" "$price" "bites" 1 "joey-chestnuts" 456
+            format_three_tier "$cost_milli" "$emoji" "$name" "$price" "bites" 1 "joey-chestnuts" 456
             ;;
         equinox)
-            format_time_tier "$cost" "$emoji" "equinox®" "yrs:3120" "mos:260" "wks:60.67" "d:8.67" "h:0.36" "m:0.006"
+            format_time_tier "$cost_milli" "$emoji" "equinox®" "yrs:3120" "mos:260" "wks:60.67" "d:8.67" "h:0.36" "m:0.006"
             ;;
         soulcycle)
-            format_time_tier "$cost" "$emoji" "soulcycle®" "yrs:444000" "mo:36480" "d:1216" "h:50.67" "m:0.84" "s:0.014"
+            format_time_tier "$cost_milli" "$emoji" "soulcycle®" "yrs:444000" "mo:36480" "d:1216" "h:50.67" "m:0.84" "s:0.014"
             ;;
         *)
-            if _lookup_sub "$item_id"; then
-                format_two_tier "$cost" "$emoji" "$name" "$price" "$_sub_name" "$_sub_price"
+            if _lookup_sub "$item_id" sub_name sub_price; then
+                format_two_tier "$cost_milli" "$emoji" "$name" "$price" "$sub_name" "$sub_price"
             else
-                format_single_unit "$cost" "$emoji" "$name" "$price"
+                format_single_unit "$cost_milli" "$emoji" "$name" "$price"
             fi
             ;;
     esac
@@ -551,16 +607,20 @@ format_fun_cost() {
 format_absurd_cost() {
     local cost=$1
     local item_idx=${2:-$(( (NOW / 10) % ${#ABSURD_EMOJI[@]} ))}
-    [ "$cost" = "0" ] && echo "💰 \$0" && return
+    local cost_milli
+    if ! cost_milli=$(dollars_to_millis "$cost"); then
+        echo "💰 \$0"
+        return
+    fi
+    [ "$cost_milli" -eq 0 ] && echo "💰 \$0" && return
 
     local emoji="${ABSURD_EMOJI[$item_idx]}"
     local name="${ABSURD_NAME[$item_idx]}"
     local price="${ABSURD_PRICE[$item_idx]}"
-
-    local raw_count
-    raw_count=$(echo "scale=6; $cost / $price" | bc)
-    local count
-    count=$(format_count "$raw_count")
+    local price_milli count_scaled6 count
+    price_milli=$(dollars_to_millis "$price")
+    count_scaled6=$(ratio_to_scaled6 "$cost_milli" "$price_milli")
+    count=$(format_count_scaled6 "$count_scaled6")
 
     echo "$emoji $count $name"
 }
