@@ -1,4 +1,6 @@
 #!/bin/bash
+set -euo pipefail
+
 # 🎀 Cute Claude Status Line
 # Shows: model, context %, git branch, directory, session stats
 
@@ -37,7 +39,7 @@ normalize_decimal_var() {
     local default_value=$2
     local label=${3:-$var_name}
     local value=${!var_name-}
-    if ! [[ "$value" =~ ^-?([0-9]+([.][0-9]+)?|[.][0-9]+)$ ]]; then
+    if ! is_decimal_value "$value"; then
         debug_log "Invalid $label value '${value:-<empty>}'; defaulting to $default_value"
         printf -v "$var_name" '%s' "$default_value"
     fi
@@ -50,12 +52,81 @@ normalize_rate_var() {
     case "$value" in
         ""|_|null) printf -v "$var_name" '%s' "_" ;;
         *)
-            if ! [[ "$value" =~ ^-?([0-9]+([.][0-9]+)?|[.][0-9]+)$ ]]; then
+            if ! is_decimal_value "$value"; then
                 debug_log "Invalid $label value '${value:-<empty>}'; defaulting to _"
                 printf -v "$var_name" '%s' "_"
             fi
             ;;
     esac
+}
+
+round_decimal_to_int_or_default() {
+    local value=$1
+    local default_value=$2
+    local label=${3:-value}
+    local rounded
+
+    case "$value" in
+        ""|_|null)
+            printf '%s\n' "$default_value"
+            return 0
+            ;;
+    esac
+
+    if ! printf -v rounded "%.0f" "$value" 2>>"$STATUSLINE_DEBUG_LOG"; then
+        debug_log "Invalid $label value '${value:-<empty>}'; defaulting to $default_value"
+        printf '%s\n' "$default_value"
+        return 0
+    fi
+
+    printf '%s\n' "${rounded:-$default_value}"
+}
+
+read_auto_compact_setting() {
+    local claude_json=$1
+    local cache_file=$2
+    local cached_value=""
+
+    if ! [ -f "$claude_json" ]; then
+        printf 'true\n'
+        return 0
+    fi
+
+    if [ -f "$cache_file" ] && [ ! "$claude_json" -nt "$cache_file" ]; then
+        if IFS= read -r cached_value < "$cache_file"; then
+            case "$cached_value" in
+                true|false)
+                    printf '%s\n' "$cached_value"
+                    return 0
+                    ;;
+                *)
+                    debug_log "Ignoring invalid Claude config cache value in $cache_file: ${cached_value:-<empty>}"
+                    ;;
+            esac
+        else
+            debug_log "Failed to read Claude config cache at $cache_file"
+        fi
+    fi
+
+    if ! cached_value=$(jq -r 'if has("autoCompactEnabled") then (.autoCompactEnabled | tostring) else "true" end' "$claude_json" 2>>"$STATUSLINE_DEBUG_LOG"); then
+        debug_log "Failed to parse Claude config at $claude_json; defaulting autoCompactEnabled=true"
+        printf 'true\n'
+        return 0
+    fi
+
+    case "$cached_value" in
+        true|false) ;;
+        *)
+            debug_log "Ignoring invalid autoCompactEnabled value in $claude_json: ${cached_value:-<empty>}"
+            cached_value="true"
+            ;;
+    esac
+
+    if ! printf '%s\n' "$cached_value" > "$cache_file" 2>>"$STATUSLINE_DEBUG_LOG"; then
+        debug_log "Failed to write Claude config cache at $cache_file"
+    fi
+
+    printf '%s\n' "$cached_value"
 }
 
 STATUSLINE_DIR=$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -73,18 +144,16 @@ EXTRA_USAGE_LOCK="$CACHE_DIR/.extra-usage-fetch.lock"
 EXTRA_USAGE_TTL=600
 USAGE_HISTORY="$CACHE_DIR/.usage-history"
 TREND_WINDOW=900   # 15 minutes in seconds
+AUTO_COMPACT_THRESHOLD_PCT=84
+ALLTIME_NORMAL_CATALOG_ITEM_COUNT=${#ALLTIME_COST_ITEMS[@]}
+ALLTIME_NORMAL_FIXED_ITEM_COUNT=5
+ALLTIME_NORMAL_ITEM_COUNT=$((ALLTIME_NORMAL_CATALOG_ITEM_COUNT + ALLTIME_NORMAL_FIXED_ITEM_COUNT))
 (umask 077 && mkdir -p "$CACHE_DIR") 2>>"$STATUSLINE_DEBUG_LOG"
 
 # Read auto-compact setting from Claude Code config
 CLAUDE_JSON="$HOME/.claude.json"
-if [ -f "$CLAUDE_JSON" ]; then
-    if ! AUTO_COMPACT_ON=$(jq -r 'if has("autoCompactEnabled") then (.autoCompactEnabled | tostring) else "true" end' "$CLAUDE_JSON" 2>>"$STATUSLINE_DEBUG_LOG"); then
-        debug_log "Failed to parse Claude config at $CLAUDE_JSON; defaulting autoCompactEnabled=true"
-        AUTO_COMPACT_ON="true"
-    fi
-else
-    AUTO_COMPACT_ON="true"
-fi
+CLAUDE_CONFIG_CACHE="$CACHE_DIR/.claude-config-auto-compact"
+AUTO_COMPACT_ON=$(read_auto_compact_setting "$CLAUDE_JSON" "$CLAUDE_CONFIG_CACHE")
 [ "$AUTO_COMPACT_ON" != "false" ] && AUTO_COMPACT_ON="true"
 
 # Extract all values in a single jq call (11 calls → 1)
@@ -131,7 +200,7 @@ normalize_int_var BURST_RESETS 0 "burst reset epoch"
 
 # Derived values (pure bash math, no bc)
 SESSION_TOKENS=$((TOTAL_INPUT + TOTAL_OUTPUT))
-if ! TOTAL_COST_CENTS=$(awk "BEGIN{printf \"%.0f\", $TOTAL_COST * 100}" 2>>"$STATUSLINE_DEBUG_LOG"); then
+if ! TOTAL_COST_CENTS=$(awk -v total_cost="$TOTAL_COST" 'BEGIN { printf "%.0f", total_cost * 100 }' 2>>"$STATUSLINE_DEBUG_LOG"); then
     debug_log "Invalid total cost value '${TOTAL_COST:-<empty>}'; defaulting session cost to 0"
     TOTAL_COST_CENTS=0
 fi
@@ -181,7 +250,7 @@ ALLTIME_ABSURD_INDEX=$((NOW_DIV_10 % ${#ABSURD_EMOJI[@]}))
 
 # Calculate context percentage (scaled to context limit)
 # Detect 1M context from JSON field OR model display name (e.g. "Opus 4.6 1M context")
-# When auto-compact is ON:  ~84% of window (compression trigger)
+# When auto-compact is ON:  ~AUTO_COMPACT_THRESHOLD_PCT% of window (compression trigger)
 # When auto-compact is OFF: full window (user must compact manually)
 if [ "${CONTEXT_WINDOW_SIZE:-0}" -gt 200000 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
     : # Already set from JSON
@@ -191,8 +260,8 @@ else
     CONTEXT_WINDOW_SIZE=${CONTEXT_WINDOW_SIZE:-200000}
 fi
 if [ "$AUTO_COMPACT_ON" = "true" ]; then
-    # Auto-compact triggers at ~84% of the context window
-    AUTO_COMPACT_THRESHOLD=$((CONTEXT_WINDOW_SIZE * 84 / 100))
+    # Auto-compact triggers at ~AUTO_COMPACT_THRESHOLD_PCT% of the context window
+    AUTO_COMPACT_THRESHOLD=$((CONTEXT_WINDOW_SIZE * AUTO_COMPACT_THRESHOLD_PCT / 100))
 else
     AUTO_COMPACT_THRESHOLD=$CONTEXT_WINDOW_SIZE
 fi
@@ -226,45 +295,49 @@ PROGRESS_BAR="${CTX_COLOR}${BAR}${RESET}"
 # * = unstaged, + = staged, ↑n = ahead, ↓n = behind, $ = stash
 BRANCH=""
 DIR_NAME=""
-GIT_ROOT=$(git rev-parse --show-toplevel 2>>"$STATUSLINE_DEBUG_LOG")
-
-if [ -n "$GIT_ROOT" ]; then
+GIT_ROOT=""
+if GIT_ROOT=$(git rev-parse --show-toplevel 2>>"$STATUSLINE_DEBUG_LOG"); then
     DIR_NAME="${GIT_ROOT##*/}"  # basename using bash
 
     # git status -sb gives: ## branch...upstream [ahead N, behind M] + file status
-    GIT_STATUS_OUT=$(git status -sb 2>>"$STATUSLINE_DEBUG_LOG")
+    if GIT_STATUS_OUT=$(git status -sb 2>>"$STATUSLINE_DEBUG_LOG"); then
+        # Parse first line for branch and ahead/behind (pure bash, no head/sed)
+        FIRST_LINE="${GIT_STATUS_OUT%%$'\n'*}"
+        # Remove "## " prefix and extract branch (before "..." or end)
+        BRANCH="${FIRST_LINE#\#\# }"
+        BRANCH="${BRANCH%%...*}"
+        BRANCH="${BRANCH%% \[*}"  # Remove [ahead/behind] if no upstream
 
-    # Parse first line for branch and ahead/behind (pure bash, no head/sed)
-    FIRST_LINE="${GIT_STATUS_OUT%%$'\n'*}"
-    # Remove "## " prefix and extract branch (before "..." or end)
-    BRANCH="${FIRST_LINE#\#\# }"
-    BRANCH="${BRANCH%%...*}"
-    BRANCH="${BRANCH%% \[*}"  # Remove [ahead/behind] if no upstream
+        if [ -n "$BRANCH" ]; then
+            GIT_STATUS=""
 
-    if [ -n "$BRANCH" ]; then
-        GIT_STATUS=""
+            # Parse status lines for staged/unstaged (pure bash, no grep)
+            # Status lines start after first line; check first two chars of each
+            REST="${GIT_STATUS_OUT#*$'\n'}"
+            has_unstaged="" has_staged=""
+            while IFS= read -r line; do
+                [ -z "$line" ] && continue
+                [ -z "$has_unstaged" ] && case "${line:1:1}" in [MADRC]) has_unstaged=1;; esac
+                [ -z "$has_staged" ] && case "${line:0:1}" in [MADRC]) has_staged=1;; esac
+                [ -n "$has_unstaged" ] && [ -n "$has_staged" ] && break
+            done <<< "$REST"
+            [ -n "$has_unstaged" ] && GIT_STATUS+="*"
+            [ -n "$has_staged" ] && GIT_STATUS+="+"
 
-        # Parse status lines for staged/unstaged (pure bash, no grep)
-        # Status lines start after first line; check first two chars of each
-        REST="${GIT_STATUS_OUT#*$'\n'}"
-        has_unstaged="" has_staged=""
-        while IFS= read -r line; do
-            [ -z "$line" ] && continue
-            [ -z "$has_unstaged" ] && case "${line:1:1}" in [MADRC]) has_unstaged=1;; esac
-            [ -z "$has_staged" ] && case "${line:0:1}" in [MADRC]) has_staged=1;; esac
-            [ -n "$has_unstaged" ] && [ -n "$has_staged" ] && break
-        done <<< "$REST"
-        [ -n "$has_unstaged" ] && GIT_STATUS+="*"
-        [ -n "$has_staged" ] && GIT_STATUS+="+"
+            # Extract ahead/behind from first line
+            [[ "$FIRST_LINE" =~ ahead\ ([0-9]+) ]] && GIT_STATUS+="↑${BASH_REMATCH[1]}"
+            [[ "$FIRST_LINE" =~ behind\ ([0-9]+) ]] && GIT_STATUS+="↓${BASH_REMATCH[1]}"
 
-        # Extract ahead/behind from first line
-        [[ "$FIRST_LINE" =~ ahead\ ([0-9]+) ]] && GIT_STATUS+="↑${BASH_REMATCH[1]}"
-        [[ "$FIRST_LINE" =~ behind\ ([0-9]+) ]] && GIT_STATUS+="↓${BASH_REMATCH[1]}"
+            # Stash check via refs/stash avoids walking the stash reflog.
+            if git rev-parse --verify refs/stash >/dev/null 2>>"$STATUSLINE_DEBUG_LOG"; then
+                GIT_STATUS+="\$"
+            fi
 
-        # Stash check (still need separate call)
-        [ -n "$(git stash list 2>>"$STATUSLINE_DEBUG_LOG" | head -1)" ] && GIT_STATUS+="\$"
-
-        BRANCH="${BRANCH}${GIT_STATUS}"
+            BRANCH="${BRANCH}${GIT_STATUS}"
+        fi
+    else
+        debug_log "Failed to read git status for $GIT_ROOT; omitting branch info"
+        BRANCH=""
     fi
 fi
 
@@ -280,58 +353,60 @@ if [ "$SESSION_TOKENS" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG" || [ "$ALL_TIME_TOKENS
         # All-time display with trophy
         USE_TOKENS="$ALL_TIME_TOKENS"
         USE_COST="$ALL_TIME_COST"
+        printf -v USE_COST_FMT '%.2f' "$USE_COST"
         TROPHY=" 🏆"
         if [ "$IS_ABSURD" -eq 1 ]; then
             # All-time absurd: rotate through absurd items
-            METRIC_INFO="${DIM}$(format_absurd_cost $USE_COST $ALLTIME_ABSURD_INDEX)${TROPHY}${RESET}"
+            METRIC_INFO="${DIM}$(format_absurd_cost "$USE_COST" "$ALLTIME_ABSURD_INDEX")${TROPHY}${RESET}"
         else
-            # All-time normal: 10 cost + coal + reactor + tokens + cost + data = 15 item cycle
+            # All-time normal: cost-item catalog + coal + reactor + tokens + cost + data
             # Use NOW_DIV_10/CYCLE_LEN so cycle advances each time the outer cycle completes
             # (avoids modular conflict with CYCLE_POS which also uses NOW_DIV_10)
-            ALLTIME_NORMAL_CYCLE=$(( (NOW_DIV_10 / CYCLE_LEN) % 15 ))
+            ALLTIME_NORMAL_CYCLE=$(( (NOW_DIV_10 / CYCLE_LEN) % ALLTIME_NORMAL_ITEM_COUNT ))
             if [ "$ALLTIME_NORMAL_CYCLE" -eq 10 ]; then
                 # Coal (fun power index 6)
-                METRIC_INFO="${DIM}$(format_fun_power $USE_TOKENS 6)${TROPHY}${RESET}"
+                METRIC_INFO="${DIM}$(format_fun_power "$USE_TOKENS" "6")${TROPHY}${RESET}"
             elif [ "$ALLTIME_NORMAL_CYCLE" -eq 11 ]; then
                 # Reactor output (fun power index 7)
-                METRIC_INFO="${DIM}$(format_fun_power $USE_TOKENS 7)${TROPHY}${RESET}"
+                METRIC_INFO="${DIM}$(format_fun_power "$USE_TOKENS" "7")${TROPHY}${RESET}"
             elif [ "$ALLTIME_NORMAL_CYCLE" -eq 12 ]; then
-                METRIC_INFO="${DIM}🎟️ $(format_number $USE_TOKENS)${TROPHY}${RESET}"
+                METRIC_INFO="${DIM}🎟️ $(format_number "$USE_TOKENS")${TROPHY}${RESET}"
             elif [ "$ALLTIME_NORMAL_CYCLE" -eq 13 ]; then
-                METRIC_INFO="${DIM}💰 \$$(printf "%.2f" "$USE_COST")${TROPHY}${RESET}"
+                METRIC_INFO="${DIM}💰 \$$USE_COST_FMT${TROPHY}${RESET}"
             elif [ "$ALLTIME_NORMAL_CYCLE" -eq 14 ]; then
-                METRIC_INFO="${DIM}📡 $(format_data $USE_TOKENS)${TROPHY}${RESET}"
+                METRIC_INFO="${DIM}📡 $(format_data "$USE_TOKENS")${TROPHY}${RESET}"
             else
                 ALLTIME_COST_ID=${ALLTIME_COST_ITEMS[$ALLTIME_NORMAL_CYCLE]}
-                METRIC_INFO="${DIM}$(format_fun_cost $USE_COST $ALLTIME_COST_ID)${TROPHY}${RESET}"
+                METRIC_INFO="${DIM}$(format_fun_cost "$USE_COST" "$ALLTIME_COST_ID")${TROPHY}${RESET}"
             fi
         fi
     else
         # Session display: 4 equal categories (25% each)
         USE_TOKENS="$SESSION_TOKENS"
         USE_COST="$TOTAL_COST"
+        printf -v USE_COST_FMT '%.2f' "$USE_COST"
         TROPHY=""
 
         case $CATEGORY_INDEX in
             0)  # Water category (25%): standard water only
-                METRIC_INFO="${DIM}💧 $(format_water $USE_TOKENS)${RESET}"
+                METRIC_INFO="${DIM}💧 $(format_water "$USE_TOKENS")${RESET}"
                 ;;
             1)  # Power category (25%)
                 if [ "$POWER_ITEM_INDEX" -eq 0 ]; then
-                    METRIC_INFO="${DIM}⚡ $(format_power $USE_TOKENS)${RESET}"
+                    METRIC_INFO="${DIM}⚡ $(format_power "$USE_TOKENS")${RESET}"
                 else
-                    METRIC_INFO="${DIM}$(format_fun_power $USE_TOKENS $((POWER_ITEM_INDEX - 1)))${RESET}"
+                    METRIC_INFO="${DIM}$(format_fun_power "$USE_TOKENS" "$((POWER_ITEM_INDEX - 1))")${RESET}"
                 fi
                 ;;
             2)  # Utility category (25%)
                 case $UTILITY_ITEM_INDEX in
-                    0) METRIC_INFO="${DIM}🎟️ $(format_number $USE_TOKENS)${RESET}" ;;
-                    1) METRIC_INFO="${DIM}💰 \$$(printf "%.2f" "$USE_COST")${RESET}" ;;
-                    2) METRIC_INFO="${DIM}📡 $(format_data $USE_TOKENS)${RESET}" ;;
+                    0) METRIC_INFO="${DIM}🎟️ $(format_number "$USE_TOKENS")${RESET}" ;;
+                    1) METRIC_INFO="${DIM}💰 \$$USE_COST_FMT${RESET}" ;;
+                    2) METRIC_INFO="${DIM}📡 $(format_data "$USE_TOKENS")${RESET}" ;;
                 esac
                 ;;
             3)  # Fun cost category (25%)
-                METRIC_INFO="${DIM}$(format_fun_cost $USE_COST $FUN_COST_ITEM_ID)${RESET}"
+                METRIC_INFO="${DIM}$(format_fun_cost "$USE_COST" "$FUN_COST_ITEM_ID")${RESET}"
                 ;;
         esac
     fi
@@ -339,7 +414,7 @@ fi
 
 DURATION_INFO=""
 if [ "$DURATION_MS" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
-    DURATION_INFO="${DIM}⏱️ $(format_duration $DURATION_MS)${RESET}"
+    DURATION_INFO="${DIM}⏱️ $(format_duration "$DURATION_MS")${RESET}"
 fi
 
 # Format lines changed (show —/— if none)
@@ -362,8 +437,8 @@ fi
 # Rate limit data extracted from stdin (rate_limits.seven_day / five_hour)
 # Read extra_usage (credit overage) from cache and refresh it asynchronously when stale.
 EXTRA_UTIL=""
-WEEKLY_PCT=$(printf "%.0f" "$WEEKLY_USAGE" 2>>"$STATUSLINE_DEBUG_LOG")
-BURST_PCT=$(printf "%.0f" "$BURST_USAGE" 2>>"$STATUSLINE_DEBUG_LOG")
+WEEKLY_PCT=$(round_decimal_to_int_or_default "$WEEKLY_USAGE" 0 "weekly usage")
+BURST_PCT=$(round_decimal_to_int_or_default "$BURST_USAGE" 0 "burst usage")
 if [ "${WEEKLY_PCT:-0}" -ge 100 ] 2>>"$STATUSLINE_DEBUG_LOG" || [ "${BURST_PCT:-0}" -ge 100 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
     EXTRA_UTIL=$(get_extra_usage_util_nonblocking "$NOW")
 fi
@@ -382,8 +457,8 @@ BURST_INDICATOR="$(format_burst_indicator "$BURST_USAGE" "$BURST_RESETS" "$NOW")
 # Credit indicator (💳) - shown in overage (weekly or burst at 100%) with active credit spend
 CREDIT_INDICATOR=""
 if [ -n "$EXTRA_UTIL" ] && [ "$EXTRA_UTIL" != "_" ] && [ "$EXTRA_UTIL" != "null" ]; then
-    EXTRA_PCT=$(printf "%.0f" "$EXTRA_UTIL" 2>>"$STATUSLINE_DEBUG_LOG")
-    WEEKLY_PCT=$(printf "%.0f" "$WEEKLY_USAGE" 2>>"$STATUSLINE_DEBUG_LOG")
+    EXTRA_PCT=$(round_decimal_to_int_or_default "$EXTRA_UTIL" 0 "extra usage")
+    WEEKLY_PCT=$(round_decimal_to_int_or_default "$WEEKLY_USAGE" 0 "weekly usage")
     if [ "$EXTRA_PCT" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
         if [ "${WEEKLY_PCT:-0}" -ge 100 ] 2>>"$STATUSLINE_DEBUG_LOG" || [ "${BURST_PCT:-0}" -ge 100 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
             CREDIT_INDICATOR="${DIM}💳${EXTRA_PCT}%${RESET}"
@@ -414,8 +489,8 @@ else
 fi
 
 # Line 2: Context stats (under progress bar) + fun stats + model
-CTX_CURRENT=$(format_number $CURRENT_TOKENS)
-CTX_THRESHOLD=$(format_number $AUTO_COMPACT_THRESHOLD)
+CTX_CURRENT=$(format_number "$CURRENT_TOKENS")
+CTX_THRESHOLD=$(format_number "$AUTO_COMPACT_THRESHOLD")
 CTX_STATS="${CTX_CURRENT}/${CTX_THRESHOLD}"
 # Right-align to 13 chars so K stays under bar's right edge
 CTX_PADDED=$(printf "%13s" "$CTX_STATS")
