@@ -1,5 +1,17 @@
 # shellcheck shell=bash
 
+SECONDS_PER_DAY=${SECONDS_PER_DAY:-86400}
+SECONDS_PER_WEEK=${SECONDS_PER_WEEK:-$((7 * SECONDS_PER_DAY))}
+JSONL_CACHE_TTL=${JSONL_CACHE_TTL:-300}
+TREND_HISTORY_MAX_AGE=${TREND_HISTORY_MAX_AGE:-$SECONDS_PER_DAY}
+STATUSLINE_USAGE_DIR=$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+STATUSLINE_JSONL_PARSER=${STATUSLINE_JSONL_PARSER:-$STATUSLINE_USAGE_DIR/jsonl_parser.pl}
+
+is_decimal_value() {
+    local value=$1
+    [[ "$value" =~ ^-?([0-9]+([.][0-9]+)?|[.][0-9]+)$ ]]
+}
+
 # Calculate all-time usage from JSONL files (cached for 5 minutes)
 # Uses persistent per-file running sums so cache misses do not trigger full rescans.
 write_jsonl_cache() {
@@ -19,6 +31,15 @@ write_jsonl_cache() {
     printf '%s\n%s %s %s %s %s %s\n' \
         "$now" "$total_tokens" "$total_cost_cents" \
         "$total_input" "$total_output" "$total_cw" "$total_cr" > "$JSONL_CACHE"
+}
+
+emit_file_contents() {
+    local path=$1
+    local line
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        printf '%s\n' "$line"
+    done < "$path"
 }
 
 restore_jsonl_cache_from_state() {
@@ -47,26 +68,8 @@ cold_jsonl_scan() {
     local summary
     summary=$(find "$HOME/.claude/projects" "$HOME/.config/claude/projects" \
         -name "*.jsonl" -type f -not -type l -print0 2>>"$STATUSLINE_DEBUG_LOG" \
-        | xargs -0 cat 2>/dev/null | perl -e '
-        use strict;
-        my ($ti, $to, $tw, $tr, $tc) = (0, 0, 0, 0, 0);
-        while (<STDIN>) {
-            next unless /"message".*"usage"/;
-            my $is_opus = /claude-opus|opus-4/ ? 1 : 0;
-            my $in = /"input_tokens":(\d+)/ ? $1 : 0;
-            my $out = /"output_tokens":(\d+)/ ? $1 : 0;
-            my $cw = /"cache_creation_input_tokens":(\d+)/ ? $1 : 0;
-            my $cr = /"cache_read_input_tokens":(\d+)/ ? $1 : 0;
-            if ($is_opus) {
-                $tc += $in * 1500 + $out * 7500 + $cw * 1875 + $cr * 150;
-            } else {
-                $tc += $in * 300 + $out * 1500 + $cw * 375 + $cr * 30;
-            }
-            $ti += $in; $to += $out; $tw += $cw; $tr += $cr;
-        }
-        my $tt = $ti + $to + $tw + $tr;
-        printf "%d %d %d %d %d %d", $tt, $tc, $ti, $to, $tw, $tr;
-    ' 2>>"$STATUSLINE_DEBUG_LOG") || return 1
+        | xargs -0 cat 2>/dev/null | perl "$STATUSLINE_JSONL_PARSER" cold-scan \
+        2>>"$STATUSLINE_DEBUG_LOG") || return 1
 
     [ -n "$summary" ] || return 1
     write_jsonl_cache "$now" "$summary"
@@ -96,115 +99,9 @@ refresh_jsonl_state() {
     tmp_state=$(mktemp "${CACHE_DIR}/.jsonl-state-XXXXXX") || return 1
 
     summary=$(find "$HOME/.claude/projects" "$HOME/.config/claude/projects" \
-        -name "*.jsonl" -type f -not -type l -print0 2>>"$STATUSLINE_DEBUG_LOG" | perl -e '
-        use strict;
-        use warnings;
-
-        my ($state_path, $now, $out_path) = @ARGV;
-        my %old;
-
-        sub parse_usage {
-            my ($path, $start_pos) = @_;
-            my ($input, $output, $cache_write, $cache_read, $cost_units) = (0, 0, 0, 0, 0);
-
-            open my $fh, "<", $path or die "open $path: $!";
-            binmode $fh;
-            seek($fh, $start_pos, 0) if $start_pos;
-
-            while (my $line = <$fh>) {
-                next unless $line =~ /"message".*"usage"/;
-                my $is_opus = $line =~ /claude-opus|opus-4/ ? 1 : 0;
-                my $in = $line =~ /"input_tokens":(\d+)/ ? $1 : 0;
-                my $out = $line =~ /"output_tokens":(\d+)/ ? $1 : 0;
-                my $cw = $line =~ /"cache_creation_input_tokens":(\d+)/ ? $1 : 0;
-                my $cr = $line =~ /"cache_read_input_tokens":(\d+)/ ? $1 : 0;
-
-                if ($is_opus) {
-                    $cost_units += $in * 1500 + $out * 7500 + $cw * 1875 + $cr * 150;
-                } else {
-                    $cost_units += $in * 300 + $out * 1500 + $cw * 375 + $cr * 30;
-                }
-
-                $input += $in;
-                $output += $out;
-                $cache_write += $cw;
-                $cache_read += $cr;
-            }
-
-            close $fh;
-            return ($input + $output + $cache_write + $cache_read,
-                $cost_units, $input, $output, $cache_write, $cache_read);
-        }
-
-        if (open my $state_fh, "<", $state_path) {
-            scalar <$state_fh>;
-            scalar <$state_fh>;
-            while (my $line = <$state_fh>) {
-                chomp $line;
-                my ($mtime, $size, $tokens, $cost_units, $input, $output, $cw, $cr, $path) =
-                    split /\t/, $line, 9;
-                next unless defined $path;
-                $old{$path} = {
-                    mtime => $mtime + 0,
-                    size => $size + 0,
-                    tokens => $tokens + 0,
-                    cost_units => $cost_units + 0,
-                    input => $input + 0,
-                    output => $output + 0,
-                    cw => $cw + 0,
-                    cr => $cr + 0,
-                };
-            }
-            close $state_fh;
-        }
-
-        my $raw = do { local $/ = undef; <STDIN> // "" };
-        my @paths = sort grep { length } split /\0/, $raw;
-        my @records;
-        my ($total_tokens, $total_cost_units, $total_input, $total_output, $total_cw, $total_cr) =
-            (0, 0, 0, 0, 0, 0);
-
-        for my $path (@paths) {
-            my @stat = stat($path);
-            next unless @stat;
-
-            my ($mtime, $size) = ($stat[9], $stat[7]);
-            my ($tokens, $cost_units, $input, $output, $cw, $cr);
-            my $prev = $old{$path};
-
-            if ($prev && $size == $prev->{size} && $mtime == $prev->{mtime}) {
-                ($tokens, $cost_units, $input, $output, $cw, $cr) =
-                    @{$prev}{qw(tokens cost_units input output cw cr)};
-            } elsif ($prev && $size >= $prev->{size}) {
-                my ($delta_tokens, $delta_cost_units, $delta_input, $delta_output, $delta_cw, $delta_cr) =
-                    parse_usage($path, $prev->{size});
-                $tokens = $prev->{tokens} + $delta_tokens;
-                $cost_units = $prev->{cost_units} + $delta_cost_units;
-                $input = $prev->{input} + $delta_input;
-                $output = $prev->{output} + $delta_output;
-                $cw = $prev->{cw} + $delta_cw;
-                $cr = $prev->{cr} + $delta_cr;
-            } else {
-                ($tokens, $cost_units, $input, $output, $cw, $cr) = parse_usage($path, 0);
-            }
-
-            push @records, join("\t", $mtime, $size, $tokens, $cost_units, $input, $output, $cw, $cr, $path);
-            $total_tokens += $tokens;
-            $total_cost_units += $cost_units;
-            $total_input += $input;
-            $total_output += $output;
-            $total_cw += $cw;
-            $total_cr += $cr;
-        }
-
-        open my $out_fh, ">", $out_path or die "open $out_path: $!";
-        print {$out_fh} "$now\n";
-        print {$out_fh} "$total_tokens $total_cost_units $total_input $total_output $total_cw $total_cr\n";
-        print {$out_fh} "$_\n" for @records;
-        close $out_fh;
-
-        print "$total_tokens $total_cost_units $total_input $total_output $total_cw $total_cr";
-    ' "$JSONL_STATE" "$now" "$tmp_state" 2>>"$STATUSLINE_DEBUG_LOG") || {
+        -name "*.jsonl" -type f -not -type l -print0 2>>"$STATUSLINE_DEBUG_LOG" \
+        | perl "$STATUSLINE_JSONL_PARSER" refresh-state "$JSONL_STATE" "$now" "$tmp_state" \
+        2>>"$STATUSLINE_DEBUG_LOG") || {
         debug_log "Failed to refresh JSONL state from project logs; falling back to prior state if available"
         rm -f "$tmp_state"
         return 1
@@ -227,7 +124,7 @@ get_jsonl_totals() {
     # Check cache age
     if [ -f "$JSONL_CACHE" ]; then
         local cache_time
-        cache_time=$(head -1 "$JSONL_CACHE" 2>>"$STATUSLINE_DEBUG_LOG" || echo 0)
+        read -r cache_time < "$JSONL_CACHE" 2>>"$STATUSLINE_DEBUG_LOG" || cache_time=0
         if ! [[ "$cache_time" =~ ^[0-9]+$ ]]; then
             debug_log "Ignoring invalid JSONL cache timestamp in $JSONL_CACHE: ${cache_time:-<empty>}"
             cache_time=0
@@ -235,9 +132,9 @@ get_jsonl_totals() {
         cache_age=$((now - cache_time))
     fi
 
-    # Return cached values if fresh (300 seconds = 5 minutes)
-    if [ "$cache_age" -lt 300 ] && [ -f "$JSONL_CACHE" ]; then
-        cat "$JSONL_CACHE"
+    # Return cached values if fresh (JSONL_CACHE_TTL seconds = 5 minutes by default)
+    if [ "$cache_age" -lt "$JSONL_CACHE_TTL" ] && [ -f "$JSONL_CACHE" ]; then
+        emit_file_contents "$JSONL_CACHE"
         return
     fi
 
@@ -252,20 +149,20 @@ get_jsonl_totals() {
         state_age=$((now - state_time))
     fi
 
-    if [ "$state_age" -lt 300 ] && restore_jsonl_cache_from_state "$now"; then
-        cat "$JSONL_CACHE"
+    if [ "$state_age" -lt "$JSONL_CACHE_TTL" ] && restore_jsonl_cache_from_state "$now"; then
+        emit_file_contents "$JSONL_CACHE"
         return
     fi
 
     if refresh_jsonl_state "$now"; then
-        cat "$JSONL_CACHE"
+        emit_file_contents "$JSONL_CACHE"
         return
     fi
 
     # Fall back to the last persistent state if refresh fails.
     if restore_jsonl_cache_from_state "$now"; then
         debug_log "Using prior JSONL state after refresh failure"
-        cat "$JSONL_CACHE"
+        emit_file_contents "$JSONL_CACHE"
         return
     fi
 
@@ -316,7 +213,7 @@ read_extra_usage_cache() {
     case "$cache_value" in
         ""|_|null) EXTRA_USAGE_CACHE_VALUE="" ;;
         *)
-            if ! [[ "$cache_value" =~ ^-?([0-9]+([.][0-9]+)?|[.][0-9]+)$ ]]; then
+            if ! is_decimal_value "$cache_value"; then
                 debug_log "Ignoring invalid extra usage cache value in $EXTRA_USAGE_CACHE: ${cache_value:-<empty>}"
                 return 1
             fi
@@ -378,7 +275,7 @@ CURL_CONFIG
         return 1
     fi
 
-    if ! [[ "$extra_util" =~ ^-?([0-9]+([.][0-9]+)?|[.][0-9]+)$ ]]; then
+    if ! is_decimal_value "$extra_util"; then
         debug_log "Ignoring invalid extra usage utilization from Anthropic API: ${extra_util:-<empty>}"
         return 1
     fi
@@ -386,10 +283,57 @@ CURL_CONFIG
     write_extra_usage_cache "$now" "$extra_util"
 }
 
+get_path_mtime_epoch() {
+    local path=$1
+    local mtime=""
+
+    if ! [ -e "$path" ]; then
+        return 1
+    fi
+
+    if ! mtime=$(stat -f '%m' "$path" 2>>"$STATUSLINE_DEBUG_LOG"); then
+        if ! mtime=$(stat -c '%Y' "$path" 2>>"$STATUSLINE_DEBUG_LOG"); then
+            debug_log "Failed to read mtime for $path"
+            return 1
+        fi
+    fi
+
+    if ! [[ "$mtime" =~ ^[0-9]+$ ]]; then
+        debug_log "Ignoring invalid mtime for $path: ${mtime:-<empty>}"
+        return 1
+    fi
+
+    printf '%s\n' "$mtime"
+}
+
+acquire_extra_usage_lock() {
+    local now=$1
+    local lock_mtime lock_age
+    local stale_after=${EXTRA_USAGE_LOCK_STALE_SECS:-60}
+
+    if mkdir "$EXTRA_USAGE_LOCK" 2>>"$STATUSLINE_DEBUG_LOG"; then
+        return 0
+    fi
+
+    if ! [ -d "$EXTRA_USAGE_LOCK" ]; then
+        return 1
+    fi
+
+    lock_mtime=$(get_path_mtime_epoch "$EXTRA_USAGE_LOCK") || return 1
+    lock_age=$((now - lock_mtime))
+    if [ "$lock_age" -le "$stale_after" ]; then
+        return 1
+    fi
+
+    debug_log "Clearing stale extra usage refresh lock (${lock_age}s old)"
+    rmdir "$EXTRA_USAGE_LOCK" 2>>"$STATUSLINE_DEBUG_LOG" || return 1
+    mkdir "$EXTRA_USAGE_LOCK" 2>>"$STATUSLINE_DEBUG_LOG"
+}
+
 start_extra_usage_refresh() {
     local now=${1:-${NOW:-$(date +%s)}}
 
-    mkdir "$EXTRA_USAGE_LOCK" 2>>"$STATUSLINE_DEBUG_LOG" || return 0
+    acquire_extra_usage_lock "$now" || return 0
     (
         trap 'rmdir "$EXTRA_USAGE_LOCK" 2>>"$STATUSLINE_DEBUG_LOG" || true' EXIT
         refresh_extra_usage_cache_now "$now" >/dev/null
@@ -424,16 +368,17 @@ get_trend_arrow() {
     # This replaces ~10 subprocess calls (tail, head, wc, 2x awk, sort, 4x bc) with 1
     # Data output goes to temp file via -v out variable (not stderr) to prevent
     # awk errors from corrupting history file
-    local tmp
-    tmp=$(mktemp "${CACHE_DIR}/.trend-XXXXXX") || return
+    local tmp="${USAGE_HISTORY}.tmp"
     touch "$USAGE_HISTORY" 2>>"$STATUSLINE_DEBUG_LOG"
+    : > "$tmp"
     local arrow_code
     if arrow_code=$(awk -F, -v now="$now" -v usage="$current_usage" \
         -v week_start="$week_start" -v trend_window="${TREND_WINDOW:-900}" \
+        -v trend_history_max_age="$TREND_HISTORY_MAX_AGE" \
         -v out="$tmp" '
     BEGIN {
         min_interval = 30
-        max_age = now - 86400
+        max_age = now - trend_history_max_age
         cutoff = now - trend_window
         anchor_interval = 14400
         sustainable = 0.00992
@@ -524,8 +469,16 @@ get_smart_pace_indicator() {
     local usage=$1
     local resets_at=$2
     local now=${3:-$(date +%s)}
-    [ -z "$usage" ] && echo "" && return
-    local pct=$(printf "%.0f" "$usage" 2>>"$STATUSLINE_DEBUG_LOG")
+    if [ -z "$usage" ] || [ "$usage" = "_" ] || [ "$usage" = "null" ]; then
+        echo ""
+        return
+    fi
+    local pct
+    if ! pct=$(printf "%.0f" "$usage" 2>>"$STATUSLINE_DEBUG_LOG"); then
+        debug_log "Invalid weekly usage value '${usage:-<empty>}'; omitting pace indicator"
+        echo ""
+        return
+    fi
     pct=${pct:-0}
 
     local reset_suffix=""
@@ -539,11 +492,11 @@ get_smart_pace_indicator() {
 
         if [ -n "$reset_epoch" ] && [ "$reset_epoch" -gt "$now" ]; then
             local seconds_until_reset=$((reset_epoch - now))
-            week_start=$((reset_epoch - 604800))  # 7 days before reset = week start
+            week_start=$((reset_epoch - SECONDS_PER_WEEK))  # 7 days before reset = week start
 
             # Use integer math: multiply by 10000 to preserve 4 decimal places
-            # 86400 seconds = 1 day
-            local days_until_x10k=$(( seconds_until_reset * 10000 / 86400 ))
+            # SECONDS_PER_DAY seconds = 1 day
+            local days_until_x10k=$(( seconds_until_reset * 10000 / SECONDS_PER_DAY ))
             days_elapsed_x10k=$(( 70000 - days_until_x10k ))  # 7 * 10000
 
             # Calculate burn rate: (pct / days_elapsed) * 7 / 100
