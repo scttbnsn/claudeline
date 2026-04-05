@@ -46,12 +46,12 @@ BURST_BRIGHT_MAG="\033[38;2;255;100;255m" # #FF64FF
 # Environmental impact rates (per million tokens)
 # Sources: arxiv:2304.03271 (water), arxiv:2505.09598 (energy), updated 2026
 # Water: 1gal=760k tokens (see format_water for full conversion table)
-KWH_PER_M=4.17         # Inference energy (~240k tokens/kWh)
-BYTES_PER_TOKEN=4      # ~4 chars/token for English text (BPE tokenizer avg)
+KWH_PER_M=4.17              # Inference energy (~240k tokens/kWh)
+MICRO_WH_PER_TOKEN=4170     # Exact fixed-point form of KWH_PER_M (4.17 kWh / 1M tokens)
+BYTES_PER_TOKEN=4           # ~4 chars/token for English text (BPE tokenizer avg)
 
 # Cache directory for API and JSONL data
 CACHE_DIR="$HOME/.claude-usage.d"
-API_CACHE="$CACHE_DIR/.api-cache"
 JSONL_CACHE="$CACHE_DIR/.jsonl-cache"
 TREND_CACHE="$CACHE_DIR/.trend-cache"
 USAGE_HISTORY="$CACHE_DIR/.usage-history"
@@ -138,107 +138,6 @@ get_jsonl_totals() {
     cat "$JSONL_CACHE"
 }
 
-# Parse ISO 8601 timestamp to epoch seconds (handles UTC offset)
-# macOS `date -j -f` ignores timezone in input — TZ=UTC fixes this
-# GNU `date -d` handles +00:00 natively when full string is passed
-parse_iso_epoch() {
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        # First 19 chars = YYYY-MM-DDTHH:MM:SS, strips fractional secs / Z / +offset
-        TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "${1:0:19}" +%s 2>/dev/null
-    else
-        date -d "$1" +%s 2>/dev/null
-    fi
-}
-
-# Get OAuth token from macOS Keychain (or Linux config)
-get_oauth_token() {
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        # macOS: get from Keychain
-        local creds=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null)
-        # Check if credentials are hex-encoded (newer Claude Code versions)
-        if [[ "$creds" =~ ^[0-9a-fA-F]+$ ]]; then
-            local decoded=$(echo "$creds" | xxd -r -p)
-            # Extract accessToken using regex (hex-decoded JSON may be malformed)
-            echo "$decoded" | grep -o '"accessToken":"[^"]*"' | head -1 | cut -d'"' -f4
-        else
-            echo "$creds" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null
-        fi
-    else
-        # Linux: check config file
-        local config_file="$HOME/.config/claude/credentials.json"
-        [ -f "$config_file" ] && jq -r '.claudeAiOauth.accessToken // empty' "$config_file" 2>/dev/null
-    fi
-}
-
-# Get usage data from API (cached for 10 minutes)
-# Returns: utilization resets_at burst_util burst_resets extra_util (space-separated)
-get_usage_data() {
-    local now=$(date +%s)
-    local cache_age=999999
-
-    # Check cache age
-    if [ -f "$API_CACHE" ]; then
-        local cache_time=$(head -1 "$API_CACHE" 2>/dev/null || echo 0)
-        cache_age=$((now - cache_time))
-    fi
-
-    # Return cached value if fresh (600 seconds = 10 minutes — avoids API rate limits)
-    if [ "$cache_age" -lt 600 ] && [ -f "$API_CACHE" ]; then
-        tail -1 "$API_CACHE" 2>/dev/null
-        return
-    fi
-
-    # Fetch fresh data
-    local token=$(get_oauth_token)
-    if [ -z "$token" ]; then
-        echo ""
-        return
-    fi
-
-    # Detect Claude Code version (cached for 1 hour)
-    local version_cache="$CACHE_DIR/.cc-version"
-    local cc_version="2.1.0"
-    local ver_age=999999
-    if [ -f "$version_cache" ]; then
-        local ver_time=$(head -1 "$version_cache" 2>/dev/null || echo 0)
-        ver_age=$((now - ver_time))
-    fi
-    if [ "$ver_age" -lt 3600 ] && [ -f "$version_cache" ]; then
-        cc_version=$(tail -1 "$version_cache" 2>/dev/null)
-    else
-        cc_version=$(claude --version 2>/dev/null | head -1 | grep -o '[0-9][0-9.]*' || echo "2.1.0")
-        echo -e "$now\n$cc_version" > "$version_cache"
-    fi
-
-    local response=$(curl -s --max-time 3 --config - \
-        -H "Accept: application/json" \
-        -H "Content-Type: application/json" \
-        -H "User-Agent: claude-code/${cc_version}" \
-        -H "anthropic-beta: oauth-2025-04-20" \
-        "https://api.anthropic.com/api/oauth/usage" <<CURL_CONFIG
-header = "Authorization: Bearer $token"
-CURL_CONFIG
-    2>/dev/null)
-
-    # Extract all fields in a single jq call (5 → 1)
-    local utilization resets_at burst_util burst_resets extra_util
-    IFS=$'\t' read -r utilization resets_at burst_util burst_resets extra_util <<< \
-        "$(echo "$response" | jq -r '[
-            (.seven_day.utilization // "_"),
-            (.seven_day.resets_at // "_"),
-            (.five_hour.utilization // "_"),
-            (.five_hour.resets_at // "_"),
-            (.extra_usage.utilization // "_")
-        ] | @tsv' 2>/dev/null)"
-
-    if [ -n "$utilization" ] && [ "$utilization" != "_" ]; then
-        echo -e "$now\n$utilization $resets_at $burst_util $burst_resets $extra_util" > "$API_CACHE"
-        echo "$utilization $resets_at $burst_util $burst_resets $extra_util"
-    else
-        # Return stale cache if API fails
-        [ -f "$API_CACHE" ] && tail -1 "$API_CACHE" 2>/dev/null
-    fi
-}
 
 # Get trend arrow based on usage% velocity
 # Tracks how fast you're burning tokens vs sustainable rate
@@ -254,9 +153,9 @@ get_trend_arrow() {
     # This replaces ~10 subprocess calls (tail, head, wc, 2x awk, sort, 4x bc) with 1
     # Data output goes to temp file via -v out variable (not stderr) to prevent
     # awk errors from corrupting history file
-    local tmp="${USAGE_HISTORY}.tmp"
+    local tmp
+    tmp=$(mktemp "${CACHE_DIR}/.trend-XXXXXX") || return
     touch "$USAGE_HISTORY" 2>/dev/null
-    : > "$tmp" 2>/dev/null
     local arrow_code
     if arrow_code=$(awk -F, -v now="$now" -v usage="$current_usage" \
         -v week_start="$week_start" -v trend_window="${TREND_WINDOW:-900}" \
@@ -364,8 +263,7 @@ get_smart_pace_indicator() {
     local pressure_x10k=10000      # 1.0 * 10000 (default: on pace)
 
     if [ -n "$resets_at" ] && [ "$resets_at" != "_" ] && [ "$resets_at" != "null" ]; then
-        local reset_epoch
-        reset_epoch=$(parse_iso_epoch "$resets_at")
+        local reset_epoch="$resets_at"  # Already epoch seconds from status line JSON
 
         if [ -n "$reset_epoch" ] && [ "$reset_epoch" -gt "$now" ]; then
             local seconds_until_reset=$((reset_epoch - now))
@@ -457,7 +355,8 @@ get_smart_pace_indicator() {
 # Extract all values in a single jq call (11 calls → 1)
 # Use tab delimiter to handle spaces in values (e.g. "Claude Opus 4.5")
 IFS=$'\t' read -r MODEL CURRENT_DIR LINES_ADDED LINES_REMOVED \
-    TOTAL_INPUT TOTAL_OUTPUT DURATION_MS TOTAL_COST CURRENT_TOKENS CONTEXT_WINDOW_SIZE <<< \
+    TOTAL_INPUT TOTAL_OUTPUT DURATION_MS TOTAL_COST CURRENT_TOKENS CONTEXT_WINDOW_SIZE \
+    WEEKLY_USAGE RESETS_AT BURST_USAGE BURST_RESETS <<< \
     "$(echo "$input" | jq -r '[
         (.model.display_name // "Claude"),
         (.workspace.current_dir // ""),
@@ -470,7 +369,11 @@ IFS=$'\t' read -r MODEL CURRENT_DIR LINES_ADDED LINES_REMOVED \
         ((.context_window.current_usage.input_tokens // 0) +
          (.context_window.current_usage.cache_creation_input_tokens // 0) +
          (.context_window.current_usage.cache_read_input_tokens // 0)),
-        (.context_window.context_window_size // 200000)
+        (.context_window.context_window_size // 200000),
+        (.rate_limits.seven_day.used_percentage // "_"),
+        (.rate_limits.seven_day.resets_at // "_"),
+        (.rate_limits.five_hour.used_percentage // "_"),
+        (.rate_limits.five_hour.resets_at // "_")
     ] | @tsv')"
 
 # Derived values (pure bash math, no bc)
@@ -710,50 +613,103 @@ format_count() {
     fi
 }
 
+# Integer helpers for hot-path formatters
+mul_div_floor() {
+    local value=$1
+    local numerator=$2
+    local denominator=$3
+    local quotient=$((value / denominator))
+    local remainder=$((value % denominator))
+    echo $(( quotient * numerator + (remainder * numerator) / denominator ))
+}
+
+mul_div_round() {
+    local value=$1
+    local numerator=$2
+    local denominator=$3
+    local quotient=$((value / denominator))
+    local remainder=$((value % denominator))
+    echo $(( quotient * numerator + ((remainder * numerator) + (denominator / 2)) / denominator ))
+}
+
+format_tenths() {
+    local tenths=$1
+    if [ $((tenths % 10)) -eq 0 ]; then
+        echo $((tenths / 10))
+    else
+        echo "$((tenths / 10)).$((tenths % 10))"
+    fi
+}
+
+scaled6_to_decimal() {
+    local scaled=$1
+    printf "%d.%06d" $((scaled / 1000000)) $((scaled % 1000000))
+}
+
+scaled10_to_decimal() {
+    local scaled=$1
+    printf "%d.%010d" $((scaled / 10000000000)) $((scaled % 10000000000))
+}
+
+format_count_scaled6() {
+    local scaled=$1
+
+    if [ "$scaled" -ge 1000000000000 ]; then
+        local count=$(printf "%.1f" "$(scaled6_to_decimal $((scaled / 1000000)))")
+        echo "${count%.0}M"
+    elif [ "$scaled" -ge 1000000000 ]; then
+        local count=$(printf "%.1f" "$(scaled6_to_decimal $((scaled / 1000)))")
+        echo "${count%.0}K"
+    elif [ "$scaled" -ge 1000000 ]; then
+        local count=$(printf "%.1f" "$(scaled6_to_decimal "$scaled")")
+        echo "${count%.0}"
+    else
+        printf "%.2g" "$(scaled6_to_decimal "$scaled")"
+    fi
+}
+
 # Format water with dynamic units (drops → tsp → tbsp → oz → cups → pints → quarts → gal)
 # Conversion rates: 1 drop=17tok, 1tsp=1k, 1tbsp=3k, 1oz=6k, 1cup=48k, 1pint=95k, 1qt=190k, 1gal=760k
 format_water() {
     local tokens=$1
     [ "$tokens" -eq 0 ] && echo "0 drops" && return
-    local val unit
+    local tenths unit
     if [ "$tokens" -lt 1000 ]; then
-        val=$(printf "%.1f" "$(echo "scale=1; $tokens / 17" | bc)"); unit="drops"
+        tenths=$((tokens * 10 / 17)); unit="drops"
     elif [ "$tokens" -lt 3000 ]; then
-        val=$(printf "%.1f" "$(echo "scale=1; $tokens / 1000" | bc)"); unit="teaspoons"
+        tenths=$((tokens / 100)); unit="teaspoons"
     elif [ "$tokens" -lt 6000 ]; then
-        val=$(printf "%.1f" "$(echo "scale=1; $tokens / 3000" | bc)"); unit="tablespoons"
+        tenths=$((tokens / 300)); unit="tablespoons"
     elif [ "$tokens" -lt 48000 ]; then
-        val=$(printf "%.1f" "$(echo "scale=1; $tokens / 6000" | bc)"); unit="fluid-ounces"
+        tenths=$((tokens / 600)); unit="fluid-ounces"
     elif [ "$tokens" -lt 95000 ]; then
-        val=$(printf "%.1f" "$(echo "scale=1; $tokens / 48000" | bc)"); unit="cups"
+        tenths=$((tokens / 4800)); unit="cups"
     elif [ "$tokens" -lt 190000 ]; then
-        val=$(printf "%.1f" "$(echo "scale=1; $tokens / 95000" | bc)"); unit="pints"
+        tenths=$((tokens * 10 / 95000)); unit="pints"
     elif [ "$tokens" -lt 760000 ]; then
-        val=$(printf "%.1f" "$(echo "scale=1; $tokens / 190000" | bc)"); unit="quarts"
+        tenths=$((tokens / 19000)); unit="quarts"
     else
-        val=$(printf "%.1f" "$(echo "scale=1; $tokens / 760000" | bc)"); unit="gallons"
+        tenths=$((tokens / 76000)); unit="gallons"
     fi
-    val="${val%.0}"
-    echo "$val $unit"
+    echo "$(format_tenths "$tenths") $unit"
 }
 
 # Format power with dynamic units (Wh → kWh → MWh)
 format_power() {
     local tokens=$1
     [ "$tokens" -eq 0 ] && echo "0 watt-hours" && return
-    # Calculate Wh using KWH_PER_M rate (~240k tokens/kWh)
-    local wh=$(echo "scale=0; $tokens * $KWH_PER_M * 1000 / 1000000" | bc)
-    local val unit
+    local micro_wh=$((tokens * MICRO_WH_PER_TOKEN))
+    local wh=$((micro_wh / 1000000))
+    local tenths unit
     if [ "$wh" -lt 1000 ]; then
         echo "${wh} watt-hours"
         return
     elif [ "$wh" -lt 1000000 ]; then
-        val=$(printf "%.1f" "$(echo "scale=1; $wh / 1000" | bc)"); unit="kilowatt-hours"
+        tenths=$((wh / 100)); unit="kilowatt-hours"
     else
-        val=$(printf "%.1f" "$(echo "scale=1; $wh / 1000000" | bc)"); unit="megawatt-hours"
+        tenths=$((wh / 100000)); unit="megawatt-hours"
     fi
-    val="${val%.0}"
-    echo "$val $unit"
+    echo "$(format_tenths "$tenths") $unit"
 }
 
 # Format data transfer with dynamic units (B → KB → MB → GB)
@@ -789,9 +745,8 @@ format_fun_power() {
     local item_idx=${2:-$(( (NOW / 10) % ${#FUN_POWER_EMOJI[@]} ))}  # Optional: explicit item index
     [ "$tokens" -eq 0 ] && echo "⚡ 0h phone-charging" && return
 
-    # Calculate Wh using KWH_PER_M rate
-    local wh=$(echo "scale=6; $tokens * $KWH_PER_M * 1000 / 1000000" | bc)
-    [[ "$wh" == .* ]] && wh="0$wh"
+    local micro_wh=$((tokens * MICRO_WH_PER_TOKEN))
+    local kwh_scaled6=$((micro_wh / 1000))
 
     local emoji="${FUN_POWER_EMOJI[$item_idx]}"
     local name="${FUN_POWER_NAME[$item_idx]}"
@@ -799,79 +754,66 @@ format_fun_power() {
 
     # Special case: distance-based items (4xe=-1 @ 1.45mi/kWh, jet=-2 @ 0.00673mi/kWh)
     if [ "$watts" -eq -1 ] || [ "$watts" -eq -2 ]; then
-        local kwh=$(echo "scale=6; $wh / 1000" | bc)
-        [[ "$kwh" == .* ]] && kwh="0$kwh"
-        local mi_per_kwh="1.45"
-        [ "$watts" -eq -2 ] && mi_per_kwh="0.01942"
-        local miles=$(echo "scale=6; $kwh * $mi_per_kwh" | bc)
-        [[ "$miles" == .* ]] && miles="0$miles"
-        local feet=$(echo "scale=1; $miles * 5280" | bc)
-        [[ "$feet" == .* ]] && feet="0$feet"
-        local cm=$(echo "scale=1; $miles * 160934.4" | bc)
-        [[ "$cm" == .* ]] && cm="0$cm"
+        local miles_scaled6 feet_tenths dist_val dist_unit
+        if [ "$watts" -eq -1 ]; then
+            miles_scaled6=$(mul_div_floor "$kwh_scaled6" 145 100)
+        else
+            miles_scaled6=$(mul_div_floor "$kwh_scaled6" 1942 100000)
+        fi
 
-        local dist_val dist_unit
-        if [ "$(echo "$miles >= 1" | bc)" -eq 1 ]; then
-            dist_val=$(printf "%.1f" "$miles")
+        if [ "$miles_scaled6" -ge 1000000 ]; then
+            dist_val=$(printf "%.1f" "$(scaled6_to_decimal "$miles_scaled6")")
             dist_val="${dist_val%.0}"
             dist_unit="mi"
-        elif [ "$(echo "$feet >= 1" | bc)" -eq 1 ]; then
-            dist_val=$(printf "%.1f" "$feet")
-            dist_val="${dist_val%.0}"
-            dist_unit="ft"
         else
-            dist_val=$(printf "%.1f" "$cm")
-            dist_val="${dist_val%.0}"
-            dist_unit="cm"
+            feet_tenths=$(mul_div_floor "$miles_scaled6" 33 625)
+            if [ "$feet_tenths" -ge 10 ]; then
+                dist_val=$(format_tenths "$(mul_div_round "$miles_scaled6" 33 625)")
+                dist_unit="ft"
+            else
+                dist_val=$(format_tenths "$(mul_div_round "$miles_scaled6" 25146 15625)")
+                dist_unit="cm"
+            fi
         fi
+
         echo "$emoji ${dist_val}${dist_unit} $name"
         return
     fi
 
     # Special case: coal shows mass burned at ~1 lb/kWh, scales to tons at 2000 lbs
     if [ "$watts" -eq 0 ]; then
-        local kwh=$(echo "scale=6; $wh / 1000" | bc)
-        [[ "$kwh" == .* ]] && kwh="0$kwh"
-        if [ "$(echo "$kwh >= 2000" | bc)" -eq 1 ]; then
-            local tons=$(echo "scale=6; $kwh / 2000" | bc)
-            local count=$(format_count "$tons")
+        if [ "$kwh_scaled6" -ge 2000000000 ]; then
+            local tons_scaled6=$((kwh_scaled6 / 2000))
+            local count=$(format_count_scaled6 "$tons_scaled6")
             echo "$emoji $count tons $name"
         else
-            local lbs=$(format_count "$kwh")
+            local lbs=$(format_count_scaled6 "$kwh_scaled6")
             echo "$emoji $lbs lbs $name"
         fi
         return
     fi
 
-    # Calculate hours of operation: Wh / W = hours
-    local hours=$(echo "scale=10; $wh / $watts" | bc)
-    [[ "$hours" == .* ]] && hours="0$hours"
-
-    # Format time with appropriate unit
+    # Match the legacy bc path: truncate hours to 10 decimals, then scale by unit.
+    local hours_scaled10=$(mul_div_floor "$micro_wh" 10000 "$watts")
     local time_val time_unit
-    if [ "$(echo "$hours >= 1" | bc)" -eq 1 ]; then
-        time_val=$(printf "%.1f" "$hours")
-        time_val="${time_val%.0}"
+    if [ "$hours_scaled10" -ge 10000000000 ]; then
+        time_val=$(printf "%.1f" "$(scaled10_to_decimal "$hours_scaled10")")
         time_unit="h"
-    elif [ "$(echo "$hours * 60 >= 1" | bc)" -eq 1 ]; then
-        time_val=$(printf "%.1f" "$(echo "$hours * 60" | bc)")
-        time_val="${time_val%.0}"
+    elif [ $((hours_scaled10 * 60)) -ge 10000000000 ]; then
+        time_val=$(printf "%.1f" "$(scaled10_to_decimal $((hours_scaled10 * 60)))")
         time_unit="m"
-    elif [ "$(echo "$hours * 3600 >= 1" | bc)" -eq 1 ]; then
-        time_val=$(printf "%.1f" "$(echo "$hours * 3600" | bc)")
-        time_val="${time_val%.0}"
+    elif [ $((hours_scaled10 * 3600)) -ge 10000000000 ]; then
+        time_val=$(printf "%.1f" "$(scaled10_to_decimal $((hours_scaled10 * 3600)))")
         time_unit="s"
-    elif [ "$(echo "$hours * 3600000 >= 1" | bc)" -eq 1 ]; then
-        time_val=$(printf "%.1f" "$(echo "$hours * 3600000" | bc)")
-        time_val="${time_val%.0}"
+    elif [ $((hours_scaled10 * 3600000)) -ge 10000000000 ]; then
+        time_val=$(printf "%.1f" "$(scaled10_to_decimal $((hours_scaled10 * 3600000)))")
         time_unit="ms"
     else
-        time_val=$(printf "%.1f" "$(echo "$hours * 3600000000" | bc)")
-        time_val="${time_val%.0}"
+        time_val=$(printf "%.1f" "$(scaled10_to_decimal $((hours_scaled10 * 3600000000)))")
         time_unit="µs"
     fi
 
-    echo "$emoji ${time_val}${time_unit} $name"
+    echo "$emoji ${time_val%.0}$time_unit $name"
 }
 
 # Fun money conversions - NORMAL items (session + all-time normal)
@@ -1129,8 +1071,34 @@ else
     REPO_BRANCH="${SKY}${DIR_NAME}${RESET}"
 fi
 
-# Get usage data from API
-read -r WEEKLY_USAGE RESETS_AT BURST_USAGE BURST_RESETS EXTRA_UTIL <<< "$(get_usage_data)"
+# Rate limit data extracted from stdin (rate_limits.seven_day / five_hour)
+# Fetch extra_usage (credit overage) from API only when at limit — avoids the call 99% of the time
+EXTRA_UTIL=""
+WEEKLY_PCT=$(printf "%.0f" "$WEEKLY_USAGE" 2>/dev/null)
+BURST_PCT_RAW=$(printf "%.0f" "$BURST_USAGE" 2>/dev/null)
+if [ "${WEEKLY_PCT:-0}" -ge 100 ] 2>/dev/null || [ "${BURST_PCT_RAW:-0}" -ge 100 ] 2>/dev/null; then
+    _oauth_token=""
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        _creds=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null)
+        # Credentials may be hex-encoded (newer Claude Code) or plain JSON
+        if [[ "$_creds" =~ ^[0-9a-fA-F]+$ ]]; then
+            _creds=$(echo "$_creds" | xxd -r -p)
+        fi
+        _oauth_token=$(echo "$_creds" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
+    else
+        _cfg="$HOME/.config/claude/credentials.json"
+        [ -f "$_cfg" ] && _oauth_token=$(jq -r '.claudeAiOauth.accessToken // empty' "$_cfg" 2>/dev/null)
+    fi
+    if [ -n "$_oauth_token" ]; then
+        EXTRA_UTIL=$(curl -s --max-time 2 --config - \
+            -H "Accept: application/json" \
+            -H "anthropic-beta: oauth-2025-04-20" \
+            "https://api.anthropic.com/api/oauth/usage" <<CURL_CONFIG
+header = "Authorization: Bearer $_oauth_token"
+CURL_CONFIG
+        2>/dev/null | jq -r '.extra_usage.utilization // "_"' 2>/dev/null)
+    fi
+fi
 
 # Smart pace indicator (trend-based)
 PACE_INDICATOR=""
@@ -1149,7 +1117,7 @@ if [ -n "$BURST_USAGE" ] && [ "$BURST_USAGE" != "_" ] && [ "$BURST_USAGE" != "nu
         if [ "$BURST_PCT" -ge 100 ]; then
             burst_reset_epoch=""
             if [ -n "$BURST_RESETS" ] && [ "$BURST_RESETS" != "_" ] && [ "$BURST_RESETS" != "null" ]; then
-                burst_reset_epoch=$(parse_iso_epoch "$BURST_RESETS")
+                burst_reset_epoch="$BURST_RESETS"  # Already epoch seconds
             fi
             if [ -n "$burst_reset_epoch" ]; then
                 now_epoch=$NOW
@@ -1187,7 +1155,7 @@ if [ -n "$BURST_USAGE" ] && [ "$BURST_USAGE" != "_" ] && [ "$BURST_USAGE" != "nu
         # Show countdown at top two levels (75%+)
         burst_reset_epoch=""
         if [ -n "$BURST_RESETS" ] && [ "$BURST_RESETS" != "_" ] && [ "$BURST_RESETS" != "null" ]; then
-            burst_reset_epoch=$(parse_iso_epoch "$BURST_RESETS")
+            burst_reset_epoch="$BURST_RESETS"  # Already epoch seconds
         fi
         if [ "$BURST_PCT" -ge 75 ] && [ -n "$burst_reset_epoch" ]; then
             now_epoch=$NOW
