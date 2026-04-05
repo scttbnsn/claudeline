@@ -4,6 +4,60 @@
 
 input=$(cat)
 
+# Optional debug logging for suppressed stderr paths.
+STATUSLINE_DEBUG_ENABLED=0
+case "${CLAUDELINE_DEBUG:-}" in
+    1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]) STATUSLINE_DEBUG_ENABLED=1 ;;
+esac
+STATUSLINE_DEBUG_LOG="/dev/null"
+if [ "$STATUSLINE_DEBUG_ENABLED" -eq 1 ]; then
+    STATUSLINE_DEBUG_LOG="${CLAUDELINE_DEBUG_LOG:-${TMPDIR:-/tmp}/claudeline-statusline-debug.log}"
+    mkdir -p "$(dirname "$STATUSLINE_DEBUG_LOG")" 2>/dev/null || true
+    : >> "$STATUSLINE_DEBUG_LOG" 2>/dev/null || STATUSLINE_DEBUG_LOG="/dev/null"
+fi
+
+debug_log() {
+    [ "$STATUSLINE_DEBUG_ENABLED" -eq 1 ] || return 0
+    printf '[%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >> "$STATUSLINE_DEBUG_LOG"
+}
+
+normalize_int_var() {
+    local var_name=$1
+    local default_value=$2
+    local label=${3:-$var_name}
+    local value=${!var_name-}
+    if ! [[ "$value" =~ ^-?[0-9]+$ ]]; then
+        debug_log "Invalid $label value '${value:-<empty>}'; defaulting to $default_value"
+        printf -v "$var_name" '%s' "$default_value"
+    fi
+}
+
+normalize_decimal_var() {
+    local var_name=$1
+    local default_value=$2
+    local label=${3:-$var_name}
+    local value=${!var_name-}
+    if ! [[ "$value" =~ ^-?([0-9]+([.][0-9]+)?|[.][0-9]+)$ ]]; then
+        debug_log "Invalid $label value '${value:-<empty>}'; defaulting to $default_value"
+        printf -v "$var_name" '%s' "$default_value"
+    fi
+}
+
+normalize_rate_var() {
+    local var_name=$1
+    local label=${2:-$var_name}
+    local value=${!var_name-}
+    case "$value" in
+        ""|_|null) printf -v "$var_name" '%s' "_" ;;
+        *)
+            if ! [[ "$value" =~ ^-?([0-9]+([.][0-9]+)?|[.][0-9]+)$ ]]; then
+                debug_log "Invalid $label value '${value:-<empty>}'; defaulting to _"
+                printf -v "$var_name" '%s' "_"
+            fi
+            ;;
+    esac
+}
+
 # Colors (24-bit true color - vibey 2025 palette)
 RESET="\033[0m"
 BOLD="\033[1m"
@@ -53,15 +107,19 @@ BYTES_PER_TOKEN=4           # ~4 chars/token for English text (BPE tokenizer avg
 # Cache directory for API and JSONL data
 CACHE_DIR="$HOME/.claude-usage.d"
 JSONL_CACHE="$CACHE_DIR/.jsonl-cache"
+JSONL_STATE="$CACHE_DIR/.jsonl-state"
 TREND_CACHE="$CACHE_DIR/.trend-cache"
 USAGE_HISTORY="$CACHE_DIR/.usage-history"
 TREND_WINDOW=900   # 15 minutes in seconds
-mkdir -p "$CACHE_DIR" 2>/dev/null && chmod 700 "$CACHE_DIR" 2>/dev/null
+mkdir -p "$CACHE_DIR" 2>>"$STATUSLINE_DEBUG_LOG" && chmod 700 "$CACHE_DIR" 2>>"$STATUSLINE_DEBUG_LOG"
 
 # Read auto-compact setting from Claude Code config
 CLAUDE_JSON="$HOME/.claude.json"
 if [ -f "$CLAUDE_JSON" ]; then
-    AUTO_COMPACT_ON=$(jq -r 'if has("autoCompactEnabled") then (.autoCompactEnabled | tostring) else "true" end' "$CLAUDE_JSON" 2>/dev/null)
+    if ! AUTO_COMPACT_ON=$(jq -r 'if has("autoCompactEnabled") then (.autoCompactEnabled | tostring) else "true" end' "$CLAUDE_JSON" 2>>"$STATUSLINE_DEBUG_LOG"); then
+        debug_log "Failed to parse Claude config at $CLAUDE_JSON; defaulting autoCompactEnabled=true"
+        AUTO_COMPACT_ON="true"
+    fi
 else
     AUTO_COMPACT_ON="true"
 fi
@@ -80,14 +138,187 @@ OPUS_CACHE_WRITE=18.75
 OPUS_CACHE_READ=1.50
 
 # Calculate all-time usage from JSONL files (cached for 5 minutes)
-# Uses perl for cross-platform regex support (works on macOS and Linux)
+# Uses persistent per-file running sums so cache misses do not trigger full rescans.
+write_jsonl_cache() {
+    local now=$1
+    local summary=$2
+    local total_tokens total_cost_units total_input total_output total_cw total_cr
+    read -r total_tokens total_cost_units total_input total_output total_cw total_cr <<< "$summary"
+    total_tokens=${total_tokens:-0}
+    total_cost_units=${total_cost_units:-0}
+    total_input=${total_input:-0}
+    total_output=${total_output:-0}
+    total_cw=${total_cw:-0}
+    total_cr=${total_cr:-0}
+
+    # Cost units are millionths of a cent to preserve fractional pricing exactly.
+    local total_cost_cents=$(( (total_cost_units + 500000) / 1000000 ))
+    printf '%s\n%s %s %s %s %s %s\n' \
+        "$now" "$total_tokens" "$total_cost_cents" \
+        "$total_input" "$total_output" "$total_cw" "$total_cr" > "$JSONL_CACHE"
+}
+
+restore_jsonl_cache_from_state() {
+    local now=$1
+    [ -f "$JSONL_STATE" ] || return 1
+
+    local _state_time summary
+    exec 3<"$JSONL_STATE" || return 1
+    read -r _state_time <&3 || { exec 3<&-; return 1; }
+    read -r summary <&3 || { exec 3<&-; return 1; }
+    exec 3<&-
+
+    if ! [[ "$summary" =~ ^[0-9]+[[:space:]][0-9]+[[:space:]][0-9]+[[:space:]][0-9]+[[:space:]][0-9]+[[:space:]][0-9]+$ ]]; then
+        debug_log "Ignoring invalid JSONL state summary in $JSONL_STATE: ${summary:-<empty>}"
+        return 1
+    fi
+
+    [ -n "$summary" ] || return 1
+    write_jsonl_cache "$now" "$summary"
+}
+
+refresh_jsonl_state() {
+    local now=$1
+    local tmp_state summary
+    tmp_state=$(mktemp "${CACHE_DIR}/.jsonl-state-XXXXXX") || return 1
+
+    summary=$(find "$HOME/.claude/projects" "$HOME/.config/claude/projects" \
+        -name "*.jsonl" -type f -not -type l -print0 2>>"$STATUSLINE_DEBUG_LOG" | perl -e '
+        use strict;
+        use warnings;
+
+        my ($state_path, $now, $out_path) = @ARGV;
+        my %old;
+
+        sub parse_usage {
+            my ($path, $start_pos) = @_;
+            my ($input, $output, $cache_write, $cache_read, $cost_units) = (0, 0, 0, 0, 0);
+
+            open my $fh, "<", $path or die "open $path: $!";
+            binmode $fh;
+            seek($fh, $start_pos, 0) if $start_pos;
+
+            while (my $line = <$fh>) {
+                next unless $line =~ /"message".*"usage"/;
+                my $is_opus = $line =~ /claude-opus|opus-4/ ? 1 : 0;
+                my $in = $line =~ /"input_tokens":(\d+)/ ? $1 : 0;
+                my $out = $line =~ /"output_tokens":(\d+)/ ? $1 : 0;
+                my $cw = $line =~ /"cache_creation_input_tokens":(\d+)/ ? $1 : 0;
+                my $cr = $line =~ /"cache_read_input_tokens":(\d+)/ ? $1 : 0;
+
+                if ($is_opus) {
+                    $cost_units += $in * 1500 + $out * 7500 + $cw * 1875 + $cr * 150;
+                } else {
+                    $cost_units += $in * 300 + $out * 1500 + $cw * 375 + $cr * 30;
+                }
+
+                $input += $in;
+                $output += $out;
+                $cache_write += $cw;
+                $cache_read += $cr;
+            }
+
+            close $fh;
+            return ($input + $output + $cache_write + $cache_read,
+                $cost_units, $input, $output, $cache_write, $cache_read);
+        }
+
+        if (open my $state_fh, "<", $state_path) {
+            scalar <$state_fh>;
+            scalar <$state_fh>;
+            while (my $line = <$state_fh>) {
+                chomp $line;
+                my ($mtime, $size, $tokens, $cost_units, $input, $output, $cw, $cr, $path) =
+                    split /\t/, $line, 9;
+                next unless defined $path;
+                $old{$path} = {
+                    mtime => $mtime + 0,
+                    size => $size + 0,
+                    tokens => $tokens + 0,
+                    cost_units => $cost_units + 0,
+                    input => $input + 0,
+                    output => $output + 0,
+                    cw => $cw + 0,
+                    cr => $cr + 0,
+                };
+            }
+            close $state_fh;
+        }
+
+        my $raw = do { local $/ = undef; <STDIN> // "" };
+        my @paths = sort grep { length } split /\0/, $raw;
+        my @records;
+        my ($total_tokens, $total_cost_units, $total_input, $total_output, $total_cw, $total_cr) =
+            (0, 0, 0, 0, 0, 0);
+
+        for my $path (@paths) {
+            my @stat = stat($path);
+            next unless @stat;
+
+            my ($mtime, $size) = ($stat[9], $stat[7]);
+            my ($tokens, $cost_units, $input, $output, $cw, $cr);
+            my $prev = $old{$path};
+
+            if ($prev && $size == $prev->{size} && $mtime == $prev->{mtime}) {
+                ($tokens, $cost_units, $input, $output, $cw, $cr) =
+                    @{$prev}{qw(tokens cost_units input output cw cr)};
+            } elsif ($prev && $size >= $prev->{size}) {
+                my ($delta_tokens, $delta_cost_units, $delta_input, $delta_output, $delta_cw, $delta_cr) =
+                    parse_usage($path, $prev->{size});
+                $tokens = $prev->{tokens} + $delta_tokens;
+                $cost_units = $prev->{cost_units} + $delta_cost_units;
+                $input = $prev->{input} + $delta_input;
+                $output = $prev->{output} + $delta_output;
+                $cw = $prev->{cw} + $delta_cw;
+                $cr = $prev->{cr} + $delta_cr;
+            } else {
+                ($tokens, $cost_units, $input, $output, $cw, $cr) = parse_usage($path, 0);
+            }
+
+            push @records, join("\t", $mtime, $size, $tokens, $cost_units, $input, $output, $cw, $cr, $path);
+            $total_tokens += $tokens;
+            $total_cost_units += $cost_units;
+            $total_input += $input;
+            $total_output += $output;
+            $total_cw += $cw;
+            $total_cr += $cr;
+        }
+
+        open my $out_fh, ">", $out_path or die "open $out_path: $!";
+        print {$out_fh} "$now\n";
+        print {$out_fh} "$total_tokens $total_cost_units $total_input $total_output $total_cw $total_cr\n";
+        print {$out_fh} "$_\n" for @records;
+        close $out_fh;
+
+        print "$total_tokens $total_cost_units $total_input $total_output $total_cw $total_cr";
+    ' "$JSONL_STATE" "$now" "$tmp_state" 2>>"$STATUSLINE_DEBUG_LOG") || {
+        debug_log "Failed to refresh JSONL state from project logs; falling back to prior state if available"
+        rm -f "$tmp_state"
+        return 1
+    }
+
+    mv "$tmp_state" "$JSONL_STATE" 2>>"$STATUSLINE_DEBUG_LOG" || {
+        debug_log "Failed to atomically update $JSONL_STATE"
+        rm -f "$tmp_state"
+        return 1
+    }
+
+    write_jsonl_cache "$now" "${summary:-0 0 0 0 0 0}"
+}
+
 get_jsonl_totals() {
     local now=$(date +%s)
     local cache_age=999999
+    local state_age=999999
 
     # Check cache age
     if [ -f "$JSONL_CACHE" ]; then
-        local cache_time=$(head -1 "$JSONL_CACHE" 2>/dev/null || echo 0)
+        local cache_time
+        cache_time=$(head -1 "$JSONL_CACHE" 2>>"$STATUSLINE_DEBUG_LOG" || echo 0)
+        if ! [[ "$cache_time" =~ ^[0-9]+$ ]]; then
+            debug_log "Ignoring invalid JSONL cache timestamp in $JSONL_CACHE: ${cache_time:-<empty>}"
+            cache_time=0
+        fi
         cache_age=$((now - cache_time))
     fi
 
@@ -97,45 +328,36 @@ get_jsonl_totals() {
         return
     fi
 
-    # Incremental scan: only process files modified since last cache
-    # Falls back to full scan when no cache exists
-    local find_args=(-name "*.jsonl" -type f -not -type l -print0)
-    local prev_totals="0 0 0 0 0 0"
-
-    if [ -f "$JSONL_CACHE" ] && [ "$cache_age" -lt 999999 ]; then
-        # Incremental: add new data to cached running totals
-        prev_totals=$(tail -1 "$JSONL_CACHE" 2>/dev/null)
-        find_args=(-name "*.jsonl" -type f -not -type l -newer "$JSONL_CACHE" -print0)
+    # If the transient cache file is gone but persistent state is fresh, rebuild from it.
+    if [ -f "$JSONL_STATE" ]; then
+        local state_time
+        read -r state_time < "$JSONL_STATE" 2>>"$STATUSLINE_DEBUG_LOG" || state_time=0
+        if ! [[ "$state_time" =~ ^[0-9]+$ ]]; then
+            debug_log "Ignoring invalid JSONL state timestamp in $JSONL_STATE: ${state_time:-<empty>}"
+            state_time=0
+        fi
+        state_age=$((now - state_time))
     fi
 
-    read -r p_tok p_cost p_in p_out p_cw p_cr <<< "$prev_totals"
+    if [ "$state_age" -lt 300 ] && restore_jsonl_cache_from_state "$now"; then
+        cat "$JSONL_CACHE"
+        return
+    fi
 
-    local result=$(find "$HOME/.claude/projects" "$HOME/.config/claude/projects" \
-        "${find_args[@]}" 2>/dev/null | xargs -0 cat 2>/dev/null | perl -e '
-        use strict;
-        my ($pt,$pc,$pi,$po,$pw,$pr) = @ARGV;
-        my ($ti,$to,$tw,$tr,$tc) = ($pi,$po,$pw,$pr,$pc);
-        while (<STDIN>) {
-            next unless /"message".*"usage"/;
-            my $is_opus = /claude-opus|opus-4/ ? 1 : 0;
-            my $input = /"input_tokens":(\d+)/ ? $1 : 0;
-            my $output = /"output_tokens":(\d+)/ ? $1 : 0;
-            my $cache_write = /"cache_creation_input_tokens":(\d+)/ ? $1 : 0;
-            my $cache_read = /"cache_read_input_tokens":(\d+)/ ? $1 : 0;
-            if ($is_opus) {
-                $tc += ($input * 15 + $output * 75 + $cache_write * 18.75 + $cache_read * 1.50) / 10000;
-            } else {
-                $tc += ($input * 3 + $output * 15 + $cache_write * 3.75 + $cache_read * 0.30) / 10000;
-            }
-            $ti += $input; $to += $output; $tw += $cache_write; $tr += $cache_read;
-        }
-        my $tt = $ti + $to + $tw + $tr;
-        printf "%d %.0f %d %d %d %d", $tt, $tc, $ti, $to, $tw, $tr;
-    ' "$p_tok" "$p_cost" "$p_in" "$p_out" "$p_cw" "$p_cr" 2>/dev/null)
+    if refresh_jsonl_state "$now"; then
+        cat "$JSONL_CACHE"
+        return
+    fi
 
-    # Cache the results (first line = timestamp, then data)
-    echo -e "$now\n${result:-0 0 0 0 0 0}" > "$JSONL_CACHE"
-    cat "$JSONL_CACHE"
+    # Fall back to the last persistent state if refresh fails.
+    if restore_jsonl_cache_from_state "$now"; then
+        debug_log "Using prior JSONL state after refresh failure"
+        cat "$JSONL_CACHE"
+        return
+    fi
+
+    debug_log "JSONL totals unavailable; returning zeroed fallback"
+    printf '%s\n0 0 0 0 0 0\n' "$now"
 }
 
 
@@ -155,7 +377,7 @@ get_trend_arrow() {
     # awk errors from corrupting history file
     local tmp
     tmp=$(mktemp "${CACHE_DIR}/.trend-XXXXXX") || return
-    touch "$USAGE_HISTORY" 2>/dev/null
+    touch "$USAGE_HISTORY" 2>>"$STATUSLINE_DEBUG_LOG"
     local arrow_code
     if arrow_code=$(awk -F, -v now="$now" -v usage="$current_usage" \
         -v week_start="$week_start" -v trend_window="${TREND_WINDOW:-900}" \
@@ -222,8 +444,9 @@ get_trend_arrow() {
     }
     ' "$USAGE_HISTORY"); then
         # Replace history with pruned version only on success
-        mv "$tmp" "$USAGE_HISTORY" 2>/dev/null
+        mv "$tmp" "$USAGE_HISTORY" 2>>"$STATUSLINE_DEBUG_LOG"
     else
+        debug_log "Trend history update failed; falling back to stable arrow"
         rm -f "$tmp"
         arrow_code="stable"
     fi
@@ -253,7 +476,7 @@ get_smart_pace_indicator() {
     local resets_at=$2
     local now=${3:-$(date +%s)}
     [ -z "$usage" ] && echo "" && return
-    local pct=$(printf "%.0f" "$usage" 2>/dev/null)
+    local pct=$(printf "%.0f" "$usage" 2>>"$STATUSLINE_DEBUG_LOG")
     pct=${pct:-0}
 
     local reset_suffix=""
@@ -354,10 +577,8 @@ get_smart_pace_indicator() {
 
 # Extract all values in a single jq call (11 calls → 1)
 # Use tab delimiter to handle spaces in values (e.g. "Claude Opus 4.5")
-IFS=$'\t' read -r MODEL CURRENT_DIR LINES_ADDED LINES_REMOVED \
-    TOTAL_INPUT TOTAL_OUTPUT DURATION_MS TOTAL_COST CURRENT_TOKENS CONTEXT_WINDOW_SIZE \
-    WEEKLY_USAGE RESETS_AT BURST_USAGE BURST_RESETS <<< \
-    "$(echo "$input" | jq -r '[
+INPUT_FIELDS=""
+if ! INPUT_FIELDS=$(printf '%s\n' "$input" | jq -r '[
         (.model.display_name // "Claude"),
         (.workspace.current_dir // ""),
         (.cost.total_lines_added // 0),
@@ -374,11 +595,34 @@ IFS=$'\t' read -r MODEL CURRENT_DIR LINES_ADDED LINES_REMOVED \
         (.rate_limits.seven_day.resets_at // "_"),
         (.rate_limits.five_hour.used_percentage // "_"),
         (.rate_limits.five_hour.resets_at // "_")
-    ] | @tsv')"
+    ] | @tsv' 2>>"$STATUSLINE_DEBUG_LOG"); then
+    debug_log "Failed to parse statusline input; using defaults"
+    INPUT_FIELDS=$'Claude\t\t0\t0\t0\t0\t0\t0\t0\t200000\t_\t_\t_\t_'
+fi
+
+IFS=$'\t' read -r MODEL CURRENT_DIR LINES_ADDED LINES_REMOVED \
+    TOTAL_INPUT TOTAL_OUTPUT DURATION_MS TOTAL_COST CURRENT_TOKENS CONTEXT_WINDOW_SIZE \
+    WEEKLY_USAGE RESETS_AT BURST_USAGE BURST_RESETS <<< "$INPUT_FIELDS"
+
+normalize_int_var LINES_ADDED 0 "lines added"
+normalize_int_var LINES_REMOVED 0 "lines removed"
+normalize_int_var TOTAL_INPUT 0 "total input tokens"
+normalize_int_var TOTAL_OUTPUT 0 "total output tokens"
+normalize_int_var DURATION_MS 0 "duration ms"
+normalize_decimal_var TOTAL_COST 0 "total cost usd"
+normalize_int_var CURRENT_TOKENS 0 "current tokens"
+normalize_int_var CONTEXT_WINDOW_SIZE 200000 "context window size"
+normalize_rate_var WEEKLY_USAGE "weekly usage"
+normalize_rate_var BURST_USAGE "burst usage"
+normalize_int_var RESETS_AT 0 "weekly reset epoch"
+normalize_int_var BURST_RESETS 0 "burst reset epoch"
 
 # Derived values (pure bash math, no bc)
 SESSION_TOKENS=$((TOTAL_INPUT + TOTAL_OUTPUT))
-TOTAL_COST_CENTS=$(awk "BEGIN{printf \"%.0f\", $TOTAL_COST * 100}")
+if ! TOTAL_COST_CENTS=$(awk "BEGIN{printf \"%.0f\", $TOTAL_COST * 100}" 2>>"$STATUSLINE_DEBUG_LOG"); then
+    debug_log "Invalid total cost value '${TOTAL_COST:-<empty>}'; defaulting session cost to 0"
+    TOTAL_COST_CENTS=0
+fi
 
 # Get all-time totals from JSONL files (cached)
 # Consolidate: 2 echo + 2 tail + 2 awk + 1 bc → 1 read (pure bash)
@@ -433,7 +677,7 @@ FUN_COST_ITEM_INDEX=${SESSION_COST_ITEMS[$((ITEM_CYCLE % ${#SESSION_COST_ITEMS[@
 # Detect 1M context from JSON field OR model display name (e.g. "Opus 4.6 1M context")
 # When auto-compact is ON:  ~84% of window (compression trigger)
 # When auto-compact is OFF: full window (user must compact manually)
-if [ "${CONTEXT_WINDOW_SIZE:-0}" -gt 200000 ] 2>/dev/null; then
+if [ "${CONTEXT_WINDOW_SIZE:-0}" -gt 200000 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
     : # Already set from JSON
 elif [[ "$MODEL" == *1[Mm]* ]] || [[ "$MODEL" == *1M* ]]; then
     CONTEXT_WINDOW_SIZE=1000000
@@ -446,7 +690,7 @@ if [ "$AUTO_COMPACT_ON" = "true" ]; then
 else
     AUTO_COMPACT_THRESHOLD=$CONTEXT_WINDOW_SIZE
 fi
-if [ "$CURRENT_TOKENS" -gt 0 ] 2>/dev/null; then
+if [ "$CURRENT_TOKENS" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
     PERCENT_USED=$((CURRENT_TOKENS * 100 / AUTO_COMPACT_THRESHOLD))
     [ "$PERCENT_USED" -gt 100 ] && PERCENT_USED=100
 else
@@ -520,13 +764,13 @@ PROGRESS_BAR="${CTX_COLOR}${BAR}${RESET}"
 # * = unstaged, + = staged, ↑n = ahead, ↓n = behind, $ = stash
 BRANCH=""
 DIR_NAME=""
-GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+GIT_ROOT=$(git rev-parse --show-toplevel 2>>"$STATUSLINE_DEBUG_LOG")
 
 if [ -n "$GIT_ROOT" ]; then
     DIR_NAME="${GIT_ROOT##*/}"  # basename using bash
 
     # git status -sb gives: ## branch...upstream [ahead N, behind M] + file status
-    GIT_STATUS_OUT=$(git status -sb 2>/dev/null)
+    GIT_STATUS_OUT=$(git status -sb 2>>"$STATUSLINE_DEBUG_LOG")
 
     # Parse first line for branch and ahead/behind (pure bash, no head/sed)
     FIRST_LINE="${GIT_STATUS_OUT%%$'\n'*}"
@@ -556,7 +800,7 @@ if [ -n "$GIT_ROOT" ]; then
         [[ "$FIRST_LINE" =~ behind\ ([0-9]+) ]] && GIT_STATUS+="↓${BASH_REMATCH[1]}"
 
         # Stash check (still need separate call)
-        [ -n "$(git stash list 2>/dev/null | head -1)" ] && GIT_STATUS+="\$"
+        [ -n "$(git stash list 2>>"$STATUSLINE_DEBUG_LOG" | head -1)" ] && GIT_STATUS+="\$"
 
         BRANCH="${BRANCH}${GIT_STATUS}"
     fi
@@ -817,15 +1061,43 @@ format_fun_power() {
 }
 
 # Fun money conversions - NORMAL items (session + all-time normal)
-# Parallel arrays for emoji, name, price
-# 0:starbucks 1:joe's 2:tacoria 3:yuengling 4:shackburger 5:chiquita 6:alamo 7:gta6
-# 8:charmin 9:crayola 10:haas 11:auntie-annes 12:blue-point 13:nathan's 14:ess-a-bagel
-# 15:nami-nori 16:luger's 17:exxon-valdez 18:big-gulp 19:carbone 20:redlobster
-# 21:sweetgreen 22:equinox 23:soulcycle 24:levain 25:chipotle 26:juice-press
-# 27:pommes-frites 28:razor 29:njt 30:magic-mouse 31:iphone 32:cronut 33:apple-music
-FUN_EMOJI=("☕" "🍕" "🌮" "🍺" "🍔" "🍌" "🍿" "🎮" "🧻" "🖍️" "🥑" "🥨" "🦪" "🌭" "🥯" "🍣" "🥩" "🛢️" "🥤" "🍝" "🦞" "🥗" "🏋️" "🚴" "🍪" "🌯" "🧃" "🍟" "🛴" "🚋" "🖱️" "📱" "🥐" "🎵")
-FUN_NAME=("starbucks®" "joe's®" "tacorias®" "yuenglings®" "shackburgers®" "chiquitas®" "alamos®" "gta6s®" "charmins®" "crayolas®" "haas®" "auntie-annes®" "blue-points®" "nathans®" "ess-a-bagels®" "nami-noris®" "lugers®" "exxon-valdezs®" "big-gulps®" "carbones®" "redlobsters®" "sweetgreens®" "equinoxs®" "soulcycles®" "levains®" "chipotles®" "juice-presses®" "pommes-frites®" "razors®" "njts®" "magic-mice®" "iphones®" "cronuts®" "apple-music®")
-FUN_PRICE=(5.50 4 4.60 7 9 0.30 18 70 1 0.11 2 5 3.50 6 4 8 65 75 2.50 40 30 15 260 38 5 12 11 9 35 5.90 99 999 7.75 0.004)
+# Stored as stable records: item-id|emoji|display-name|price
+FUN_ITEM_DATA=(
+    "starbucks|☕|starbucks®|5.50"
+    "joes|🍕|joe's®|4"
+    "tacorias|🌮|tacorias®|4.60"
+    "yuengling|🍺|yuenglings®|7"
+    "shackburger|🍔|shackburgers®|9"
+    "chiquita|🍌|chiquitas®|0.30"
+    "alamo|🍿|alamos®|18"
+    "gta6|🎮|gta6s®|70"
+    "charmin|🧻|charmins®|1"
+    "crayola|🖍️|crayolas®|0.11"
+    "haas|🥑|haas®|2"
+    "auntie-annes|🥨|auntie-annes®|5"
+    "blue-point|🦪|blue-points®|3.50"
+    "nathans|🌭|nathans®|6"
+    "ess-a-bagel|🥯|ess-a-bagels®|4"
+    "nami-nori|🍣|nami-noris®|8"
+    "lugers|🥩|lugers®|65"
+    "exxon-valdez|🛢️|exxon-valdezs®|75"
+    "big-gulp|🥤|big-gulps®|2.50"
+    "carbone|🍝|carbones®|40"
+    "redlobster|🦞|redlobsters®|30"
+    "sweetgreen|🥗|sweetgreens®|15"
+    "equinox|🏋️|equinoxs®|260"
+    "soulcycle|🚴|soulcycles®|38"
+    "levain|🍪|levains®|5"
+    "chipotle|🌯|chipotles®|12"
+    "juice-press|🧃|juice-presses®|11"
+    "pommes-frites|🍟|pommes-frites®|9"
+    "razor|🛴|razors®|35"
+    "njt|🚋|njts®|5.90"
+    "magic-mouse|🖱️|magic-mice®|99"
+    "iphone|📱|iphones®|999"
+    "cronut|🥐|cronuts®|7.75"
+    "apple-music|🎵|apple-music®|0.004"
+)
 
 # Fun money conversions - ABSURD items (all-time only, fraction chasing 1)
 ABSURD_EMOJI=("🚐" "🧟" "🏝️" "🏪" "🚁" "☕" "☕")
@@ -884,20 +1156,38 @@ format_time_tier() {
     done
 }
 
-# Sub-unit lookup: "idx:sub_name:sub_price" entries for two-tier items
+# Sub-unit lookup: "item-id:sub_name:sub_price" entries for two-tier items
 FUN_SUB_DATA=(
-    "0:sips:0.31" "1:bites:0.33" "2:bites:1.15" "4:bites:0.90"
-    "11:bites:0.50" "14:bites:0.33" "15:bites:1" "16:bites:1.63"
-    "18:sips:0.04" "19:forkfuls:1.60" "20:forkfuls:1.20" "21:forkfuls:0.50"
-    "24:bites:0.83" "25:bites:0.80" "26:sips:0.58" "27:fries:0.36" "32:bites:0.97"
+    "starbucks:sips:0.31" "joes:bites:0.33" "tacorias:bites:1.15" "shackburger:bites:0.90"
+    "auntie-annes:bites:0.50" "ess-a-bagel:bites:0.33" "nami-nori:bites:1" "lugers:bites:1.63"
+    "big-gulp:sips:0.04" "carbone:forkfuls:1.60" "redlobster:forkfuls:1.20" "sweetgreen:forkfuls:0.50"
+    "levain:bites:0.83" "chipotle:bites:0.80" "juice-press:sips:0.58" "pommes-frites:fries:0.36" "cronut:bites:0.97"
 )
 
-# Lookup sub-unit data by index; sets _sub_name and _sub_price, returns 1 if not found
+# Lookup item data by id; sets _fun_emoji, _fun_name, _fun_price, returns 1 if not found
+_lookup_fun_item() {
+    local item_id=$1
+    local entry rest
+    for entry in "${FUN_ITEM_DATA[@]}"; do
+        if [ "${entry%%|*}" = "$item_id" ]; then
+            rest="${entry#*|}"
+            _fun_emoji="${rest%%|*}"
+            rest="${rest#*|}"
+            _fun_name="${rest%%|*}"
+            _fun_price="${rest#*|}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Lookup sub-unit data by item id; sets _sub_name and _sub_price, returns 1 if not found
 _lookup_sub() {
-    local idx=$1
+    local item_id=$1
+    local entry rest
     for entry in "${FUN_SUB_DATA[@]}"; do
-        if [ "${entry%%:*}" = "$idx" ]; then
-            local rest="${entry#*:}"
+        if [ "${entry%%:*}" = "$item_id" ]; then
+            rest="${entry#*:}"
             _sub_name="${rest%%:*}"
             _sub_price="${rest#*:}"
             return 0
@@ -921,30 +1211,40 @@ format_single_unit() {
 
 format_fun_cost() {
     local cost=$1
-    local item_idx=${2:-$(( (NOW / 10) % ${#FUN_EMOJI[@]} ))}
+    local item_ref=${2:-$(( (NOW / 10) % ${#FUN_ITEM_DATA[@]} ))}
     [ "$cost" = "0" ] && echo "💰 \$0" && return
 
-    local emoji="${FUN_EMOJI[$item_idx]}"
-    local name="${FUN_NAME[$item_idx]}"
-    local price="${FUN_PRICE[$item_idx]}"
+    local item_id="$item_ref"
+    if [[ "$item_ref" =~ ^[0-9]+$ ]]; then
+        item_id="${FUN_ITEM_DATA[$item_ref]%%|*}"
+    fi
+    if ! _lookup_fun_item "$item_id"; then
+        debug_log "Unknown fun cost item '$item_ref'; defaulting to starbucks"
+        item_id="starbucks"
+        _lookup_fun_item "$item_id" || { echo "💰 \$0"; return; }
+    fi
+
+    local emoji="$_fun_emoji"
+    local name="$_fun_name"
+    local price="$_fun_price"
 
     # Special multi-tier items
-    case $item_idx in
-        3)  # yuengling: sip → pint → keg
+    case $item_id in
+        yuengling)  # yuengling: sip → pint → keg
             format_three_tier "$cost" "$emoji" "$name" "$price" "sips" 0.37 "kegs" 200
             ;;
-        13) # nathan's: bite → dog → joey-chestnut
+        nathans) # nathan's: bite → dog → joey-chestnut
             format_three_tier "$cost" "$emoji" "$name" "$price" "bites" 1 "joey-chestnuts" 456
             ;;
-        22) # equinox: time-based tiers
+        equinox) # equinox: time-based tiers
             format_time_tier "$cost" "$emoji" "equinox®" "yrs:3120" "mos:260" "wks:60.67" "d:8.67" "h:0.36" "m:0.006"
             ;;
-        23) # soulcycle: time-based tiers
+        soulcycle) # soulcycle: time-based tiers
             format_time_tier "$cost" "$emoji" "soulcycle®" "yrs:444000" "mo:36480" "d:1216" "h:50.67" "m:0.84" "s:0.014"
             ;;
         *)
             # Two-tier items (sub-unit + main unit)
-            if _lookup_sub "$item_idx"; then
+            if _lookup_sub "$item_id"; then
                 format_two_tier "$cost" "$emoji" "$name" "$price" "$_sub_name" "$_sub_price"
             else
                 # Single-unit items (no sub-units)
@@ -974,7 +1274,7 @@ format_absurd_cost() {
 # 8-cycle pattern: 3 session → 1 all-time normal 🏆 → 3 session → 1 all-time absurd 🏆 → repeat
 # Session: water(1), power(7), utility(3), fun_cost(24 session-tier ≤$20)
 METRIC_INFO=""
-if [ "$SESSION_TOKENS" -gt 0 ] 2>/dev/null || [ "$ALL_TIME_TOKENS" -gt 0 ] 2>/dev/null; then
+if [ "$SESSION_TOKENS" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG" || [ "$ALL_TIME_TOKENS" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
     if [ "$IS_ALLTIME" -eq 1 ]; then
         # All-time display with trophy
         USE_TOKENS="$ALL_TIME_TOKENS"
@@ -1001,8 +1301,8 @@ if [ "$SESSION_TOKENS" -gt 0 ] 2>/dev/null || [ "$ALL_TIME_TOKENS" -gt 0 ] 2>/de
             elif [ "$ALLTIME_NORMAL_CYCLE" -eq 14 ]; then
                 METRIC_INFO="${DIM}📡 $(format_data $USE_TOKENS)${TROPHY}${RESET}"
             else
-                ALLTIME_COST_IDX=${ALLTIME_COST_ITEMS[$ALLTIME_NORMAL_CYCLE]}
-                METRIC_INFO="${DIM}$(format_fun_cost $USE_COST $ALLTIME_COST_IDX)${TROPHY}${RESET}"
+                ALLTIME_COST_ID=${ALLTIME_COST_ITEMS[$ALLTIME_NORMAL_CYCLE]}
+                METRIC_INFO="${DIM}$(format_fun_cost $USE_COST $ALLTIME_COST_ID)${TROPHY}${RESET}"
             fi
         fi
     else
@@ -1030,7 +1330,7 @@ if [ "$SESSION_TOKENS" -gt 0 ] 2>/dev/null || [ "$ALL_TIME_TOKENS" -gt 0 ] 2>/de
                 esac
                 ;;
             3)  # Fun cost category (25%)
-                METRIC_INFO="${DIM}$(format_fun_cost $USE_COST $FUN_COST_ITEM_INDEX)${RESET}"
+                METRIC_INFO="${DIM}$(format_fun_cost $USE_COST $FUN_COST_ITEM_ID)${RESET}"
                 ;;
         esac
     fi
@@ -1050,7 +1350,7 @@ format_duration() {
 }
 
 DURATION_INFO=""
-if [ "$DURATION_MS" -gt 0 ] 2>/dev/null; then
+if [ "$DURATION_MS" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
     DURATION_INFO="${DIM}⏱️ $(format_duration $DURATION_MS)${RESET}"
 fi
 
@@ -1074,29 +1374,44 @@ fi
 # Rate limit data extracted from stdin (rate_limits.seven_day / five_hour)
 # Fetch extra_usage (credit overage) from API only when at limit — avoids the call 99% of the time
 EXTRA_UTIL=""
-WEEKLY_PCT=$(printf "%.0f" "$WEEKLY_USAGE" 2>/dev/null)
-BURST_PCT_RAW=$(printf "%.0f" "$BURST_USAGE" 2>/dev/null)
-if [ "${WEEKLY_PCT:-0}" -ge 100 ] 2>/dev/null || [ "${BURST_PCT_RAW:-0}" -ge 100 ] 2>/dev/null; then
+WEEKLY_PCT=$(printf "%.0f" "$WEEKLY_USAGE" 2>>"$STATUSLINE_DEBUG_LOG")
+BURST_PCT_RAW=$(printf "%.0f" "$BURST_USAGE" 2>>"$STATUSLINE_DEBUG_LOG")
+if [ "${WEEKLY_PCT:-0}" -ge 100 ] 2>>"$STATUSLINE_DEBUG_LOG" || [ "${BURST_PCT_RAW:-0}" -ge 100 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
     _oauth_token=""
     if [[ "$OSTYPE" == "darwin"* ]]; then
-        _creds=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null)
+        _creds=$(security find-generic-password -s "Claude Code-credentials" -w 2>>"$STATUSLINE_DEBUG_LOG") || {
+            debug_log "Failed to read Claude Code credentials from macOS Keychain"
+            _creds=""
+        }
         # Credentials may be hex-encoded (newer Claude Code) or plain JSON
         if [[ "$_creds" =~ ^[0-9a-fA-F]+$ ]]; then
             _creds=$(echo "$_creds" | xxd -r -p)
         fi
-        _oauth_token=$(echo "$_creds" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
+        if [ -n "$_creds" ] && ! _oauth_token=$(echo "$_creds" | jq -r '.claudeAiOauth.accessToken // empty' 2>>"$STATUSLINE_DEBUG_LOG"); then
+            debug_log "Failed to extract OAuth token from Claude Code credentials"
+            _oauth_token=""
+        fi
     else
         _cfg="$HOME/.config/claude/credentials.json"
-        [ -f "$_cfg" ] && _oauth_token=$(jq -r '.claudeAiOauth.accessToken // empty' "$_cfg" 2>/dev/null)
+        if [ -f "$_cfg" ] && ! _oauth_token=$(jq -r '.claudeAiOauth.accessToken // empty' "$_cfg" 2>>"$STATUSLINE_DEBUG_LOG"); then
+            debug_log "Failed to parse Claude credentials at $_cfg"
+            _oauth_token=""
+        fi
     fi
     if [ -n "$_oauth_token" ]; then
-        EXTRA_UTIL=$(curl -s --max-time 2 --config - \
+        _extra_usage_response=""
+        if ! _extra_usage_response=$(curl -s --max-time 2 --config - \
             -H "Accept: application/json" \
             -H "anthropic-beta: oauth-2025-04-20" \
             "https://api.anthropic.com/api/oauth/usage" <<CURL_CONFIG
 header = "Authorization: Bearer $_oauth_token"
 CURL_CONFIG
-        2>/dev/null | jq -r '.extra_usage.utilization // "_"' 2>/dev/null)
+        2>>"$STATUSLINE_DEBUG_LOG"); then
+            debug_log "Failed to fetch extra usage from Anthropic API"
+        elif ! EXTRA_UTIL=$(printf '%s\n' "$_extra_usage_response" | jq -r '.extra_usage.utilization // "_"' 2>>"$STATUSLINE_DEBUG_LOG"); then
+            debug_log "Failed to parse extra usage response from Anthropic API"
+            EXTRA_UTIL=""
+        fi
     fi
 fi
 
@@ -1111,8 +1426,8 @@ fi
 # 8 levels: ▁▂▃▄▅▆▇█ with color gradient cyan→teal→green→yellow→orange→red→magenta→bright magenta
 BURST_INDICATOR=""
 if [ -n "$BURST_USAGE" ] && [ "$BURST_USAGE" != "_" ] && [ "$BURST_USAGE" != "null" ]; then
-    BURST_PCT=$(printf "%.0f" "$BURST_USAGE" 2>/dev/null)
-    if [ "$BURST_PCT" -gt 0 ] 2>/dev/null; then
+    BURST_PCT=$(printf "%.0f" "$BURST_USAGE" 2>>"$STATUSLINE_DEBUG_LOG")
+    if [ "$BURST_PCT" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
         # At limit: full bar + countdown, skip effective rate math
         if [ "$BURST_PCT" -ge 100 ]; then
             burst_reset_epoch=""
@@ -1176,10 +1491,10 @@ fi
 # Credit indicator (💳) - shown in overage (weekly or burst at 100%) with active credit spend
 CREDIT_INDICATOR=""
 if [ -n "$EXTRA_UTIL" ] && [ "$EXTRA_UTIL" != "_" ] && [ "$EXTRA_UTIL" != "null" ]; then
-    EXTRA_PCT=$(printf "%.0f" "$EXTRA_UTIL" 2>/dev/null)
-    WEEKLY_PCT=$(printf "%.0f" "$WEEKLY_USAGE" 2>/dev/null)
-    if [ "$EXTRA_PCT" -gt 0 ] 2>/dev/null; then
-        if [ "${WEEKLY_PCT:-0}" -ge 100 ] 2>/dev/null || [ "${BURST_PCT:-0}" -ge 100 ] 2>/dev/null; then
+    EXTRA_PCT=$(printf "%.0f" "$EXTRA_UTIL" 2>>"$STATUSLINE_DEBUG_LOG")
+    WEEKLY_PCT=$(printf "%.0f" "$WEEKLY_USAGE" 2>>"$STATUSLINE_DEBUG_LOG")
+    if [ "$EXTRA_PCT" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
+        if [ "${WEEKLY_PCT:-0}" -ge 100 ] 2>>"$STATUSLINE_DEBUG_LOG" || [ "${BURST_PCT:-0}" -ge 100 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
             CREDIT_INDICATOR="${DIM}💳${EXTRA_PCT}%${RESET}"
         fi
     fi
