@@ -1434,72 +1434,73 @@ if [ -n "$WEEKLY_USAGE" ]; then
     PACE_INDICATOR="$(get_smart_pace_indicator "$WEEKLY_USAGE" "$RESETS_AT" "$NOW")"
 fi
 
+# Format burst indicator with optional countdown near/at the burst limit.
+format_burst_indicator() {
+    local burst_usage=$1
+    local burst_resets=$2
+    local now=${3:-${NOW:-$(date +%s)}}
+
+    if [ -z "$burst_usage" ] || [ "$burst_usage" = "_" ] || [ "$burst_usage" = "null" ]; then
+        echo ""
+        return
+    fi
+
+    local burst_pct
+    burst_pct=$(printf "%.0f" "$burst_usage" 2>>"$STATUSLINE_DEBUG_LOG")
+    burst_pct=${burst_pct:-0}
+    if ! [ "$burst_pct" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
+        echo ""
+        return
+    fi
+
+    local burst_reset_epoch=""
+    local secs_left=0
+    if [ -n "$burst_resets" ] && [ "$burst_resets" != "_" ] && [ "$burst_resets" != "null" ] && [ "$burst_resets" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
+        burst_reset_epoch="$burst_resets"  # Already epoch seconds
+        secs_left=$((burst_reset_epoch - now))
+    fi
+
+    if [ "$burst_pct" -ge 100 ]; then
+        if [ -n "$burst_reset_epoch" ] && [ "$secs_left" -gt 0 ]; then
+            local mins=$(( (secs_left + 59) / 60 ))
+            echo "💥🤑 ${DIM}-${mins}m${RESET}"
+        else
+            echo "💥🤑"
+        fi
+        return
+    fi
+
+    local burst_bar burst_color
+    if [ "$burst_pct" -lt 13 ]; then
+        burst_bar="▁"; burst_color="$BURST_CYAN"
+    elif [ "$burst_pct" -lt 25 ]; then
+        burst_bar="▂"; burst_color="$BURST_TEAL"
+    elif [ "$burst_pct" -lt 38 ]; then
+        burst_bar="▃"; burst_color="$BURST_GREEN"
+    elif [ "$burst_pct" -lt 50 ]; then
+        burst_bar="▄"; burst_color="$BURST_YELLOW"
+    elif [ "$burst_pct" -lt 63 ]; then
+        burst_bar="▅"; burst_color="$BURST_ORANGE"
+    elif [ "$burst_pct" -lt 75 ]; then
+        burst_bar="▆"; burst_color="$BURST_RED"
+    elif [ "$burst_pct" -lt 88 ]; then
+        burst_bar="▇"; burst_color="$BURST_MAGENTA"
+    else
+        burst_bar="█"; burst_color="$BURST_BRIGHT_MAG"
+    fi
+
+    if [ "$burst_pct" -ge 75 ] && [ -n "$burst_reset_epoch" ] && [ "$secs_left" -gt 0 ]; then
+        local mins=$(( (secs_left + 59) / 60 ))
+        echo "💥${burst_color}${burst_bar}${RESET} ${DIM}-${mins}m${RESET}"
+    else
+        echo "💥${burst_color}${burst_bar}${RESET}"
+    fi
+}
+
 # Burst indicator (💥 with colored bar, only when > 0%)
 # Uses effective rate (max of burn_rate, pressure) for 5-hour window — same approach as weekly pace
 # 8 levels: ▁▂▃▄▅▆▇█ with color gradient cyan→teal→green→yellow→orange→red→magenta→bright magenta
-BURST_INDICATOR=""
-if [ -n "$BURST_USAGE" ] && [ "$BURST_USAGE" != "_" ] && [ "$BURST_USAGE" != "null" ]; then
-    BURST_PCT=$(printf "%.0f" "$BURST_USAGE" 2>>"$STATUSLINE_DEBUG_LOG")
-    if [ "$BURST_PCT" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
-        # At limit: full bar + countdown, skip effective rate math
-        if [ "$BURST_PCT" -ge 100 ]; then
-            burst_reset_epoch=""
-            if [ -n "$BURST_RESETS" ] && [ "$BURST_RESETS" != "_" ] && [ "$BURST_RESETS" != "null" ]; then
-                burst_reset_epoch="$BURST_RESETS"  # Already epoch seconds
-            fi
-            if [ -n "$burst_reset_epoch" ]; then
-                now_epoch=$NOW
-                secs_left=$((burst_reset_epoch - now_epoch))
-                if [ "$secs_left" -gt 0 ]; then
-                    mins=$(( (secs_left + 59) / 60 ))
-                    BURST_INDICATOR="💥🤑 ${DIM}-${mins}m${RESET}"
-                else
-                    BURST_INDICATOR="💥🤑"
-                fi
-            else
-                BURST_INDICATOR="💥🤑"
-            fi
-        else
-        # Map raw burst percentage to bar + color (8-level gradient)
-        # Directly reflects API utilization — no burn rate extrapolation
-        if [ "$BURST_PCT" -lt 13 ]; then
-            BURST_BAR="▁"; BURST_COLOR="$BURST_CYAN"
-        elif [ "$BURST_PCT" -lt 25 ]; then
-            BURST_BAR="▂"; BURST_COLOR="$BURST_TEAL"
-        elif [ "$BURST_PCT" -lt 38 ]; then
-            BURST_BAR="▃"; BURST_COLOR="$BURST_GREEN"
-        elif [ "$BURST_PCT" -lt 50 ]; then
-            BURST_BAR="▄"; BURST_COLOR="$BURST_YELLOW"
-        elif [ "$BURST_PCT" -lt 63 ]; then
-            BURST_BAR="▅"; BURST_COLOR="$BURST_ORANGE"
-        elif [ "$BURST_PCT" -lt 75 ]; then
-            BURST_BAR="▆"; BURST_COLOR="$BURST_RED"
-        elif [ "$BURST_PCT" -lt 88 ]; then
-            BURST_BAR="▇"; BURST_COLOR="$BURST_MAGENTA"
-        else
-            BURST_BAR="█"; BURST_COLOR="$BURST_BRIGHT_MAG"
-        fi
-
-        # Show countdown at top two levels (75%+)
-        burst_reset_epoch=""
-        if [ -n "$BURST_RESETS" ] && [ "$BURST_RESETS" != "_" ] && [ "$BURST_RESETS" != "null" ]; then
-            burst_reset_epoch="$BURST_RESETS"  # Already epoch seconds
-        fi
-        if [ "$BURST_PCT" -ge 75 ] && [ -n "$burst_reset_epoch" ]; then
-            now_epoch=$NOW
-            secs_left=$((burst_reset_epoch - now_epoch))
-            if [ "$secs_left" -gt 0 ]; then
-                mins=$(( (secs_left + 59) / 60 ))
-                BURST_INDICATOR="💥${BURST_COLOR}${BURST_BAR}${RESET} ${DIM}-${mins}m${RESET}"
-            else
-                BURST_INDICATOR="💥${BURST_COLOR}${BURST_BAR}${RESET}"
-            fi
-        else
-            BURST_INDICATOR="💥${BURST_COLOR}${BURST_BAR}${RESET}"
-        fi
-        fi  # end else (not at limit)
-    fi
-fi
+BURST_INDICATOR="$(format_burst_indicator "$BURST_USAGE" "$BURST_RESETS" "$NOW")"
 
 # Credit indicator (💳) - shown in overage (weekly or burst at 100%) with active credit spend
 CREDIT_INDICATOR=""
