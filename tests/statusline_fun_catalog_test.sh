@@ -2,23 +2,13 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-tmpdir=$(mktemp -d)
-trap 'rm -rf "$tmpdir"' EXIT
-
-catalog="$tmpdir/fun_catalog.sh"
-{
-    sed -n '/^# Session-tier fun cost items/,/^# All-time item indices/p' "$repo_root/statusline.sh"
-    printf '\n'
-    sed -n '/^# Format a decimal as a human-friendly count/,/^# Format absurd cost items/p' "$repo_root/statusline.sh"
-} > "$catalog"
-
 NOW=0
 NOW_DIV_10=0
 STATUSLINE_DEBUG_LOG=/dev/null
 debug_log() { :; }
 
-# shellcheck disable=SC1090
-source "$catalog"
+# shellcheck disable=SC1091
+source "$repo_root/lib/statusline_display.sh"
 
 assert_eq() {
     local expected=$1

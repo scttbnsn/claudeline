@@ -5,10 +5,6 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 
-formatters="$tmpdir/formatters.sh"
-sed -n '/^format_count() {/,/^# Fun money conversions - NORMAL items/p' \
-    "$repo_root/statusline.sh" > "$formatters"
-
 cat > "$tmpdir/bc" <<'EOF'
 #!/usr/bin/env bash
 echo "bc must not be called by statusline formatter hot paths" >&2
@@ -22,8 +18,8 @@ MICRO_WH_PER_TOKEN=4170
 BYTES_PER_TOKEN=4
 NOW=0
 
-# shellcheck disable=SC1090
-source "$formatters"
+# shellcheck disable=SC1091
+source "$repo_root/lib/statusline_display.sh"
 
 assert_eq() {
     local expected=$1

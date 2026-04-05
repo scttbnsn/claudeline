@@ -8,11 +8,6 @@ trap 'rm -rf "$tmpdir"' EXIT
 home_dir="$tmpdir/home"
 cache_dir="$tmpdir/cache"
 mkdir -p "$home_dir/.claude/projects/demo" "$home_dir/.config/claude/projects" "$cache_dir"
-
-funcs="$tmpdir/jsonl_funcs.sh"
-sed -n '/^# Calculate all-time usage from JSONL files/,/^# Get trend arrow/p' \
-    "$repo_root/statusline.sh" > "$funcs"
-
 export HOME="$home_dir"
 export CACHE_DIR="$cache_dir"
 export JSONL_CACHE="$CACHE_DIR/.jsonl-cache"
@@ -21,8 +16,8 @@ export STATUSLINE_DEBUG_LOG=/dev/null
 
 debug_log() { :; }
 
-# shellcheck disable=SC1090
-source "$funcs"
+# shellcheck disable=SC1091
+source "$repo_root/lib/statusline_usage.sh"
 
 assert_eq() {
     local expected=$1

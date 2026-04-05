@@ -2,12 +2,11 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-tmpdir=$(mktemp -d)
-trap 'rm -rf "$tmpdir"' EXIT
+STATUSLINE_DEBUG_LOG=/dev/null
+debug_log() { :; }
 
-burst_helper="$tmpdir/burst_indicator.sh"
-sed -n '/^format_burst_indicator() {/,/^}/p' \
-    "$repo_root/statusline.sh" > "$burst_helper"
+# shellcheck disable=SC1091
+source "$repo_root/lib/statusline_display.sh"
 
 DIM="<dim>"
 RESET="<reset>"
@@ -19,11 +18,6 @@ BURST_ORANGE="<orange>"
 BURST_RED="<red>"
 BURST_MAGENTA="<magenta>"
 BURST_BRIGHT_MAG="<bright-mag>"
-STATUSLINE_DEBUG_LOG=/dev/null
-debug_log() { :; }
-
-# shellcheck disable=SC1090
-source "$burst_helper"
 
 assert_eq() {
     local expected=$1
