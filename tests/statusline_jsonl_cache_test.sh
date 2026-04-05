@@ -68,6 +68,19 @@ restored_summary=$(get_jsonl_totals | tail -1)
 assert_eq "$initial_summary" "$restored_summary" "fresh persistent state rebuilds cache without scanning files"
 export PATH="$orig_path"
 
+cat > "$shim_dir/date" <<'EOF'
+#!/usr/bin/env bash
+echo "date should not run when caller supplies current time for fresh JSONL cache" >&2
+exit 99
+EOF
+chmod +x "$shim_dir/date"
+
+set_timestamp "$JSONL_CACHE" 100
+export PATH="$shim_dir:$orig_path"
+cached_summary=$(get_jsonl_totals 150 | tail -1)
+assert_eq "$initial_summary" "$cached_summary" "fresh transient cache reuses caller timestamp without invoking date"
+export PATH="$orig_path"
+
 cat >> "$jsonl_file" <<'EOF'
 {"type":"message","model":"claude-sonnet-4","usage":{"input_tokens":0,"output_tokens":1000000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}
 EOF
