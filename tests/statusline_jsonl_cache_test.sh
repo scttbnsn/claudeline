@@ -82,6 +82,38 @@ assert_eq "$initial_summary" "$cached_summary" "fresh transient cache reuses cal
 }
 export PATH="$orig_path"
 
+cat > "$shim_dir/head" <<'EOF'
+#!/usr/bin/env bash
+touch "$TEST_HEAD_MARKER"
+echo "head should not run when transient JSONL cache is fresh" >&2
+exit 97
+EOF
+chmod +x "$shim_dir/head"
+
+cat > "$shim_dir/cat" <<'EOF'
+#!/usr/bin/env bash
+touch "$TEST_CAT_MARKER"
+echo "cat should not run when transient JSONL cache is fresh" >&2
+exit 98
+EOF
+chmod +x "$shim_dir/cat"
+
+export TEST_HEAD_MARKER="$tmpdir/head-called"
+export TEST_CAT_MARKER="$tmpdir/cat-called"
+rm -f "$TEST_HEAD_MARKER" "$TEST_CAT_MARKER"
+export PATH="$shim_dir:$orig_path"
+cached_summary=$(get_jsonl_totals 150 | tail -1)
+assert_eq "$initial_summary" "$cached_summary" "fresh transient cache uses builtin reads instead of head/cat"
+[ ! -e "$TEST_HEAD_MARKER" ] || {
+    echo "FAIL: get_jsonl_totals should not call head when transient cache is fresh" >&2
+    exit 1
+}
+[ ! -e "$TEST_CAT_MARKER" ] || {
+    echo "FAIL: get_jsonl_totals should not call cat when transient cache is fresh" >&2
+    exit 1
+}
+export PATH="$orig_path"
+
 cat >> "$jsonl_file" <<'EOF'
 {"type":"message","model":"claude-sonnet-4","usage":{"input_tokens":0,"output_tokens":1000000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}
 EOF

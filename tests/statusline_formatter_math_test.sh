@@ -26,6 +26,8 @@ assert_eq "1K" "$(format_number 1000)" "format_number enters the K tier at 1000"
 assert_eq "1.00M" "$(format_number 1000000)" "format_number preserves two decimals in the 1M tier"
 assert_eq "1.50M" "$(format_number 1500000)" "format_number keeps two decimals inside the 1M tier"
 assert_eq "10M" "$(format_number 10000000)" "format_number strips trailing .0 at the 10M tier"
+assert_eq "1B" "$(format_number 999999999)" "format_number promotes rounded 1000M values into the B tier"
+assert_eq "1T" "$(format_number 999999999999)" "format_number promotes rounded 1000B values into the T tier"
 
 assert_eq "58.7 drops" "$(format_water 999)" "format_water stays in drops below the teaspoon threshold"
 assert_eq "1 teaspoons" "$(format_water 1000)" "format_water enters teaspoons at 1000 tokens"
@@ -59,6 +61,9 @@ assert_eq "🚗 6mi 4xe®" "$(format_fun_power 1000000 4)" "format_fun_power for
 assert_eq "✈️ 427.6ft a320neo®" "$(format_fun_power 1000000 5)" "format_fun_power formats sub-mile jet distance"
 assert_eq "🪨 4.2 lbs coal" "$(format_fun_power 1000000 6)" "format_fun_power formats coal mass below one ton"
 assert_eq "🪨 2.1 tons coal" "$(format_fun_power 1000000000 6)" "format_fun_power formats coal mass above one ton"
+assert_eq "0m" "$(format_duration 59000)" "format_duration rounds down sub-minute values"
+assert_eq "1m" "$(format_duration 61000)" "format_duration formats single-minute values"
+assert_eq "1h5m" "$(format_duration 3900000)" "format_duration formats hour-plus values"
 
 assert_eq "💰 \$0" "$(format_fun_cost 0 unknown-item)" "format_fun_cost short-circuits zero cost"
 assert_eq "🎵 1 apple-music®" "$(format_fun_cost 0.004 apple-music)" "format_fun_cost formats single-unit fractional prices"
