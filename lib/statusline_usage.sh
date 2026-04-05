@@ -40,8 +40,58 @@ restore_jsonl_cache_from_state() {
     write_jsonl_cache "$now" "$summary"
 }
 
+# Fast streaming scan for cold start (no per-file state, just global totals).
+# Uses xargs cat pipeline (~2-3s) instead of per-file opens (~8-40s on 10K+ files).
+cold_jsonl_scan() {
+    local now=$1
+    local summary
+    summary=$(find "$HOME/.claude/projects" "$HOME/.config/claude/projects" \
+        -name "*.jsonl" -type f -not -type l -print0 2>>"$STATUSLINE_DEBUG_LOG" \
+        | xargs -0 cat 2>/dev/null | perl -e '
+        use strict;
+        my ($ti, $to, $tw, $tr, $tc) = (0, 0, 0, 0, 0);
+        while (<STDIN>) {
+            next unless /"message".*"usage"/;
+            my $is_opus = /claude-opus|opus-4/ ? 1 : 0;
+            my $in = /"input_tokens":(\d+)/ ? $1 : 0;
+            my $out = /"output_tokens":(\d+)/ ? $1 : 0;
+            my $cw = /"cache_creation_input_tokens":(\d+)/ ? $1 : 0;
+            my $cr = /"cache_read_input_tokens":(\d+)/ ? $1 : 0;
+            if ($is_opus) {
+                $tc += $in * 1500 + $out * 7500 + $cw * 1875 + $cr * 150;
+            } else {
+                $tc += $in * 300 + $out * 1500 + $cw * 375 + $cr * 30;
+            }
+            $ti += $in; $to += $out; $tw += $cw; $tr += $cr;
+        }
+        my $tt = $ti + $to + $tw + $tr;
+        printf "%d %d %d %d %d %d", $tt, $tc, $ti, $to, $tw, $tr;
+    ' 2>>"$STATUSLINE_DEBUG_LOG") || return 1
+
+    [ -n "$summary" ] || return 1
+    write_jsonl_cache "$now" "$summary"
+    # Write minimal state (totals only, no per-file records) so next refresh builds full state
+    printf '%s\n%s\n' "$now" "$summary" > "$JSONL_STATE" 2>>"$STATUSLINE_DEBUG_LOG"
+}
+
 refresh_jsonl_state() {
     local now=$1
+
+    # Cold start: no state file — use fast streaming pipeline
+    if [ ! -f "$JSONL_STATE" ]; then
+        debug_log "Cold JSONL scan: using fast streaming pipeline"
+        cold_jsonl_scan "$now"
+        return
+    fi
+
+    # Minimal state (2 lines = timestamp + totals, no per-file records):
+    # full per-file state build needed, but we already have usable totals
+    local line_count
+    line_count=$(wc -l < "$JSONL_STATE" 2>/dev/null)
+    if [ "${line_count:-0}" -le 2 ]; then
+        debug_log "Building per-file JSONL state (one-time)"
+    fi
+
     local tmp_state summary
     tmp_state=$(mktemp "${CACHE_DIR}/.jsonl-state-XXXXXX") || return 1
 

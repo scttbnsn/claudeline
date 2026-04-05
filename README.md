@@ -338,7 +338,7 @@ The 🏆 trophy indicates all-time totals. The 8-cycle rotation (10s each) shows
 | Fully warm (typical) | ~180ms |
 | Warm state, expired cache | ~195ms |
 | Best case | ~175ms |
-| Cold JSONL scan (first run) | ~8-40s (10K+ files, 1.2GB) |
+| Cold JSONL scan (first run) | ~6s (10K+ files, 1.2GB) |
 
 **Cost breakdown** (warm, ~180ms total):
 
@@ -351,7 +351,7 @@ The 🏆 trophy indicates all-time totals. The 8-cycle rotation (10s each) shows
 | Formatting | ~22ms | 1 awk + 2 bc |
 | Source libs + rest | ~27ms | bash |
 
-Rate limit data comes directly from the Claude Code status line JSON — zero network calls during normal operation. Cold JSONL scans are slow on first run but the per-file state persists across cache expiry, so subsequent scans only process appended bytes.
+Rate limit data comes directly from the Claude Code status line JSON — zero network calls during normal operation. Cold JSONL scans use a fast streaming pipeline (`xargs cat | perl`) for immediate results, then build per-file state lazily so subsequent scans only process appended bytes.
 
 <hr>
 
