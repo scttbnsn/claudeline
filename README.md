@@ -17,7 +17,7 @@
 │    bar              + git status    changed  trend
 └─ context icon (✨🌱💭🧠⚡🔥🌡️🫠💀💾)
 
-    73.5K/168K  ·  🍕 3 joe's®  ·  Opus 4.5
+    73.5K/168K  ·  🍕 3 joe's®  ·  Opus 4.6
     └────┬────┘    └─────┬─────┘   └───┬───┘
       context         rotating       model
       tokens          metric
@@ -51,9 +51,13 @@ Then restart Claude Code. That's it.
 <details>
 <summary>Manual installation</summary>
 
-1. Copy the script to your Claude config:
+1. Download the runtime files:
    ```bash
+   mkdir -p ~/.claude/lib
    curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/statusline.sh -o ~/.claude/statusline.sh
+   curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/lib/statusline_display.sh -o ~/.claude/lib/statusline_display.sh
+   curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/lib/statusline_usage.sh -o ~/.claude/lib/statusline_usage.sh
+   curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/lib/jsonl_parser.pl -o ~/.claude/lib/jsonl_parser.pl
    chmod +x ~/.claude/statusline.sh
    ```
 
@@ -348,7 +352,7 @@ The 🏆 trophy indicates all-time totals. The 8-cycle rotation (10s each) shows
 | jq parse | ~16ms | 1 jq call |
 | Trend/pace | ~20ms | 1 awk call |
 | JSONL cache read | ~5ms | bash read |
-| Formatting | ~22ms | 1 awk + 2 bc |
+| Formatting | ~22ms | 1 awk + bash math |
 | Source libs + rest | ~27ms | bash |
 
 Rate limit data comes directly from the Claude Code status line JSON — zero network calls during normal operation. Cold JSONL scans use a fast streaming pipeline (`xargs cat | perl`) for immediate results, then build per-file state lazily so subsequent scans only process appended bytes.
@@ -360,7 +364,6 @@ Rate limit data comes directly from the Claude Code status line JSON — zero ne
 <div align="center">
 
 [![jq](https://img.shields.io/badge/jq-JSON_parsing-C9A227)](https://jqlang.github.io/jq/)
-[![bc](https://img.shields.io/badge/bc-cost_calculation-555)](https://www.gnu.org/software/bc/)
 [![git](https://img.shields.io/badge/git-branch_detection-F05032?logo=git&logoColor=white)](https://git-scm.com/)
 [![perl](https://img.shields.io/badge/perl-JSONL_parsing-39457E?logo=perl&logoColor=white)](https://www.perl.org/)
 
