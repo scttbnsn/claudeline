@@ -70,15 +70,21 @@ export PATH="$orig_path"
 
 cat > "$shim_dir/date" <<'EOF'
 #!/usr/bin/env bash
-echo "date should not run when caller supplies current time for fresh JSONL cache" >&2
-exit 99
+touch "$TEST_DATE_MARKER"
+printf '9999999999\n'
 EOF
 chmod +x "$shim_dir/date"
 
 set_timestamp "$JSONL_CACHE" 100
+export TEST_DATE_MARKER="$tmpdir/date-called"
+rm -f "$TEST_DATE_MARKER"
 export PATH="$shim_dir:$orig_path"
 cached_summary=$(get_jsonl_totals 150 | tail -1)
 assert_eq "$initial_summary" "$cached_summary" "fresh transient cache reuses caller timestamp without invoking date"
+[ ! -e "$TEST_DATE_MARKER" ] || {
+    echo "FAIL: get_jsonl_totals should not call date when caller supplies current time" >&2
+    exit 1
+}
 export PATH="$orig_path"
 
 cat >> "$jsonl_file" <<'EOF'
