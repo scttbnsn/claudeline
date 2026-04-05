@@ -1,13 +1,21 @@
-# Claude Code Status Line
+<div align="center">
 
-A cute, informative status line for Claude Code with rotating environmental metrics.
+<h1>claudeline</h1>
+
+**A cute, informative status line for Claude Code with rotating environmental metrics.**
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Bash](https://img.shields.io/badge/bash-5.x-4EAA25?logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-status_line-000?logo=anthropic&logoColor=white)](https://claude.ai/)
+
+</div>
 
 ```
 ✨ ████░░░░░░  ·  myrepo/main*  ·  +50/-20  ·  👌→  ·  💥▃  ·  💳25%  ·  ⏱️ 45m
 │  └────┬────┘     └─────┬─────┘   └───┬──┘   └─┬──┘  └─┬┘   └─┬──┘    └──┬───┘
 │    context          repo/branch     lines    pace  burst  credit    duration
 │    bar              + git status    changed  trend
-└─ context icon (✨🌱💭🧠🔥🫠💾)
+└─ context icon (✨🌱💭🧠⚡🔥🌡️🫠💀💾)
 
     73.5K/168K  ·  🍕 3 joe's®  ·  Opus 4.5
     └────┬────┘    └─────┬─────┘   └───┬───┘
@@ -15,87 +23,198 @@ A cute, informative status line for Claude Code with rotating environmental metr
       tokens          metric
 ```
 
-## Features
+<hr>
 
-- **Context bar** adapts to your auto-compact setting (reads `~/.claude.json`):
-  - **Auto-compact ON** (default): scales to 168K (the compression trigger, ~84% of 200K window)
-  - **Auto-compact OFF**: scales to 200K (full context window)
-  - Color gradient with mode-aware tiers:
+<h2 align="center">📑 Contents</h2>
 
-  **Auto-compact ON** (7 tiers, scaled to 168K):
+- [🚀 Quick Start](#quick-start)
+- [✨ Features](#features)
+- [📊 Smart Pace Indicator](#smart-pace-indicator)
+- [💥 Burst & Credit Indicators](#burst--credit-indicators)
+- [🌍 Environmental Impact](#environmental-impact)
+- [🏆 All-Time Tracking](#all-time-tracking)
+- [⚡ Performance](#performance)
+- [🔧 Requirements](#requirements)
 
-  | Range | Color | Icon | Meaning |
-  |-------|-------|------|---------|
-  | 0-17% | Cyan | ✨ | Fresh |
-  | 18-34% | Lime | 🌱 | Growing |
-  | 35-49% | Yellow | 💭 | Thinking |
-  | 50-67% | Orange | 🧠 | Working hard |
-  | 68-87% | Coral | 🔥 | Hot |
-  | 88-94% | Hot Pink | 🫠 | Melting — compact soon |
-  | 95%+ | Red | 💾 | About to auto-compact |
+<hr>
 
-  **Auto-compact OFF** (8 tiers, scaled to 200K):
+<h2 align="center" id="quick-start">🚀 Quick Start</h2>
 
-  | Range | Color | Icon | Meaning |
-  |-------|-------|------|---------|
-  | 0-14% | Cyan | ✨ | Fresh |
-  | 15-29% | Lime | 🌱 | Growing |
-  | 30-49% | Yellow | 💭 | Thinking |
-  | 50-64% | Orange | 🧠 | Working hard |
-  | 65-74% | Coral | 🔥 | Hot |
-  | 75-84% | Red | 💾 | Compact zone |
-  | 85-94% | Hot Pink | 🫠 | Past compact zone |
-  | 95%+ | Magenta | 💀 | Near hard wall |
-- **24-bit true color** palette (vibey 2025 colors)
-- **Repo/branch** with git status indicators (`*`=unstaged, `+`=staged, `↑↓`=ahead/behind)
-- **Lines changed** (+added/-removed)
-- **Rotating environmental metrics** (8-cycle pattern, 10s each):
-  - 💧 Standard water (cups, gallons, etc.)
-  - ⚡ Standard power (watt-hours, kilowatt-hours)
-  - 🔌💡🏠🏢🚗✈️🪨☢️ Fun power (phone, hue-light, home, 395-hudson, 4xe, a320neo, coal, reactor)
-  - 🎟️ Token count, 💰 Cost, 📡 Data
-  - ☕🍕🌮... Fun cost (34 normal items)
-  - 🚐🧟🏝️🏪🚁☕ Absurd items (7 items, all-time only)
-  - **Rotation:** 3 session → 1 all-time normal 🏆 → 3 session → 1 all-time absurd 🏆
-- **Session duration**
-- **Smart pace indicator** with trend arrows showing where you're headed:
-  - **Pace:** ❄️🧊🙂👌♨️🥵🔥🚨 (8-tier scale based on actual/expected ratio)
-  - **Trend:** ↑ heating fast, ↗ warming, → stable, ↘ cooling, ↓ cooling fast
-  - Combined display: `👌→` (on pace, stable) or `🔥↑` (hot, getting hotter)
-  - Trend uses **rolling window** with linear regression for accurate direction detection
-  - At limit shows reset countdown: `🚨 -1.2d`
-  - Alternates with raw % every 10th update
-- **Burst indicator** (💥) with colored 8-level bar (▁▂▃▄▅▆▇█) for 5-hour rate limit, reset countdown at 88%+
-- **Credit indicator** (💳) showing remaining overage balance, only when at weekly limit
-- **Model name** (dimmed, at end)
+**One command:**
 
-## Environmental Impact
+```bash
+curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/install.sh | bash
+```
 
-The rotating metrics help visualize the environmental cost of AI inference:
+Then restart Claude Code. That's it.
+
+<details>
+<summary>Manual installation</summary>
+
+1. Copy the script to your Claude config:
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/statusline.sh -o ~/.claude/statusline.sh
+   chmod +x ~/.claude/statusline.sh
+   ```
+
+2. Add to your `~/.claude/settings.json`:
+   ```json
+   {
+     "statusLine": {
+       "type": "command",
+       "command": "~/.claude/statusline.sh",
+       "padding": 0
+     }
+   }
+   ```
+
+3. Restart Claude Code
+
+</details>
+
+<hr>
+
+<h2 align="center" id="features">✨ Features</h2>
+
+<table>
+<tr>
+<td align="center" width="33%">
+<h3>10-Tier Context Bar</h3>
+Adapts to auto-compact setting — scales to 168K (ON) or 200K (OFF) with color gradient and emoji icons
+</td>
+<td align="center" width="33%">
+<h3>Smart Pace Indicator</h3>
+Dual-signal weekly pace (burn rate + pressure) with 8-tier emoji scale and velocity-based trend arrows
+</td>
+<td align="center" width="33%">
+<h3>Burst & Credit</h3>
+8-level colored bar for 5-hour rate limit with reset countdown, plus overage credit tracking
+</td>
+</tr>
+<tr>
+<td align="center">
+<h3>Environmental Metrics</h3>
+Rotating display of water, power, and data usage with dynamic unit scaling (drops → gallons, Wh → MWh)
+</td>
+<td align="center">
+<h3>Fun Cost Conversions</h3>
+34 normal + 7 absurd items with multi-unit scaling — see your session cost in joe's pizza slices or joey-chestnuts
+</td>
+<td align="center">
+<h3>All-Time Tracking</h3>
+Cumulative usage across all sessions from JSONL files, shown with 🏆 trophy on rotating cycle
+</td>
+</tr>
+<tr>
+<td align="center" width="33%">
+<h3>Git Integration</h3>
+Repo/branch with status indicators — unstaged, staged, ahead/behind, stash count
+</td>
+<td align="center" width="33%">
+<h3>24-Bit True Color</h3>
+Vibey 2025 palette with distinct colors for every tier and indicator
+</td>
+<td align="center" width="33%">
+<h3>1M Context Support</h3>
+Detects extended context windows and scales the bar accordingly
+</td>
+</tr>
+</table>
+
+<hr>
+
+<h2 align="center" id="smart-pace-indicator">📊 Smart Pace Indicator</h2>
+
+Compares your actual weekly usage against where you *should* be based on time elapsed in the 7-day rolling window.
+
+**The math:** Two signals, take the worse one:
+- **Burn rate** (velocity): `(pct / days_elapsed) × 7 / 100` — how fast you're going
+- **Pressure** (position): `days_remaining / budget_remaining_in_days` — remaining runway
+
+`effective = max(burn_rate, pressure)`
+
+Both signals agree on over/under pace (`> 1.0` = over, `< 1.0` = under), but pressure amplifies urgency when budget is thin. For example, at 91% on Monday 8pm with reset Thursday 1pm: burn rate is 1.48 (🥵) but pressure is 4.29 — you have 9% left for 2.7 days (🚨).
+
+Combined display: `👌→` (on pace, stable) or `🔥↑` (hot, getting hotter). At 100%, shows reset countdown: `🚨 -1.2d`. Alternates with raw % every 10th update.
+
+<details>
+<summary><strong>Pace emoji tiers</strong></summary>
+
+| Effective Rate | Emoji | State |
+|-------|-------|-------|
+| < 0.3 | ❄️ | Way under pace |
+| 0.3-0.6 | 🧊 | Under pace |
+| 0.6-0.85 | 🙂 | Comfortable |
+| 0.85-1.15 | 👌 | On pace |
+| 1.15-1.4 | ♨️ | Warming |
+| 1.4-1.8 | 🥵 | Hot |
+| 1.8-2.5 | 🔥 | Very hot |
+| ≥ 2.5 | 🚨 | Critical |
+
+</details>
+
+<details>
+<summary><strong>Trend arrows</strong></summary>
+
+Tracks **usage% velocity** — how fast you're burning tokens compared to the sustainable rate (100% / 7 days ≈ 0.01%/min).
+
+| Velocity | Arrow | Meaning |
+|----------|-------|---------|
+| > 3x sustainable | ↑ | Heating fast |
+| 1.5-3x sustainable | ↗ | Warming up |
+| 0.5-1.5x sustainable | → | Stable |
+| 0.1-0.5x sustainable | ↘ | Cooling down |
+| < 0.1x sustainable | ↓ | Cooling fast |
+
+**History retention:** Last 15 min dense (every ~30s), 15min–24h sparse anchors (1 per 4h), older pruned.
+
+</details>
+
+<hr>
+
+<h2 align="center" id="burst--credit-indicators">💥 Burst & Credit Indicators</h2>
+
+**💥 Burst** (5-hour rate limit) — colored bar mapped directly to API utilization %, only shown when > 0%.
+
+| Range | Bar | Color |
+|-------|-----|-------|
+| 1-12% | ▁ | cyan |
+| 13-24% | ▂ | teal |
+| 25-37% | ▃ | green |
+| 38-49% | ▄ | yellow |
+| 50-62% | ▅ | orange |
+| 63-74% | ▆ | red |
+| 75-87% | ▇ -135m | magenta + countdown |
+| 88%+ | █ -90m | bright magenta + countdown |
+
+At 75%+, a dimmed countdown shows minutes until the 5-hour window resets.
+
+**💳 Credit** (overage balance) — only shown when weekly or burst usage hits 100% with active credit spend.
+
+<hr>
+
+<h2 align="center" id="environmental-impact">🌍 Environmental Impact</h2>
+
+The rotating metrics visualize the environmental cost of AI inference:
 
 | Metric | Rate | Source |
 |--------|------|--------|
-| 💧 Water | 1 gal = 760k tokens | [arxiv:2304.03271](https://arxiv.org/pdf/2304.03271), updated 2026 |
-| ⚡ Power | 1 kWh = 240k tokens | [arxiv:2505.09598](https://arxiv.org/html/2505.09598v1), updated 2026 |
+| 💧 Water | 1 gal = 760k tokens | [arxiv:2304.03271](https://arxiv.org/pdf/2304.03271) |
+| ⚡ Power | 1 kWh = 240k tokens | [arxiv:2505.09598](https://arxiv.org/html/2505.09598v1) |
 | 💰 Cost | Built-in | Claude Code API |
 
-### Dynamic Units
+**Dynamic units:** Water scales drops → tsp → tbsp → oz → cups → pints → quarts → gallons. Power scales Wh → kWh → MWh.
 
-- **Water:** drops → teaspoons → tablespoons → fluid-ounces → cups → pints → quarts → gallons
-- **Power:** watt-hours → kilowatt-hours → megawatt-hours
-- **Tokens:** raw → k → m → b → t (scales with usage)
+<details>
+<summary><strong>Fun cost conversions (34 normal + 7 absurd)</strong></summary>
 
-### Fun Cost Conversions
-
-The cost metric rotates through fun items (NY/NJ 2026 prices). Values < 1 use 2 significant digits (e.g., 0.33, 0.1, 0.045).
-
-Many items have **multi-unit scaling** - they pick the appropriate unit based on cost:
+Many items have **multi-unit scaling** — they pick the appropriate unit based on cost:
 - Joe's: bite ($0.33) → joe's ($4)
 - Nathan's: bite ($1) → dog ($6) → joey-chestnut ($456)
 - Starbucks: sip ($0.31) → starbucks ($5.50)
 - Yuengling: sip ($0.37) → yuengling ($7) → keg ($200)
 
-**Normal Items (34)** - shown in session + all-time normal:
+**Normal Items (34)** — shown in session + all-time normal:
 
 | Emoji | Item | Price |
 |-------|------|-------|
@@ -134,7 +253,7 @@ Many items have **multi-unit scaling** - they pick the appropriate unit based on
 | 🥐 | cronuts® | $7.75 |
 | 🎵 | apple-musics® | $0.004 |
 
-**Absurd Items (7)** - all-time only, decimal chasing 1:
+**Absurd Items (7)** — all-time only, decimal chasing 1:
 
 | Emoji | Item | Price |
 |-------|------|-------|
@@ -146,14 +265,10 @@ Many items have **multi-unit scaling** - they pick the appropriate unit based on
 | ☕ | starbucks-franchises® | $315,000 |
 | ☕ | starbucks-ceo-pays® | $57,000,000 |
 
-Multi-unit items scale up through thresholds. So instead of `💰 $12.50`, you might see:
-- `🍕 3 joe's®` or `🍕 6 bites @ joe's®`
-- `🌭 2 dogs @ nathan's®` or `🌭 0.022 joey-chestnuts @ nathan's®`
-- `🍺 2 yuenglings®` or `🍺 0.5 kegs @ yuengling®`
+</details>
 
-### Fun Power Conversions
-
-The power metric shows equivalent device runtime, distance, or mass:
+<details>
+<summary><strong>Fun power conversions (8 items)</strong></summary>
 
 | Emoji | Item | Rate | Example |
 |-------|------|------|---------|
@@ -163,145 +278,86 @@ The power metric shows equivalent device runtime, distance, or mass:
 | 🏢 | 395-hudson® | 2MW | `🏢 7.5s 395-hudson®` |
 | 🚗 | 4xe® | 1.45 mi/kWh | `🚗 6.0mi 4xe®` |
 | ✈️ | a320neo® | 0.019 mi/kWh | `✈️ 421ft a320neo®` |
-| 🪨 | coal | ~1 lb/kWh | `🪨 4.2 lbs coal` (scales to tons at 2000 lbs) |
+| 🪨 | coal | ~1 lb/kWh | `🪨 4.2 lbs coal` |
 | ☢️ | reactor-output | 1GW | `☢️ 15ms reactor-output` |
 
-Session displays phone, hue-light, home, 395-hudson, 4xe, and a320neo. Coal and reactor are all-time only.
-
-Each terminal window shows different metrics and fun items simultaneously (based on time), so the display rotates through all options.
-
-## All-Time Tracking
-
-The statusline tracks cumulative usage across all sessions by scanning JSONL files in `~/.claude/projects/`.
-
-The 🏆 trophy indicates all-time totals. The 8-cycle rotation shows:
-- **Cycles 0-2, 4-6:** Session metrics (no trophy)
-- **Cycle 3:** All-time normal with 🏆 — 15-item rotation: 10 fun cost items + coal + reactor + tokens + cost + data
-- **Cycle 7:** All-time absurd item with 🏆 (e.g., `🏝️ 0.0015 private-islands® 🏆`)
-
-## Smart Pace Indicator
-
-Compares your actual weekly usage against where you *should* be based on time elapsed in the 7-day rolling window. Uses the Anthropic OAuth API to fetch real-time usage data.
-
-**The math:** Two signals, take the worse one:
-- **Burn rate** (velocity): `(pct / days_elapsed) × 7 / 100` — how fast you're going
-- **Pressure** (position): `days_remaining / budget_remaining_in_days` — remaining runway
-
-`effective = max(burn_rate, pressure)`
-
-Both signals agree on over/under pace (`> 1.0` = over, `< 1.0` = under), but pressure amplifies urgency when budget is thin. For example, at 91% on Monday 8pm with reset Thursday 1pm: burn rate is 1.48 (🥵) but pressure is 4.29 — you have 9% left for 2.7 days (🚨).
-
-**Pace emoji** (where you are):
-
-| Effective Rate | Emoji | State |
-|-------|-------|-------|
-| < 0.3 | ❄️ | Way under pace |
-| 0.3-0.6 | 🧊 | Under pace |
-| 0.6-0.85 | 🙂 | Comfortable |
-| 0.85-1.15 | 👌 | On pace |
-| 1.15-1.4 | ♨️ | Warming |
-| 1.4-1.8 | 🥵 | Hot |
-| 1.8-2.5 | 🔥 | Very hot |
-| ≥ 2.5 | 🚨 | Critical |
-
-**Trend arrow** (where you're headed):
-
-Tracks **usage% velocity** - how fast you're burning tokens compared to the sustainable rate (100% / 7 days ≈ 0.01%/min).
-
-| Velocity | Arrow | Meaning |
-|----------|-------|---------|
-| > 3x sustainable | ↑ | Heating fast (burning tokens quickly) |
-| 1.5-3x sustainable | ↗ | Warming up |
-| 0.5-1.5x sustainable | → | Stable (on pace) |
-| 0.1-0.5x sustainable | ↘ | Cooling down (light usage) |
-| < 0.1x sustainable | ↓ | Cooling fast (idle) |
-
-**Why velocity-based?** Unlike ratio-based tracking, this is equally responsive regardless of where you are in the week. Hammering Claude will show ↗/↑, taking a break shows ↘/↓.
-
-**History retention:**
-- Last 15 minutes: dense samples (every ~30 sec)
-- 15 min to 24 hours: sparse anchors (1 per 4-hour block)
-- Older than 24 hours: pruned
-
-Combined display: `👌→` (on pace, stable) or `🔥↑` (hot, getting hotter)
-
-When at 100% limit, shows time until reset: `🚨 -1.2d`
-
-The display alternates between emoji+arrow (9 cycles) and raw percentage (1 cycle) every 10 seconds.
-
-## Burst & Credit Indicators
-
-**💥 Burst** (5-hour rate limit) - Colored bar mapped directly to API utilization %, only shown when > 0%
-
-| Range | Bar | Color |
-|-------|-----|-------|
-| 1-12% | ▁ | cyan |
-| 13-24% | ▂ | teal |
-| 25-37% | ▃ | green |
-| 38-49% | ▄ | yellow |
-| 50-62% | ▅ | orange |
-| 63-74% | ▆ | red |
-| 75-87% | ▇ -135m | magenta + reset countdown |
-| 88%+ | █ -90m | bright magenta + reset countdown |
-
-At 75%+, a dimmed countdown shows minutes until the 5-hour window resets.
-
-**💳 Credit** (overage balance) - Only shown when weekly usage hits 100%. Displays remaining dollars and % of monthly cap: `💳$465/$500 (7%)`
-
-## Installation
-
-**One command:**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/install.sh | bash
-```
-
-Then restart Claude Code. That's it.
-
-<details>
-<summary>Manual installation</summary>
-
-1. Copy the script to your Claude config:
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/statusline.sh -o ~/.claude/statusline.sh
-   chmod +x ~/.claude/statusline.sh
-   ```
-
-2. Add to your `~/.claude/settings.json`:
-   ```json
-   {
-     "statusLine": {
-       "type": "command",
-       "command": "~/.claude/statusline.sh",
-       "padding": 0
-     }
-   }
-   ```
-
-3. Restart Claude Code
+Session displays phone through a320neo. Coal and reactor are all-time only.
 
 </details>
 
-## Performance
+<hr>
 
-Typical execution time with warm caches:
+<h2 align="center" id="all-time-tracking">🏆 All-Time Tracking</h2>
+
+Cumulative usage across all sessions by scanning JSONL files in `~/.claude/projects/`.
+
+The 🏆 trophy indicates all-time totals. The 8-cycle rotation (10s each) shows:
+- **Cycles 0-2, 4-6:** Session metrics (no trophy)
+- **Cycle 3:** All-time normal with 🏆 — 15-item rotation: 10 fun cost + coal + reactor + tokens + cost + data
+- **Cycle 7:** All-time absurd with 🏆 (e.g., `🏝️ 0.0015 private-islands® 🏆`)
+
+<details>
+<summary><strong>Context bar tiers</strong></summary>
+
+**Auto-compact ON** (10 tiers, scaled to 168K):
+
+| Range | Color | Icon | Meaning |
+|-------|-------|------|---------|
+| 0-9% | Cyan | ✨ | Fresh |
+| 10-19% | Lime | 🌱 | Growing |
+| 20-34% | Yellow | 💭 | Thinking |
+| 35-49% | Orange | 🧠 | Working hard |
+| 50-61% | Coral | ⚡ | Heating up |
+| 62-73% | Red | 🔥 | Hot |
+| 74-83% | Hot Pink | 🌡️ | Running hot |
+| 84-91% | Magenta | 🫠 | Melting — compact soon |
+| 92-96% | Violet | 💀 | Critical |
+| 97%+ | White Hot | 💾 | About to auto-compact |
+
+**Auto-compact OFF** (8 tiers, scaled to 200K):
+
+| Range | Color | Icon | Meaning |
+|-------|-------|------|---------|
+| 0-14% | Cyan | ✨ | Fresh |
+| 15-29% | Lime | 🌱 | Growing |
+| 30-49% | Yellow | 💭 | Thinking |
+| 50-64% | Orange | 🧠 | Working hard |
+| 65-74% | Coral | 🔥 | Hot |
+| 75-84% | Red | 💾 | Compact zone |
+| 85-94% | Hot Pink | 🫠 | Past compact zone |
+| 95%+ | Magenta | 💀 | Near hard wall |
+
+</details>
+
+<hr>
+
+<h2 align="center" id="performance">⚡ Performance</h2>
 
 | Scenario | Time |
 |----------|------|
 | Warm caches (typical) | ~250ms |
 | Best case | ~190ms |
-| Cold API cache | +700ms (network) |
 | Cold JSONL cache | +2.5s (file scan) |
 
-Caching keeps things fast:
-- **API cache:** 60 seconds (usage data from Anthropic)
-- **JSONL cache:** 5 minutes (all-time totals from project files)
+Rate limit data comes directly from the Claude Code status line JSON — zero network calls during normal operation. The trend velocity calculation uses a single awk call instead of 10+ shell commands.
 
-The script optimizes subprocess calls - the trend velocity calculation uses a single awk call instead of 10+ shell commands (head, tail, wc, grep, sort, bc, etc.).
+<hr>
 
-## Requirements
+<h2 align="center" id="requirements">🔧 Requirements</h2>
 
-- `jq` (for JSON parsing)
-- `bc` (for cost calculation)
-- `git` (for branch detection)
-- `perl` (for JSONL parsing)
+<div align="center">
+
+[![jq](https://img.shields.io/badge/jq-JSON_parsing-C9A227)](https://jqlang.github.io/jq/)
+[![bc](https://img.shields.io/badge/bc-cost_calculation-555)](https://www.gnu.org/software/bc/)
+[![git](https://img.shields.io/badge/git-branch_detection-F05032?logo=git&logoColor=white)](https://git-scm.com/)
+[![perl](https://img.shields.io/badge/perl-JSONL_parsing-39457E?logo=perl&logoColor=white)](https://www.perl.org/)
+
+</div>
+
+---
+
+<div align="center">
+
+**[MIT License](LICENSE)**
+
+</div>
