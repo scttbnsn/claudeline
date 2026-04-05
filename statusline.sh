@@ -840,8 +840,13 @@ format_number() {
         echo "$num"
         return
     fi
-    # Strip trailing .0 (150.0K → 150K)
-    echo "${result/.0/}"
+    # Strip only a single trailing .0 before the magnitude suffix (150.0K → 150K, keep 1.00M)
+    local suffix=${result: -1}
+    local mantissa=${result%$suffix}
+    if [[ "$mantissa" == *.0 ]]; then
+        mantissa=${mantissa%.0}
+    fi
+    echo "${mantissa}${suffix}"
 }
 
 # Format a decimal as a human-friendly count (K/M suffix, or 1/Nth fractions for values < 1)
