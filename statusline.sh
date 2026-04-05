@@ -655,10 +655,18 @@ else
 fi
 
 # Session-tier fun cost items (price <= $20) — shown during session display
-SESSION_COST_ITEMS=(0 1 2 3 4 5 6 8 9 10 11 12 13 14 15 18 21 24 25 26 27 29 32 33)
+SESSION_COST_ITEMS=(
+    "starbucks" "joes" "tacorias" "yuengling" "shackburger" "chiquita" "alamo"
+    "charmin" "crayola" "haas" "auntie-annes" "blue-point" "nathans" "ess-a-bagel"
+    "nami-nori" "big-gulp" "sweetgreen" "levain" "chipotle" "juice-press"
+    "pommes-frites" "njt" "cronut" "apple-music"
+)
 
 # All-time-tier fun cost items (price > $20) — shown during all-time normal display
-ALLTIME_COST_ITEMS=(7 16 17 19 20 22 23 28 30 31)
+ALLTIME_COST_ITEMS=(
+    "gta6" "lugers" "exxon-valdez" "carbone" "redlobster"
+    "equinox" "soulcycle" "razor" "magic-mouse" "iphone"
+)
 
 # Session metric: 4 equal categories, rotate items within each
 # Categories: 0=water(1), 1=power(7), 2=utility(3), 3=fun_cost(24 session-tier)
@@ -667,7 +675,7 @@ CATEGORY_INDEX=$((NOW_DIV_10 % 4))
 ITEM_CYCLE=$((NOW_DIV_10 / 4))
 POWER_ITEM_INDEX=$((ITEM_CYCLE % 7))      # 0=standard, 1-6=fun power (no coal/reactor)
 UTILITY_ITEM_INDEX=$((ITEM_CYCLE % 3))    # 0=tokens, 1=money, 2=data
-FUN_COST_ITEM_INDEX=${SESSION_COST_ITEMS[$((ITEM_CYCLE % ${#SESSION_COST_ITEMS[@]}))]}  # session-tier only (price <= $20)
+FUN_COST_ITEM_ID=${SESSION_COST_ITEMS[$((ITEM_CYCLE % ${#SESSION_COST_ITEMS[@]}))]}  # session-tier only (price <= $20)
 
 # All-time item indices (rotate through items within their category)
 # Normal: 10 cost + coal + reactor + tokens + cost + data = 15; Absurd: 7 items
