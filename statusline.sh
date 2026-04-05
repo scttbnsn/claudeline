@@ -307,7 +307,7 @@ refresh_jsonl_state() {
 }
 
 get_jsonl_totals() {
-    local now=$(date +%s)
+    local now=${1:-${NOW:-$(date +%s)}}
     local cache_age=999999
     local state_age=999999
 
@@ -624,9 +624,13 @@ if ! TOTAL_COST_CENTS=$(awk "BEGIN{printf \"%.0f\", $TOTAL_COST * 100}" 2>>"$STA
     TOTAL_COST_CENTS=0
 fi
 
+# Cache current timestamp (used multiple times - avoid repeated date calls)
+NOW=$(date +%s)
+NOW_DIV_10=$((NOW / 10))
+
 # Get all-time totals from JSONL files (cached)
 # Consolidate: 2 echo + 2 tail + 2 awk + 1 bc → 1 read (pure bash)
-JSONL_DATA=$(get_jsonl_totals)
+JSONL_DATA=$(get_jsonl_totals "$NOW")
 read -r ALL_TIME_TOKENS ALL_TIME_COST_CENTS _ _ _ _ <<< "${JSONL_DATA##*$'\n'}"
 ALL_TIME_TOKENS=${ALL_TIME_TOKENS:-0}
 ALL_TIME_COST_CENTS=${ALL_TIME_COST_CENTS:-0}
@@ -634,10 +638,6 @@ ALL_TIME_COST_CENTS=${ALL_TIME_COST_CENTS:-0}
 ALL_TIME_COST="$((ALL_TIME_COST_CENTS / 100)).$((ALL_TIME_COST_CENTS % 100))"
 # Pad single-digit cents: "2.7" → "2.07"
 [[ "$ALL_TIME_COST" =~ \.([0-9])$ ]] && ALL_TIME_COST="${ALL_TIME_COST%.*}.0${BASH_REMATCH[1]}"
-
-# Cache current timestamp (used multiple times - avoid repeated date calls)
-NOW=$(date +%s)
-NOW_DIV_10=$((NOW / 10))
 
 # 8-cycle rotation pattern: 3 session → 1 all-time normal 🏆 → 3 session → 1 all-time absurd 🏆 → repeat
 # Session metrics: water(1), power(7), utility(3), fun_cost(28 session-tier) = 39 total
