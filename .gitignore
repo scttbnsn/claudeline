@@ -12,6 +12,9 @@ Thumbs.db
 # Cache directories
 .claude-usage.d/
 
+# Logs
+logs/
+
 # Environment files
 .env
 .env.local
