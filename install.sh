@@ -74,16 +74,18 @@ STATUSLINE_CONFIG='{
 
 if [ -f "$SETTINGS_PATH" ]; then
     # Backup existing settings
-    cp "$SETTINGS_PATH" "$SETTINGS_PATH.backup"
+    cp -p "$SETTINGS_PATH" "$SETTINGS_PATH.backup"
 
     # Always update statusLine to point to the correct script
-    jq --argjson sl "$STATUSLINE_CONFIG" '.statusLine = $sl' "$SETTINGS_PATH" > "$SETTINGS_PATH.tmp"
-    mv "$SETTINGS_PATH.tmp" "$SETTINGS_PATH"
+    tmp=$(mktemp "$SETTINGS_PATH.XXXXXX") || { echo "Failed to create temp file"; exit 1; }
+    jq --argjson sl "$STATUSLINE_CONFIG" '.statusLine = $sl' "$SETTINGS_PATH" > "$tmp"
+    chmod 600 "$tmp"
+    mv "$tmp" "$SETTINGS_PATH"
     echo -e "${GREEN}✓${NC} Updated settings.json"
     echo -e "  ${DIM}Backup saved to $SETTINGS_PATH.backup${NC}"
 else
     # Create new settings.json
-    echo "{\"statusLine\": $STATUSLINE_CONFIG}" | jq . > "$SETTINGS_PATH"
+    (umask 077; echo "{\"statusLine\": $STATUSLINE_CONFIG}" | jq . > "$SETTINGS_PATH")
     echo -e "${GREEN}✓${NC} Created settings.json"
 fi
 
