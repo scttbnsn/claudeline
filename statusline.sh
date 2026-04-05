@@ -111,7 +111,7 @@ JSONL_STATE="$CACHE_DIR/.jsonl-state"
 TREND_CACHE="$CACHE_DIR/.trend-cache"
 USAGE_HISTORY="$CACHE_DIR/.usage-history"
 TREND_WINDOW=900   # 15 minutes in seconds
-mkdir -p "$CACHE_DIR" 2>>"$STATUSLINE_DEBUG_LOG" && chmod 700 "$CACHE_DIR" 2>>"$STATUSLINE_DEBUG_LOG"
+(umask 077 && mkdir -p "$CACHE_DIR") 2>>"$STATUSLINE_DEBUG_LOG"
 
 # Read auto-compact setting from Claude Code config
 CLAUDE_JSON="$HOME/.claude.json"
