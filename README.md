@@ -335,11 +335,23 @@ The 🏆 trophy indicates all-time totals. The 8-cycle rotation (10s each) shows
 
 | Scenario | Time |
 |----------|------|
-| Warm caches (typical) | ~250ms |
-| Best case | ~190ms |
-| Cold JSONL cache | +2.5s (file scan) |
+| Fully warm (typical) | ~180ms |
+| Warm state, expired cache | ~195ms |
+| Best case | ~175ms |
+| Cold JSONL scan (first run) | ~8-40s (10K+ files, 1.2GB) |
 
-Rate limit data comes directly from the Claude Code status line JSON — zero network calls during normal operation. The trend velocity calculation uses a single awk call instead of 10+ shell commands.
+**Cost breakdown** (warm, ~180ms total):
+
+| Phase | Time | Tool |
+|-------|------|------|
+| Git status | ~90ms | 3 git calls |
+| jq parse | ~16ms | 1 jq call |
+| Trend/pace | ~20ms | 1 awk call |
+| JSONL cache read | ~5ms | bash read |
+| Formatting | ~22ms | 1 awk + 2 bc |
+| Source libs + rest | ~27ms | bash |
+
+Rate limit data comes directly from the Claude Code status line JSON — zero network calls during normal operation. Cold JSONL scans are slow on first run but the per-file state persists across cache expiry, so subsequent scans only process appended bytes.
 
 <hr>
 
