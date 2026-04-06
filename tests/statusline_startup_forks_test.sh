@@ -31,7 +31,7 @@ assert_contains 'STATUSLINE_DIR=${BASH_SOURCE[0]%/*}' "statusline should derive 
 assert_contains '[ "$STATUSLINE_DIR" = "${BASH_SOURCE[0]}" ] && STATUSLINE_DIR=.' "statusline should handle slashless invocation without dirname"
 assert_not_contains 'dirname "${BASH_SOURCE[0]}"' "statusline should not spawn dirname to resolve its directory"
 
-assert_contains 'NOW=${EPOCHSECONDS:-$(date +%s)}' "statusline should prefer EPOCHSECONDS for the current timestamp"
+assert_contains 'NOW=${NOW:-${EPOCHSECONDS:-$(date +%s)}}' "statusline should prefer existing NOW or EPOCHSECONDS for the current timestamp"
 assert_not_contains 'NOW=$(date +%s)' "statusline should not unconditionally spawn date for the current timestamp"
 
 assert_contains 'TERM_WIDTH="${COLUMNS:-120}"' "statusline should use COLUMNS with a hardcoded terminal-width fallback"
