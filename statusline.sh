@@ -4,7 +4,7 @@ set -euo pipefail
 # 🎀 Cute Claude Status Line
 # Shows: model, context %, git branch, directory, session stats
 
-input=$(cat)
+input=$(</dev/stdin)
 
 # Load config file — env vars take precedence over config values
 CLAUDELINE_CONF="${CLAUDELINE_CONF:-$HOME/.claude/claudeline.conf}"
@@ -88,18 +88,18 @@ round_decimal_to_int_or_default() {
 
     case "$value" in
         ""|_|null)
-            printf '%s\n' "$default_value"
+            printf -v REPLY '%s' "$default_value"
             return 0
             ;;
     esac
 
     if ! printf -v rounded "%.0f" "$value" 2>>"$STATUSLINE_DEBUG_LOG"; then
         debug_log "Invalid $label value '${value:-<empty>}'; defaulting to $default_value"
-        printf '%s\n' "$default_value"
+        printf -v REPLY '%s' "$default_value"
         return 0
     fi
 
-    printf '%s\n' "${rounded:-$default_value}"
+    printf -v REPLY '%s' "${rounded:-$default_value}"
 }
 
 read_auto_compact_setting() {
@@ -149,7 +149,8 @@ read_auto_compact_setting() {
     printf '%s\n' "$cached_value"
 }
 
-STATUSLINE_DIR=$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+STATUSLINE_DIR=${BASH_SOURCE[0]%/*}
+[ "$STATUSLINE_DIR" = "${BASH_SOURCE[0]}" ] && STATUSLINE_DIR=.
 # shellcheck source=lib/statusline_themes.sh
 source "$STATUSLINE_DIR/lib/statusline_themes.sh"
 # shellcheck source=lib/statusline_display.sh
@@ -265,8 +266,9 @@ else
     TOTAL_COST_CENTS=$REPLY
 fi
 
-# Cache current timestamp (used multiple times - avoid repeated date calls)
-NOW=$(date +%s)
+# Cache current timestamp (used multiple times - avoid repeated date calls).
+# EPOCHSECONDS is unavailable on Bash 3.2, so keep date as a compatibility fallback.
+NOW=${EPOCHSECONDS:-$(date +%s)}
 NOW_DIV_10=$((NOW / 10))
 
 # Get all-time totals from JSONL files (cached)
@@ -523,25 +525,30 @@ fi
 # Rate limit data extracted from stdin (rate_limits.seven_day / five_hour)
 # Read extra_usage (credit overage) from cache and refresh it asynchronously when stale.
 EXTRA_UTIL=""
-WEEKLY_PCT=$(round_decimal_to_int_or_default "$WEEKLY_USAGE" 0 "weekly usage")
-BURST_PCT=$(round_decimal_to_int_or_default "$BURST_USAGE" 0 "burst usage")
+round_decimal_to_int_or_default "$WEEKLY_USAGE" 0 "weekly usage"
+WEEKLY_PCT=$REPLY
+round_decimal_to_int_or_default "$BURST_USAGE" 0 "burst usage"
+BURST_PCT=$REPLY
 if seg_on "$_SEG_CREDIT" && { [ "${WEEKLY_PCT:-0}" -ge 100 ] 2>>"$STATUSLINE_DEBUG_LOG" || [ "${BURST_PCT:-0}" -ge 100 ] 2>>"$STATUSLINE_DEBUG_LOG"; }; then
     EXTRA_UTIL=$(get_extra_usage_util_nonblocking "$NOW")
 fi
 
 PACE_INDICATOR=""
 if seg_on "$_SEG_PACE" && [ -n "$WEEKLY_USAGE" ]; then
-    PACE_INDICATOR="$(get_smart_pace_indicator "$WEEKLY_USAGE" "$RESETS_AT" "$NOW")"
+    get_smart_pace_indicator "$WEEKLY_USAGE" "$RESETS_AT" "$NOW"
+    PACE_INDICATOR=$REPLY
 fi
 
 BURST_INDICATOR=""
 if seg_on "$_SEG_BURST"; then
-    BURST_INDICATOR="$(format_burst_indicator "$BURST_USAGE" "$BURST_RESETS" "$NOW")"
+    format_burst_indicator "$BURST_USAGE" "$BURST_RESETS" "$NOW"
+    BURST_INDICATOR=$REPLY
 fi
 
 CREDIT_INDICATOR=""
 if seg_on "$_SEG_CREDIT" && [ -n "$EXTRA_UTIL" ] && [ "$EXTRA_UTIL" != "_" ] && [ "$EXTRA_UTIL" != "null" ]; then
-    EXTRA_PCT=$(round_decimal_to_int_or_default "$EXTRA_UTIL" 0 "extra usage")
+    round_decimal_to_int_or_default "$EXTRA_UTIL" 0 "extra usage"
+    EXTRA_PCT=$REPLY
     if [ "$EXTRA_PCT" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
         if [ "${WEEKLY_PCT:-0}" -ge 100 ] 2>>"$STATUSLINE_DEBUG_LOG" || [ "${BURST_PCT:-0}" -ge 100 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
             CREDIT_INDICATOR="${DIM}💳${EXTRA_PCT}%${RESET}"
@@ -622,7 +629,7 @@ _L1_BURST=""; seg_on "$_SEG_BURST" && [ -n "$BURST_INDICATOR" ] && _L1_BURST="$B
 _L1_CREDIT=""; seg_on "$_SEG_CREDIT" && [ -n "$CREDIT_INDICATOR" ] && _L1_CREDIT="$CREDIT_INDICATOR"
 
 # Priority order: context > git > pace > duration > lines > burst > credit
-echo -e "$(_build_responsive_line "$TERM_WIDTH" "$_L1_CONTEXT" "$_L1_GIT" "$_L1_PACE" "$_L1_DURATION" "$_L1_LINES" "$_L1_BURST" "$_L1_CREDIT")"
+printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L1_CONTEXT" "$_L1_GIT" "$_L1_PACE" "$_L1_DURATION" "$_L1_LINES" "$_L1_BURST" "$_L1_CREDIT")"
 
 # Prepare line 2 segments in priority order
 _L2_TOKENS=""
@@ -642,4 +649,4 @@ fi
 _L2_METRIC=""; seg_on "$_SEG_METRIC" && _L2_METRIC="$METRIC_INFO"
 
 # Priority order: tokens > model > throughput > metric
-echo -e "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_MODEL" "$_L2_THROUGHPUT" "$_L2_METRIC")"
+printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_MODEL" "$_L2_THROUGHPUT" "$_L2_METRIC")"

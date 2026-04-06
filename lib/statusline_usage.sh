@@ -438,100 +438,128 @@ get_extra_usage_util_nonblocking() {
 # Tracks how fast you're burning tokens vs sustainable rate
 # Sustainable rate = 100% / 7 days ≈ 0.01%/min
 # Returns: ↑ (heating fast), ↗ (warming), → (stable), ↘ (cooling), ↓ (cooling fast)
+trend_usage_to_milli_pct() {
+    local usage=$1
+    local out_var=$2
+    local scaled_usage=""
+
+    [[ "$usage" == .* ]] && usage="0$usage"
+    is_decimal_value "$usage" || return 1
+    if ! printf -v scaled_usage '%.0f' "${usage}e3" 2>>"$STATUSLINE_DEBUG_LOG"; then
+        return 1
+    fi
+
+    printf -v "$out_var" '%s' "$scaled_usage"
+}
+
 get_trend_arrow() {
     local current_usage=$1  # Current usage percentage (0-100)
     local week_start=${2:-0}  # Epoch when current week started (optional)
     local now=${3:-$(date +%s)}  # Epoch timestamp (passed from caller)
+    local trend_window=${TREND_WINDOW:-900}
+    local trend_history_max_age=${TREND_HISTORY_MAX_AGE}
+    local min_interval=30
+    local anchor_interval=14400
+    local max_age=$((now - trend_history_max_age))
+    local cutoff=$((now - trend_window))
+    local first_time=0
+    local first_usage=""
+    local last_time=0
+    local last_usage=""
+    local most_recent_time=0
+    local count=0
+    local kept_history=""
+    local kept_sep=""
+    local seen_blocks="|"
+    local sample_time sample_usage block
+    local arrow_code="stable"
     [[ "$current_usage" == .* ]] && current_usage="0$current_usage"
 
-    # Single awk call: append, prune, calculate velocity, return arrow code
-    # This replaces ~10 subprocess calls (tail, head, wc, 2x awk, sort, 4x bc) with 1
-    # Data output goes to temp file via -v out variable (not stderr) to prevent
-    # awk errors from corrupting history file
-    local tmp
-    tmp=$(mktemp "${CACHE_DIR}/.trend-XXXXXX") || return
-    touch "$USAGE_HISTORY" 2>>"$STATUSLINE_DEBUG_LOG"
-    local arrow_code
-    if arrow_code=$(awk -F, -v now="$now" -v usage="$current_usage" \
-        -v week_start="$week_start" -v trend_window="${TREND_WINDOW:-900}" \
-        -v trend_history_max_age="$TREND_HISTORY_MAX_AGE" \
-        -v out="$tmp" '
-    BEGIN {
-        min_interval = 30
-        max_age = now - trend_history_max_age
-        cutoff = now - trend_window
-        anchor_interval = 14400
-        sustainable = 0.00992
-        first_time = 0; first_usage = 0
-        last_time = 0; last_usage = 0
-        count = 0
-    }
-    {
-        # Skip entries before week start (handles weekly reset)
-        if (week_start > 0 && $1 < week_start) next
-        # Skip entries older than 24hr
-        if ($1 < max_age) next
+    if [ -f "$USAGE_HISTORY" ]; then
+        while IFS=, read -r sample_time sample_usage || [ -n "$sample_time" ]; do
+            [ -n "$sample_time" ] || continue
+            [[ "$sample_time" =~ ^[0-9]+$ ]] || continue
+            [ -n "${sample_usage:-}" ] || continue
+            [[ "$sample_usage" == .* ]] && sample_usage="0$sample_usage"
+            is_decimal_value "$sample_usage" || continue
 
-        # Smart pruning: keep recent samples, sparse anchors for older
-        if ($1 < cutoff) {
-            block = int((now - $1) / anchor_interval)
-            if (block in seen) next
-            seen[block] = 1
-        }
+            if [ "$week_start" -gt 0 ] && [ "$sample_time" -lt "$week_start" ]; then
+                continue
+            fi
+            if [ "$sample_time" -lt "$max_age" ]; then
+                continue
+            fi
 
-        # Track first and last for velocity calc
-        if (first_time == 0 || $1 < first_time) { first_time = $1; first_usage = $2 }
-        if ($1 > last_time) { last_time = $1; last_usage = $2 }
-        count++
+            if [ "$sample_time" -lt "$cutoff" ]; then
+                block=$(((now - sample_time) / anchor_interval))
+                case "$seen_blocks" in
+                    *"|$block|"*) continue ;;
+                esac
+                seen_blocks="${seen_blocks}${block}|"
+            fi
 
-        # Remember for append check
-        most_recent_time = (most_recent_time > $1) ? most_recent_time : $1
+            if [ "$first_time" -eq 0 ] || [ "$sample_time" -lt "$first_time" ]; then
+                first_time=$sample_time
+                first_usage=$sample_usage
+            fi
+            if [ "$sample_time" -gt "$last_time" ]; then
+                last_time=$sample_time
+                last_usage=$sample_usage
+            fi
+            if [ "$sample_time" -gt "$most_recent_time" ]; then
+                most_recent_time=$sample_time
+            fi
+            count=$((count + 1))
+            printf -v kept_history '%s%s%s,%s' "$kept_history" "$kept_sep" "$sample_time" "$sample_usage"
+            kept_sep=$'\n'
+        done < "$USAGE_HISTORY"
+    fi
 
-        # Output kept lines to temp file (not stderr, to avoid corruption from awk errors)
-        print >> out
-    }
-    END {
-        # Append new entry if enough time passed
-        if (now - most_recent_time >= min_interval) {
-            print now "," usage >> out
-            if (first_time == 0) { first_time = now; first_usage = usage }
-            last_time = now; last_usage = usage
-            count++
-        }
-        close(out)
+    if [ $((now - most_recent_time)) -ge "$min_interval" ]; then
+        if [ "$first_time" -eq 0 ]; then
+            first_time=$now
+            first_usage=$current_usage
+        fi
+        last_time=$now
+        last_usage=$current_usage
+        count=$((count + 1))
+        printf -v kept_history '%s%s%s,%s' "$kept_history" "$kept_sep" "$now" "$current_usage"
+    fi
 
-        # Need 2+ points and 1+ minute elapsed
-        if (count < 2) { print "stable"; exit }
-        elapsed_min = (last_time - first_time) / 60
-        if (elapsed_min < 1) { print "stable"; exit }
+    if ! printf '%s' "$kept_history" > "$USAGE_HISTORY" 2>>"$STATUSLINE_DEBUG_LOG"; then
+        debug_log "Trend history update failed; keeping prior arrow history state"
+    fi
 
-        # Calculate velocity ratio
-        velocity = (last_usage - first_usage) / elapsed_min
-        ratio = velocity / sustainable
+    if [ "$count" -ge 2 ]; then
+        local elapsed_seconds=$((last_time - first_time))
+        if [ "$elapsed_seconds" -ge 60 ]; then
+            local first_usage_milli last_usage_milli delta_usage_milli
+            if trend_usage_to_milli_pct "$first_usage" first_usage_milli \
+                && trend_usage_to_milli_pct "$last_usage" last_usage_milli; then
+                delta_usage_milli=$((last_usage_milli - first_usage_milli))
 
-        # Map to arrow code
-        if (ratio > 3) print "hot"
-        else if (ratio > 1.5) print "warm"
-        else if (ratio < 0.1) print "cold"
-        else if (ratio < 0.5) print "cool"
-        else print "stable"
-    }
-    ' "$USAGE_HISTORY"); then
-        # Replace history with pruned version only on success
-        mv "$tmp" "$USAGE_HISTORY" 2>>"$STATUSLINE_DEBUG_LOG"
-    else
-        debug_log "Trend history update failed; falling back to stable arrow"
-        rm -f "$tmp"
-        arrow_code="stable"
+                if [ $((delta_usage_milli * 6048)) -gt $((elapsed_seconds * 3000)) ]; then
+                    arrow_code="hot"
+                elif [ $((delta_usage_milli * 12096)) -gt $((elapsed_seconds * 3000)) ]; then
+                    arrow_code="warm"
+                elif [ $((delta_usage_milli * 60480)) -lt $((elapsed_seconds * 1000)) ]; then
+                    arrow_code="cold"
+                elif [ $((delta_usage_milli * 12096)) -lt $((elapsed_seconds * 1000)) ]; then
+                    arrow_code="cool"
+                fi
+            else
+                debug_log "Trend history contains invalid usage values; falling back to stable arrow"
+            fi
+        fi
     fi
 
     # Map code to colored arrow
     case "$arrow_code" in
-        hot)    echo -e "${VEL_HOT}↑${RESET}" ;;
-        warm)   echo -e "${VEL_WARM}↗${RESET}" ;;
-        cold)   echo -e "${VEL_COLD}↓${RESET}" ;;
-        cool)   echo -e "${VEL_COOL}↘${RESET}" ;;
-        *)      echo -e "${VEL_STABLE}→${RESET}" ;;
+        hot)    REPLY="${VEL_HOT}↑${RESET}" ;;
+        warm)   REPLY="${VEL_WARM}↗${RESET}" ;;
+        cold)   REPLY="${VEL_COLD}↓${RESET}" ;;
+        cool)   REPLY="${VEL_COOL}↘${RESET}" ;;
+        *)      REPLY="${VEL_STABLE}→${RESET}" ;;
     esac
 }
 
@@ -664,7 +692,7 @@ get_smart_pace_indicator() {
     local pct=""
     normalize_pace_usage_pct "$usage" pct
     if [ -z "$pct" ]; then
-        echo ""
+        REPLY=""
         return
     fi
     pct=${pct:-0}
@@ -676,19 +704,20 @@ get_smart_pace_indicator() {
     # Check cycle FIRST so raw % always shows on its cycles, regardless of alarm state
     local cycle=$(( (now / 10) % 10 ))
     if [ "$cycle" -ge 7 ]; then
-        echo "${DIM}${pct}%${RESET}"
+        REPLY="${DIM}${pct}%${RESET}"
         return
     fi
 
     # If at/over limit, always show alarm with reset time
     if [ "$pct" -ge 100 ]; then
-        echo "🚨${reset_suffix}"
+        REPLY="🚨${reset_suffix}"
         return
     fi
 
     # Get trend arrow based on usage% velocity
     local arrow
-    arrow=$(get_trend_arrow "$usage" "$week_start" "$now")
+    get_trend_arrow "$usage" "$week_start" "$now"
+    arrow=$REPLY
 
     # Effective rate = max(burn_rate, pressure)
     # Burn rate captures velocity, pressure captures remaining runway
@@ -699,5 +728,5 @@ get_smart_pace_indicator() {
     fi
     pace_emoji_for_rate "$effective_rate_x10k" emoji
 
-    echo "${emoji}${arrow}"
+    REPLY="${emoji}${arrow}"
 }

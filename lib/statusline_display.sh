@@ -779,22 +779,27 @@ format_burst_indicator() {
     local burst_usage=$1
     local burst_resets=$2
     local now=${3:-${NOW:-$(date +%s)}}
-
-    if [ -z "$burst_usage" ] || [ "$burst_usage" = "_" ] || [ "$burst_usage" = "null" ]; then
-        printf '%s\n' ""
-        return
-    fi
-
-    local burst_pct
-    burst_pct=$(printf "%.0f" "$burst_usage" 2>>"$STATUSLINE_DEBUG_LOG")
-    burst_pct=${burst_pct:-0}
-    if ! [ "$burst_pct" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
-        printf '%s\n' ""
-        return
-    fi
-
+    local burst_pct=""
     local burst_reset_epoch=""
     local secs_left=0
+    local burst_bar=""
+    local burst_color=""
+    local mins=0
+
+    if [ -z "$burst_usage" ] || [ "$burst_usage" = "_" ] || [ "$burst_usage" = "null" ]; then
+        REPLY=""
+        return
+    fi
+
+    if ! printf -v burst_pct "%.0f" "$burst_usage" 2>>"$STATUSLINE_DEBUG_LOG"; then
+        burst_pct=0
+    fi
+    burst_pct=${burst_pct:-0}
+    if ! [ "$burst_pct" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
+        REPLY=""
+        return
+    fi
+
     if [ -n "$burst_resets" ] && [ "$burst_resets" != "_" ] && [ "$burst_resets" != "null" ] && [ "$burst_resets" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
         burst_reset_epoch="$burst_resets"
         secs_left=$((burst_reset_epoch - now))
@@ -802,15 +807,14 @@ format_burst_indicator() {
 
     if [ "$burst_pct" -ge 100 ]; then
         if [ -n "$burst_reset_epoch" ] && [ "$secs_left" -gt 0 ]; then
-            local mins=$(( (secs_left + 59) / 60 ))
-            printf '%s\n' "💥🤑 ${DIM}-${mins}m${RESET}"
+            mins=$(( (secs_left + 59) / 60 ))
+            REPLY="💥🤑 ${DIM}-${mins}m${RESET}"
         else
-            printf '%s\n' "💥🤑"
+            REPLY="💥🤑"
         fi
         return
     fi
 
-    local burst_bar burst_color
     if [ "$burst_pct" -lt 13 ]; then
         burst_bar="▁"; burst_color="$BURST_CYAN"
     elif [ "$burst_pct" -lt 25 ]; then
@@ -830,9 +834,9 @@ format_burst_indicator() {
     fi
 
     if [ "$burst_pct" -ge 75 ] && [ -n "$burst_reset_epoch" ] && [ "$secs_left" -gt 0 ]; then
-        local mins=$(( (secs_left + 59) / 60 ))
-        printf '%s\n' "💥${burst_color}${burst_bar}${RESET} ${DIM}-${mins}m${RESET}"
+        mins=$(( (secs_left + 59) / 60 ))
+        REPLY="💥${burst_color}${burst_bar}${RESET} ${DIM}-${mins}m${RESET}"
     else
-        printf '%s\n' "💥${burst_color}${burst_bar}${RESET}"
+        REPLY="💥${burst_color}${burst_bar}${RESET}"
     fi
 }
