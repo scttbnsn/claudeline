@@ -2,25 +2,101 @@
 use strict;
 use warnings;
 use JSON::PP qw(decode_json);
+use FindBin qw($Bin);
 
-use constant {
-    SONNET_INPUT_COST_UNITS       => 300,
-    SONNET_OUTPUT_COST_UNITS      => 1500,
-    SONNET_CACHE_WRITE_COST_UNITS => 375,
-    SONNET_CACHE_READ_COST_UNITS  => 30,
-    OPUS_INPUT_COST_UNITS         => 1500,
-    OPUS_OUTPUT_COST_UNITS        => 7500,
-    OPUS_CACHE_WRITE_COST_UNITS   => 1875,
-    OPUS_CACHE_READ_COST_UNITS    => 150,
-};
+my $PRICING_MANIFEST_PATH = $ENV{STATUSLINE_PRICING_MANIFEST} // "$Bin/anthropic_pricing.json";
+my %PRICING_BY_KEY;
+my @PRICING_RULES;
+my %FALLBACK_PRICING_KEYS;
+my %WARNED_UNKNOWN_MODELS;
 
 sub usage {
     die "usage: $0 cold-scan | refresh-state <state_path> <now> <out_path>\n";
 }
 
-sub is_opus_model {
+sub slurp {
+    my ($path) = @_;
+    open my $fh, '<', $path or die "open $path: $!";
+    local $/;
+    my $content = <$fh>;
+    close $fh;
+    return $content // '';
+}
+
+sub load_pricing_manifest {
+    my $doc = decode_json(slurp($PRICING_MANIFEST_PATH));
+
+    die "pricing manifest $PRICING_MANIFEST_PATH is missing a pricing map\n"
+        unless ref($doc->{pricing}) eq 'HASH';
+    die "pricing manifest $PRICING_MANIFEST_PATH is missing rules\n"
+        unless ref($doc->{rules}) eq 'ARRAY';
+    die "pricing manifest $PRICING_MANIFEST_PATH is missing fallback pricing keys\n"
+        unless ref($doc->{fallback_pricing_keys}) eq 'HASH';
+
+    %PRICING_BY_KEY = %{$doc->{pricing}};
+    @PRICING_RULES = map {
+        my $pricing_key = $_->{pricing_key} // '';
+        my $match_kind = $_->{match_kind} // '';
+        my $match_value = $_->{match_value} // '';
+
+        die "invalid pricing rule in $PRICING_MANIFEST_PATH\n"
+            unless length $pricing_key
+            && ($match_kind eq 'exact' || $match_kind eq 'regex')
+            && length $match_value
+            && exists $PRICING_BY_KEY{$pricing_key};
+
+        {
+            pricing_key => $pricing_key,
+            match_kind => $match_kind,
+            match_value => $match_value,
+            compiled_regex => $match_kind eq 'regex' ? qr/$match_value/ : undef,
+        };
+    } @{$doc->{rules}};
+
+    %FALLBACK_PRICING_KEYS = %{$doc->{fallback_pricing_keys}};
+    for my $family (qw(default opus sonnet haiku)) {
+        die "pricing manifest $PRICING_MANIFEST_PATH is missing fallback key for $family\n"
+            unless exists $FALLBACK_PRICING_KEYS{$family}
+            && exists $PRICING_BY_KEY{$FALLBACK_PRICING_KEYS{$family}};
+    }
+}
+
+sub warn_unknown_model_once {
     my ($model) = @_;
-    return defined $model && $model =~ /claude-opus|opus-4/ ? 1 : 0;
+    return if !defined $model || $WARNED_UNKNOWN_MODELS{$model}++;
+
+    my $fallback_key = fallback_pricing_key_for_model($model);
+    warn "Unknown Claude model $model; falling back to $fallback_key pricing\n";
+}
+
+sub fallback_pricing_key_for_model {
+    my ($model) = @_;
+
+    return $FALLBACK_PRICING_KEYS{opus}
+        if defined $model && $model =~ /opus/i;
+    return $FALLBACK_PRICING_KEYS{haiku}
+        if defined $model && $model =~ /haiku/i;
+    return $FALLBACK_PRICING_KEYS{sonnet}
+        if defined $model && $model =~ /sonnet/i;
+    return $FALLBACK_PRICING_KEYS{default};
+}
+
+sub pricing_key_for_model {
+    my ($model) = @_;
+
+    if (defined $model) {
+        for my $rule (@PRICING_RULES) {
+            if ($rule->{match_kind} eq 'exact' && $model eq $rule->{match_value}) {
+                return $rule->{pricing_key};
+            }
+            if ($rule->{match_kind} eq 'regex' && $model =~ $rule->{compiled_regex}) {
+                return $rule->{pricing_key};
+            }
+        }
+    }
+
+    warn_unknown_model_once($model // '<missing>');
+    return fallback_pricing_key_for_model($model);
 }
 
 sub usage_int_field {
@@ -33,19 +109,15 @@ sub usage_int_field {
 }
 
 sub cost_units_for_line {
-    my ($is_opus, $input, $output, $cache_write, $cache_read) = @_;
+    my ($model, $input, $output, $cache_write, $cache_read) = @_;
+    my $pricing_key = pricing_key_for_model($model);
+    my $pricing = $PRICING_BY_KEY{$pricing_key}
+        or die "missing pricing entry $pricing_key in $PRICING_MANIFEST_PATH\n";
 
-    if ($is_opus) {
-        return $input * OPUS_INPUT_COST_UNITS
-            + $output * OPUS_OUTPUT_COST_UNITS
-            + $cache_write * OPUS_CACHE_WRITE_COST_UNITS
-            + $cache_read * OPUS_CACHE_READ_COST_UNITS;
-    }
-
-    return $input * SONNET_INPUT_COST_UNITS
-        + $output * SONNET_OUTPUT_COST_UNITS
-        + $cache_write * SONNET_CACHE_WRITE_COST_UNITS
-        + $cache_read * SONNET_CACHE_READ_COST_UNITS;
+    return $input * $pricing->{input_cost_units}
+        + $output * $pricing->{output_cost_units}
+        + $cache_write * $pricing->{cache_write_cost_units}
+        + $cache_read * $pricing->{cache_read_cost_units};
 }
 
 sub usage_fields_from_line {
@@ -61,7 +133,7 @@ sub usage_fields_from_line {
     my $cache_read = usage_int_field($data->{usage}, 'cache_read_input_tokens');
     my $total_tokens = $input + $output + $cache_write + $cache_read;
     my $cost_units = cost_units_for_line(
-        is_opus_model($data->{model}),
+        $data->{model},
         $input,
         $output,
         $cache_write,
@@ -203,6 +275,7 @@ sub run_refresh_state {
 }
 
 my $mode = shift @ARGV // usage();
+load_pricing_manifest();
 
 if ($mode eq 'cold-scan') {
     exit run_cold_scan();

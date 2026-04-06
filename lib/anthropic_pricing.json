@@ -1,0 +1,224 @@
+{
+   "fallback_pricing_keys" : {
+      "default" : "claude-sonnet-4-6",
+      "haiku" : "claude-haiku-4-5",
+      "opus" : "claude-opus-4-6",
+      "sonnet" : "claude-sonnet-4-6"
+   },
+   "generated_at" : "2026-04-05T00:00:00Z",
+   "jsonl_usage_notes" : {
+      "cache_creation_input_tokens" : "Mapped to the 5-minute prompt cache write rate because Claude Code JSONL usage does not expose cache duration.",
+      "cache_read_input_tokens" : "Mapped to the prompt cache hit/refresh rate from Anthropic pricing docs."
+   },
+   "pricing" : {
+      "claude-haiku-3" : {
+         "cache_read_cost_units" : 3,
+         "cache_write_1h_cost_units" : 50,
+         "cache_write_cost_units" : 30,
+         "display_name" : "Claude Haiku 3",
+         "input_cost_units" : 25,
+         "output_cost_units" : 125
+      },
+      "claude-haiku-3-5" : {
+         "cache_read_cost_units" : 8,
+         "cache_write_1h_cost_units" : 160,
+         "cache_write_cost_units" : 100,
+         "display_name" : "Claude Haiku 3.5",
+         "input_cost_units" : 80,
+         "output_cost_units" : 400
+      },
+      "claude-haiku-4-5" : {
+         "cache_read_cost_units" : 10,
+         "cache_write_1h_cost_units" : 200,
+         "cache_write_cost_units" : 125,
+         "display_name" : "Claude Haiku 4.5",
+         "input_cost_units" : 100,
+         "output_cost_units" : 500
+      },
+      "claude-opus-3" : {
+         "cache_read_cost_units" : 150,
+         "cache_write_1h_cost_units" : 3000,
+         "cache_write_cost_units" : 1875,
+         "display_name" : "Claude Opus 3",
+         "input_cost_units" : 1500,
+         "output_cost_units" : 7500
+      },
+      "claude-opus-4" : {
+         "cache_read_cost_units" : 150,
+         "cache_write_1h_cost_units" : 3000,
+         "cache_write_cost_units" : 1875,
+         "display_name" : "Claude Opus 4",
+         "input_cost_units" : 1500,
+         "output_cost_units" : 7500
+      },
+      "claude-opus-4-1" : {
+         "cache_read_cost_units" : 150,
+         "cache_write_1h_cost_units" : 3000,
+         "cache_write_cost_units" : 1875,
+         "display_name" : "Claude Opus 4.1",
+         "input_cost_units" : 1500,
+         "output_cost_units" : 7500
+      },
+      "claude-opus-4-5" : {
+         "cache_read_cost_units" : 50,
+         "cache_write_1h_cost_units" : 1000,
+         "cache_write_cost_units" : 625,
+         "display_name" : "Claude Opus 4.5",
+         "input_cost_units" : 500,
+         "output_cost_units" : 2500
+      },
+      "claude-opus-4-6" : {
+         "cache_read_cost_units" : 50,
+         "cache_write_1h_cost_units" : 1000,
+         "cache_write_cost_units" : 625,
+         "display_name" : "Claude Opus 4.6",
+         "input_cost_units" : 500,
+         "output_cost_units" : 2500
+      },
+      "claude-sonnet-3-7" : {
+         "cache_read_cost_units" : 30,
+         "cache_write_1h_cost_units" : 600,
+         "cache_write_cost_units" : 375,
+         "display_name" : "Claude Sonnet 3.7",
+         "input_cost_units" : 300,
+         "output_cost_units" : 1500
+      },
+      "claude-sonnet-4" : {
+         "cache_read_cost_units" : 30,
+         "cache_write_1h_cost_units" : 600,
+         "cache_write_cost_units" : 375,
+         "display_name" : "Claude Sonnet 4",
+         "input_cost_units" : 300,
+         "output_cost_units" : 1500
+      },
+      "claude-sonnet-4-5" : {
+         "cache_read_cost_units" : 30,
+         "cache_write_1h_cost_units" : 600,
+         "cache_write_cost_units" : 375,
+         "display_name" : "Claude Sonnet 4.5",
+         "input_cost_units" : 300,
+         "output_cost_units" : 1500
+      },
+      "claude-sonnet-4-6" : {
+         "cache_read_cost_units" : 30,
+         "cache_write_1h_cost_units" : 600,
+         "cache_write_cost_units" : 375,
+         "display_name" : "Claude Sonnet 4.6",
+         "input_cost_units" : 300,
+         "output_cost_units" : 1500
+      }
+   },
+   "pricing_source_url" : "https://platform.claude.com/docs/en/about-claude/pricing",
+   "rules" : [
+      {
+         "match_kind" : "exact",
+         "match_value" : "claude-opus-4-6",
+         "pricing_key" : "claude-opus-4-6"
+      },
+      {
+         "match_kind" : "regex",
+         "match_value" : "^claude-opus-4-6-\\d{8}$",
+         "pricing_key" : "claude-opus-4-6"
+      },
+      {
+         "match_kind" : "exact",
+         "match_value" : "claude-opus-4-5",
+         "pricing_key" : "claude-opus-4-5"
+      },
+      {
+         "match_kind" : "regex",
+         "match_value" : "^claude-opus-4-5-\\d{8}$",
+         "pricing_key" : "claude-opus-4-5"
+      },
+      {
+         "match_kind" : "exact",
+         "match_value" : "claude-opus-4-1",
+         "pricing_key" : "claude-opus-4-1"
+      },
+      {
+         "match_kind" : "regex",
+         "match_value" : "^claude-opus-4-1-\\d{8}$",
+         "pricing_key" : "claude-opus-4-1"
+      },
+      {
+         "match_kind" : "exact",
+         "match_value" : "claude-opus-4",
+         "pricing_key" : "claude-opus-4"
+      },
+      {
+         "match_kind" : "exact",
+         "match_value" : "claude-opus-4-0",
+         "pricing_key" : "claude-opus-4"
+      },
+      {
+         "match_kind" : "exact",
+         "match_value" : "claude-opus-4-20250514",
+         "pricing_key" : "claude-opus-4"
+      },
+      {
+         "match_kind" : "exact",
+         "match_value" : "claude-sonnet-4-6",
+         "pricing_key" : "claude-sonnet-4-6"
+      },
+      {
+         "match_kind" : "regex",
+         "match_value" : "^claude-sonnet-4-6-\\d{8}$",
+         "pricing_key" : "claude-sonnet-4-6"
+      },
+      {
+         "match_kind" : "exact",
+         "match_value" : "claude-sonnet-4-5",
+         "pricing_key" : "claude-sonnet-4-5"
+      },
+      {
+         "match_kind" : "regex",
+         "match_value" : "^claude-sonnet-4-5-\\d{8}$",
+         "pricing_key" : "claude-sonnet-4-5"
+      },
+      {
+         "match_kind" : "exact",
+         "match_value" : "claude-sonnet-4",
+         "pricing_key" : "claude-sonnet-4"
+      },
+      {
+         "match_kind" : "exact",
+         "match_value" : "claude-sonnet-4-0",
+         "pricing_key" : "claude-sonnet-4"
+      },
+      {
+         "match_kind" : "exact",
+         "match_value" : "claude-sonnet-4-20250514",
+         "pricing_key" : "claude-sonnet-4"
+      },
+      {
+         "match_kind" : "regex",
+         "match_value" : "^claude-3-7-sonnet-\\d{8}$",
+         "pricing_key" : "claude-sonnet-3-7"
+      },
+      {
+         "match_kind" : "exact",
+         "match_value" : "claude-haiku-4-5",
+         "pricing_key" : "claude-haiku-4-5"
+      },
+      {
+         "match_kind" : "regex",
+         "match_value" : "^claude-haiku-4-5-\\d{8}$",
+         "pricing_key" : "claude-haiku-4-5"
+      },
+      {
+         "match_kind" : "regex",
+         "match_value" : "^claude-3-5-haiku-\\d{8}$",
+         "pricing_key" : "claude-haiku-3-5"
+      },
+      {
+         "match_kind" : "regex",
+         "match_value" : "^claude-3-opus-\\d{8}$",
+         "pricing_key" : "claude-opus-3"
+      },
+      {
+         "match_kind" : "regex",
+         "match_value" : "^claude-3-haiku-\\d{8}$",
+         "pricing_key" : "claude-haiku-3"
+      }
+   ]
+}
