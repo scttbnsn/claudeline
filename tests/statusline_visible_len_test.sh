@@ -20,20 +20,20 @@ helper_file="$tmpdir/statusline_visible_len.sh"
 sed -n '/^_visible_len() {/,/^# Build a line from segments/p' \
     "$repo_root/statusline.sh" | sed '$d' > "$helper_file"
 
-if rg -n '\b(sed|wc|tr)\b' "$helper_file" >/dev/null; then
+if grep -n '\b(sed|wc|tr)\b' "$helper_file" >/dev/null; then
     printf 'FAIL: _visible_len() should not shell out to sed/wc/tr in the render hot path\n' >&2
-    rg -n '\b(sed|wc|tr)\b' "$helper_file" >&2
+    grep -n '\b(sed|wc|tr)\b' "$helper_file" >&2
     exit 1
 fi
 
-if ! rg -n '\bREPLY=' "$helper_file" >/dev/null; then
+if ! grep -n '\bREPLY=' "$helper_file" >/dev/null; then
     printf 'FAIL: _visible_len() should return via REPLY to avoid command substitution in the render hot path\n' >&2
     exit 1
 fi
 
-if rg -n '\$\(_visible_len ' "$repo_root/statusline.sh" >/dev/null; then
+if grep -n '\$\(_visible_len ' "$repo_root/statusline.sh" >/dev/null; then
     printf 'FAIL: _build_responsive_line() should consume _visible_len() via REPLY instead of command substitution\n' >&2
-    rg -n '\$\(_visible_len ' "$repo_root/statusline.sh" >&2
+    grep -n '\$\(_visible_len ' "$repo_root/statusline.sh" >&2
     exit 1
 fi
 

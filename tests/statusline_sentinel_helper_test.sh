@@ -28,18 +28,18 @@ cp "$display_lib" "$display_scan"
 perl -0pi -e 's/^if ! declare -F is_sentinel_value .*?^fi\n//ms' "$usage_scan"
 perl -0pi -e 's/^if ! declare -F is_sentinel_value .*?^fi\n//ms' "$display_scan"
 
-if rg -n '\[ -z "\$[A-Za-z_][A-Za-z0-9_]*" \] \|\| \[ "\$[A-Za-z_][A-Za-z0-9_]*" = "_" \] \|\| \[ "\$[A-Za-z_][A-Za-z0-9_]*" = "null" \]' \
+if grep -n '\[ -z "\$[A-Za-z_][A-Za-z0-9_]*" \] \|\| \[ "\$[A-Za-z_][A-Za-z0-9_]*" = "_" \] \|\| \[ "\$[A-Za-z_][A-Za-z0-9_]*" = "null" \]' \
     "$statusline" "$usage_scan" "$display_scan" >/dev/null; then
     printf 'FAIL: runtime files should use is_sentinel_value() instead of repeated empty/_/null checks\n' >&2
-    rg -n '\[ -z "\$[A-Za-z_][A-Za-z0-9_]*" \] \|\| \[ "\$[A-Za-z_][A-Za-z0-9_]*" = "_" \] \|\| \[ "\$[A-Za-z_][A-Za-z0-9_]*" = "null" \]' \
+    grep -n '\[ -z "\$[A-Za-z_][A-Za-z0-9_]*" \] \|\| \[ "\$[A-Za-z_][A-Za-z0-9_]*" = "_" \] \|\| \[ "\$[A-Za-z_][A-Za-z0-9_]*" = "null" \]' \
         "$statusline" "$usage_scan" "$display_scan" >&2
     exit 1
 fi
 
-if rg -n '\[ -n "\$[A-Za-z_][A-Za-z0-9_]*" \] && \[ "\$[A-Za-z_][A-Za-z0-9_]*" != "_" \] && \[ "\$[A-Za-z_][A-Za-z0-9_]*" != "null" \]' \
+if grep -n '\[ -n "\$[A-Za-z_][A-Za-z0-9_]*" \] && \[ "\$[A-Za-z_][A-Za-z0-9_]*" != "_" \] && \[ "\$[A-Za-z_][A-Za-z0-9_]*" != "null" \]' \
     "$statusline" "$usage_scan" "$display_scan" >/dev/null; then
     printf 'FAIL: runtime files should use ! is_sentinel_value() instead of repeated inverse sentinel checks\n' >&2
-    rg -n '\[ -n "\$[A-Za-z_][A-Za-z0-9_]*" \] && \[ "\$[A-Za-z_][A-Za-z0-9_]*" != "_" \] && \[ "\$[A-Za-z_][A-Za-z0-9_]*" != "null" \]' \
+    grep -n '\[ -n "\$[A-Za-z_][A-Za-z0-9_]*" \] && \[ "\$[A-Za-z_][A-Za-z0-9_]*" != "_" \] && \[ "\$[A-Za-z_][A-Za-z0-9_]*" != "null" \]' \
         "$statusline" "$usage_scan" "$display_scan" >&2
     exit 1
 fi

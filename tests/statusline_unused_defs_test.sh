@@ -19,7 +19,7 @@ unused_defs=(
 )
 
 for name in "${unused_defs[@]}"; do
-    count=$( (rg -o "\\b${name}\\b" "$repo_root/statusline.sh" || true) | wc -l | tr -d ' ' )
+    count=$( (grep -o "\\b${name}\\b" "$repo_root/statusline.sh" || true) | wc -l | tr -d ' ' )
     if [ "$count" -ne 0 ]; then
         printf 'FAIL: expected %s to be removed, found %s occurrence(s)\n' "$name" "$count" >&2
         exit 1
