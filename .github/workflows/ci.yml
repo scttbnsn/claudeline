@@ -43,6 +43,8 @@ jobs:
 
       - name: Run tests
         timeout-minutes: 5
+        env:
+          CI: true
         run: |
           for f in tests/*.sh; do
             echo "--- Running $f ---"

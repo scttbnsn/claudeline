@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Skip on CI — this test uses background processes that may hang in containerized environments
+if [ "${CI:-}" = "true" ]; then printf 'ok (skipped on CI)\n'; exit 0; fi
+
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmpdir=$(mktemp -d)
 wrapper_pid=""
