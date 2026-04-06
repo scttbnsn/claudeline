@@ -35,11 +35,20 @@ write_jsonl_cache() {
 
 emit_file_contents() {
     local path=$1
-    local line
+    local first_line second_line
 
-    while IFS= read -r line || [ -n "$line" ]; do
-        printf '%s\n' "$line"
-    done < "$path"
+    exec 3<"$path" || return 1
+    read -r first_line <&3 || {
+        exec 3<&-
+        return 1
+    }
+    read -r second_line <&3 || {
+        exec 3<&-
+        return 1
+    }
+    exec 3<&-
+
+    printf '%s\n%s\n' "$first_line" "$second_line"
 }
 
 restore_jsonl_cache_from_state() {
@@ -227,15 +236,16 @@ read_extra_usage_cache() {
 }
 
 read_claude_oauth_token() {
-    local oauth_token="" creds="" cfg
+    local oauth_token="" creds="" cfg compact_hex
 
     if [[ "$OSTYPE" == "darwin"* ]]; then
         creds=$(security find-generic-password -s "Claude Code-credentials" -w 2>>"$STATUSLINE_DEBUG_LOG") || {
             debug_log "Failed to read Claude Code credentials from macOS Keychain"
             creds=""
         }
-        if [[ "$creds" =~ ^[0-9a-fA-F]+$ ]]; then
-            creds=$(echo "$creds" | xxd -r -p)
+        compact_hex=$(printf '%s' "$creds" | tr -d '[:space:]')
+        if [[ -n "$compact_hex" && "$compact_hex" =~ ^[0-9a-fA-F]+$ ]]; then
+            creds=$(printf '%s' "$compact_hex" | xxd -r -p)
         fi
         if [ -n "$creds" ] && ! oauth_token=$(echo "$creds" | jq -r '.claudeAiOauth.accessToken // empty' 2>>"$STATUSLINE_DEBUG_LOG"); then
             debug_log "Failed to extract OAuth token from Claude Code credentials"
@@ -254,21 +264,31 @@ read_claude_oauth_token() {
 
 refresh_extra_usage_cache_now() {
     local now=$1
-    local oauth_token extra_usage_response extra_util
+    local oauth_token escaped_oauth_token extra_usage_response extra_util response_file
 
     oauth_token=$(read_claude_oauth_token)
     [ -n "$oauth_token" ] || return 1
+    if [[ "$oauth_token" =~ [[:cntrl:]] ]]; then
+        debug_log "Ignoring OAuth token with control characters"
+        return 1
+    fi
 
-    if ! extra_usage_response=$(curl -s --max-time 2 --config - \
-        -H "Accept: application/json" \
-        -H "anthropic-beta: oauth-2025-04-20" \
-        "https://api.anthropic.com/api/oauth/usage" <<CURL_CONFIG
-header = "Authorization: Bearer $oauth_token"
-CURL_CONFIG
-    2>>"$STATUSLINE_DEBUG_LOG"); then
+    response_file=$(mktemp "${CACHE_DIR}/.extra-usage-response-XXXXXX") || return 1
+    escaped_oauth_token=${oauth_token//\\/\\\\}
+    escaped_oauth_token=${escaped_oauth_token//\"/\\\"}
+
+    if ! printf 'header = "Authorization: Bearer %s"\n' "$escaped_oauth_token" | \
+        curl -s --max-time 2 --config - \
+            -H "Accept: application/json" \
+            -H "anthropic-beta: oauth-2025-04-20" \
+            "https://api.anthropic.com/api/oauth/usage" >"$response_file" 2>>"$STATUSLINE_DEBUG_LOG"; then
+        rm -f "$response_file"
         debug_log "Failed to fetch extra usage from Anthropic API"
         return 1
     fi
+
+    extra_usage_response=$(<"$response_file")
+    rm -f "$response_file"
 
     if ! extra_util=$(printf '%s\n' "$extra_usage_response" | jq -r '.extra_usage.utilization // empty' 2>>"$STATUSLINE_DEBUG_LOG"); then
         debug_log "Failed to parse extra usage response from Anthropic API"
@@ -308,7 +328,7 @@ get_path_mtime_epoch() {
 
 acquire_extra_usage_lock() {
     local now=$1
-    local lock_mtime lock_age
+    local lock_mtime confirm_mtime lock_age claimed_stale_lock
     local stale_after=${EXTRA_USAGE_LOCK_STALE_SECS:-60}
 
     if mkdir "$EXTRA_USAGE_LOCK" 2>>"$STATUSLINE_DEBUG_LOG"; then
@@ -325,9 +345,26 @@ acquire_extra_usage_lock() {
         return 1
     fi
 
+    confirm_mtime=$(get_path_mtime_epoch "$EXTRA_USAGE_LOCK") || return 1
+    if [ "$confirm_mtime" != "$lock_mtime" ]; then
+        return 1
+    fi
+
     debug_log "Clearing stale extra usage refresh lock (${lock_age}s old)"
-    rmdir "$EXTRA_USAGE_LOCK" 2>>"$STATUSLINE_DEBUG_LOG" || return 1
-    mkdir "$EXTRA_USAGE_LOCK" 2>>"$STATUSLINE_DEBUG_LOG"
+    claimed_stale_lock=$(mktemp -d "${CACHE_DIR}/.extra-usage-lock-stale-XXXXXX") || return 1
+    rmdir "$claimed_stale_lock" 2>>"$STATUSLINE_DEBUG_LOG" || return 1
+
+    if ! mv "$EXTRA_USAGE_LOCK" "$claimed_stale_lock" 2>>"$STATUSLINE_DEBUG_LOG"; then
+        return 1
+    fi
+
+    if mkdir "$EXTRA_USAGE_LOCK" 2>>"$STATUSLINE_DEBUG_LOG"; then
+        rmdir "$claimed_stale_lock" 2>>"$STATUSLINE_DEBUG_LOG" || true
+        return 0
+    fi
+
+    rmdir "$claimed_stale_lock" 2>>"$STATUSLINE_DEBUG_LOG" || true
+    return 1
 }
 
 start_extra_usage_refresh() {
@@ -368,9 +405,9 @@ get_trend_arrow() {
     # This replaces ~10 subprocess calls (tail, head, wc, 2x awk, sort, 4x bc) with 1
     # Data output goes to temp file via -v out variable (not stderr) to prevent
     # awk errors from corrupting history file
-    local tmp="${USAGE_HISTORY}.tmp"
+    local tmp
+    tmp=$(mktemp "${CACHE_DIR}/.trend-XXXXXX") || return
     touch "$USAGE_HISTORY" 2>>"$STATUSLINE_DEBUG_LOG"
-    : > "$tmp"
     local arrow_code
     if arrow_code=$(awk -F, -v now="$now" -v usage="$current_usage" \
         -v week_start="$week_start" -v trend_window="${TREND_WINDOW:-900}" \
