@@ -3,7 +3,8 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmpdir=$(mktemp -d)
-trap 'rm -rf "$tmpdir"' EXIT
+rm_bin=$(command -v rm)
+trap '"$rm_bin" -rf "$tmpdir"' EXIT
 bash_bin=$(command -v bash)
 grep_bin=$(command -v grep)
 
