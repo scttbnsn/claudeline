@@ -40,8 +40,15 @@ exit 0
 EOF
 chmod +x "$shim_dir/git"
 
+# On Ubuntu /bin -> /usr/bin, so PATH=$shim_dir:/bin would expose real perl.
+# Instead, shim only the specific /bin tools the installer needs.
+for cmd in bash echo cat chmod mkdir mv rm printf test '[' sed tr wc uname head tail command; do
+    p=$(command -v "$cmd" 2>/dev/null) && [ -x "$p" ] && \
+        printf '#!/usr/bin/env bash\nexec "%s" "$@"\n' "$p" > "$shim_dir/$cmd" && chmod +x "$shim_dir/$cmd"
+done
+
 export HOME="$home_dir"
-export PATH="$shim_dir:/bin"
+export PATH="$shim_dir"
 
 if "$bash_bin" "$repo_root/install.sh" > "$tmpdir/install.out" 2> "$tmpdir/install.err"; then
     echo "FAIL: installer should fail when perl is missing" >&2
