@@ -5,7 +5,7 @@
 **A cute, informative status line for Claude Code with rotating environmental metrics.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Bash](https://img.shields.io/badge/bash-5.x-4EAA25?logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
+[![Bash](https://img.shields.io/badge/bash-3.2+-4EAA25?logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Claude Code](https://img.shields.io/badge/Claude_Code-status_line-000?logo=anthropic&logoColor=white)](https://claude.ai/)
 
 </div>
@@ -430,6 +430,7 @@ The API call runs in a **non-blocking background subshell** so it never stalls t
 [![jq](https://img.shields.io/badge/jq-JSON_parsing-C9A227)](https://jqlang.github.io/jq/)
 [![git](https://img.shields.io/badge/git-branch_detection-F05032?logo=git&logoColor=white)](https://git-scm.com/)
 [![perl](https://img.shields.io/badge/perl-JSONL_parsing-39457E?logo=perl&logoColor=white)](https://www.perl.org/)
+[![curl](https://img.shields.io/badge/curl-install_%2B_API-073551?logo=curl&logoColor=white)](https://curl.se/)
 
 </div>
 
