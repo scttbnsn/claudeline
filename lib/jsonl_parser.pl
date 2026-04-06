@@ -1,6 +1,7 @@
 #!/usr/bin/env perl
 use strict;
 use warnings;
+use JSON::PP qw(decode_json);
 
 use constant {
     SONNET_INPUT_COST_UNITS       => 300,
@@ -17,14 +18,18 @@ sub usage {
     die "usage: $0 cold-scan | refresh-state <state_path> <now> <out_path>\n";
 }
 
-sub is_usage_line {
-    my ($line) = @_;
-    return $line =~ /"message".*"usage"/;
+sub is_opus_model {
+    my ($model) = @_;
+    return defined $model && $model =~ /claude-opus|opus-4/ ? 1 : 0;
 }
 
-sub is_opus_model {
-    my ($line) = @_;
-    return $line =~ /claude-opus|opus-4/ ? 1 : 0;
+sub usage_int_field {
+    my ($usage, $key) = @_;
+    return 0 unless ref($usage) eq 'HASH';
+
+    my $value = $usage->{$key};
+    return 0 unless defined $value && $value =~ /\A\d+\z/;
+    return $value + 0;
 }
 
 sub cost_units_for_line {
@@ -45,15 +50,18 @@ sub cost_units_for_line {
 
 sub usage_fields_from_line {
     my ($line) = @_;
-    return unless is_usage_line($line);
+    my $data = eval { decode_json($line) };
+    return unless $data && ref($data) eq 'HASH';
+    return unless ($data->{type} // '') eq 'message';
+    return unless ref($data->{usage}) eq 'HASH';
 
-    my $input = $line =~ /"input_tokens":(\d+)/ ? $1 : 0;
-    my $output = $line =~ /"output_tokens":(\d+)/ ? $1 : 0;
-    my $cache_write = $line =~ /"cache_creation_input_tokens":(\d+)/ ? $1 : 0;
-    my $cache_read = $line =~ /"cache_read_input_tokens":(\d+)/ ? $1 : 0;
+    my $input = usage_int_field($data->{usage}, 'input_tokens');
+    my $output = usage_int_field($data->{usage}, 'output_tokens');
+    my $cache_write = usage_int_field($data->{usage}, 'cache_creation_input_tokens');
+    my $cache_read = usage_int_field($data->{usage}, 'cache_read_input_tokens');
     my $total_tokens = $input + $output + $cache_write + $cache_read;
     my $cost_units = cost_units_for_line(
-        is_opus_model($line),
+        is_opus_model($data->{model}),
         $input,
         $output,
         $cache_write,
