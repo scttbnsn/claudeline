@@ -550,31 +550,81 @@ if seg_on "$_SEG_CREDIT" && [ -n "$EXTRA_UTIL" ] && [ "$EXTRA_UTIL" != "_" ] && 
     fi
 fi
 
-# Build Line 1: assemble enabled segments with separators
-LINE1=""
-seg_on "$_SEG_CONTEXT" && _append_seg LINE1 "${CTX_ICON} ${PROGRESS_BAR}"
-seg_on "$_SEG_GIT" && _append_seg LINE1 "$REPO_BRANCH"
-seg_on "$_SEG_LINES" && _append_seg LINE1 "$LINES_INFO"
-seg_on "$_SEG_PACE" && [ -n "$PACE_INDICATOR" ] && _append_seg LINE1 "$PACE_INDICATOR"
-seg_on "$_SEG_BURST" && [ -n "$BURST_INDICATOR" ] && _append_seg LINE1 "$BURST_INDICATOR"
-seg_on "$_SEG_DURATION" && _append_seg LINE1 "$DURATION_INFO"
-seg_on "$_SEG_CREDIT" && [ -n "$CREDIT_INDICATOR" ] && _append_seg LINE1 "$CREDIT_INDICATOR"
-echo -e "$LINE1"
+# Terminal width for responsive layout (drop low-priority segments to prevent wrapping)
+TERM_WIDTH="${COLUMNS:-$(tput cols 2>/dev/null || echo 120)}"
 
-# Build Line 2: context stats + metric + model
-LINE2=""
+# Measure visible width of a string (strip ANSI escapes + account for wide emoji)
+_visible_len() {
+    local stripped
+    stripped=$(printf '%b' "$1" | sed $'s/\033\[[0-9;]*m//g')
+    printf '%s' "$stripped" | wc -m | tr -d ' '
+}
+
+# Build a line from segments, dropping lowest-priority segments if it exceeds terminal width.
+# Args: segment strings in priority order (highest first). Low-priority segments are dropped first.
+_build_responsive_line() {
+    local width=$1; shift
+    local count=$#
+    local line="" i
+
+    # Try with all segments first
+    line=""
+    for ((i=1; i<=count; i++)); do
+        [ -n "${!i}" ] && _append_seg line "${!i}"
+    done
+
+    # If it fits or width is unknown, return
+    if [ "$width" -le 0 ] 2>/dev/null || [ "$(_visible_len "$line")" -le "$width" ]; then
+        printf '%s' "$line"
+        return
+    fi
+
+    # Drop segments from the end (lowest priority) until it fits
+    local try=$((count - 1))
+    while [ "$try" -ge 1 ]; do
+        line=""
+        for ((i=1; i<=try; i++)); do
+            [ -n "${!i}" ] && _append_seg line "${!i}"
+        done
+        if [ "$(_visible_len "$line")" -le "$width" ]; then
+            printf '%s' "$line"
+            return
+        fi
+        try=$((try - 1))
+    done
+
+    # Even a single segment doesn't fit — show it anyway
+    printf '%s' "$line"
+}
+
+# Prepare line 1 segments in priority order (highest first, lowest dropped first)
+_L1_CONTEXT=""; seg_on "$_SEG_CONTEXT" && _L1_CONTEXT="${CTX_ICON} ${PROGRESS_BAR}"
+_L1_GIT=""; seg_on "$_SEG_GIT" && _L1_GIT="$REPO_BRANCH"
+_L1_PACE=""; seg_on "$_SEG_PACE" && [ -n "$PACE_INDICATOR" ] && _L1_PACE="$PACE_INDICATOR"
+_L1_DURATION=""; seg_on "$_SEG_DURATION" && _L1_DURATION="$DURATION_INFO"
+_L1_LINES=""; seg_on "$_SEG_LINES" && _L1_LINES="$LINES_INFO"
+_L1_BURST=""; seg_on "$_SEG_BURST" && [ -n "$BURST_INDICATOR" ] && _L1_BURST="$BURST_INDICATOR"
+_L1_CREDIT=""; seg_on "$_SEG_CREDIT" && [ -n "$CREDIT_INDICATOR" ] && _L1_CREDIT="$CREDIT_INDICATOR"
+
+# Priority order: context > git > pace > duration > lines > burst > credit
+echo -e "$(_build_responsive_line "$TERM_WIDTH" "$_L1_CONTEXT" "$_L1_GIT" "$_L1_PACE" "$_L1_DURATION" "$_L1_LINES" "$_L1_BURST" "$_L1_CREDIT")"
+
+# Prepare line 2 segments in priority order
+_L2_TOKENS=""
 if seg_on "$_SEG_TOKENS"; then
     CTX_CURRENT=$(format_number "$CURRENT_TOKENS")
     CTX_THRESHOLD=$(format_number "$AUTO_COMPACT_THRESHOLD")
     CTX_STATS="${CTX_CURRENT}/${CTX_THRESHOLD}"
     CTX_PADDED=$(printf "%13s" "$CTX_STATS")
-    _append_seg LINE2 "${DIM}${CTX_PADDED}${RESET}"
+    _L2_TOKENS="${DIM}${CTX_PADDED}${RESET}"
 fi
-seg_on "$_SEG_METRIC" && _append_seg LINE2 "$METRIC_INFO"
-# Throughput: output tokens / API time (tok/s)
+_L2_MODEL=""; seg_on "$_SEG_MODEL" && _L2_MODEL="${DIM}${MODEL}${RESET}"
+_L2_THROUGHPUT=""
 if seg_on "$_SEG_THROUGHPUT" && [ "$API_DURATION_MS" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG" && [ "$TOTAL_OUTPUT" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
     THROUGHPUT=$((TOTAL_OUTPUT * 1000 / API_DURATION_MS))
-    _append_seg LINE2 "${DIM}${THROUGHPUT} tok/s${RESET}"
+    _L2_THROUGHPUT="${DIM}${THROUGHPUT} tok/s${RESET}"
 fi
-seg_on "$_SEG_MODEL" && _append_seg LINE2 "${DIM}${MODEL}${RESET}"
-echo -e "$LINE2"
+_L2_METRIC=""; seg_on "$_SEG_METRIC" && _L2_METRIC="$METRIC_INFO"
+
+# Priority order: tokens > model > throughput > metric
+echo -e "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_MODEL" "$_L2_THROUGHPUT" "$_L2_METRIC")"
