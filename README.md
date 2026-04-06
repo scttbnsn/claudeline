@@ -23,6 +23,10 @@
       tokens          metric
 ```
 
+<div align="center">
+<img src="docs/assets/claudeline-screenshot.png" alt="claudeline in action" width="700">
+</div>
+
 <hr>
 
 <h2 align="center">📑 Contents</h2>
