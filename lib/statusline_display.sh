@@ -796,13 +796,16 @@ format_absurd_cost() {
 
 format_duration() {
     local ms=$1
-    local mins=$((ms / 60000))
+    local secs=$((ms / 1000))
+    local mins=$((secs / 60))
     local hours=$((mins / 60))
     mins=$((mins % 60))
     if [ "$hours" -gt 0 ]; then
         printf "%dh%dm" "$hours" "$mins"
-    else
+    elif [ "$mins" -gt 0 ]; then
         printf "%dm" "$mins"
+    else
+        printf "%ds" "$secs"
     fi
 }
 
