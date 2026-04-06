@@ -29,11 +29,12 @@ jobs:
           fi
 
       - name: Lint shell scripts
-        run: shellcheck -x statusline.sh lib/statusline_display.sh lib/statusline_usage.sh
+        run: shellcheck -x statusline.sh lib/statusline_themes.sh lib/statusline_display.sh lib/statusline_usage.sh
 
       - name: Syntax check shell scripts
         run: |
           bash -n statusline.sh
+          bash -n lib/statusline_themes.sh
           bash -n lib/statusline_display.sh
           bash -n lib/statusline_usage.sh
 

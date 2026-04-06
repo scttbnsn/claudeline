@@ -94,9 +94,9 @@ EOF
 }
 
 model_detected_line=$(render_second_line "Claude Opus 4.6 1M context" 200000 "$tmpdir/model-detected.txt")
-assert_eq "      1K/840K  ·  💧 1 tablespoons  ·  Claude Opus 4.6 1M context" "$model_detected_line" "statusline should detect 1M context from the model display name when JSON still says 200K"
+assert_eq "      1K/840K  ·  Claude Opus 4.6 1M context  ·  💧 1 tablespoons" "$model_detected_line" "statusline should detect 1M context from the model display name when JSON still says 200K"
 
 json_detected_line=$(render_second_line "Claude Sonnet 4" 1000000 "$tmpdir/json-detected.txt")
-assert_eq "      1K/840K  ·  💧 1 tablespoons  ·  Claude Sonnet 4" "$json_detected_line" "statusline should honor a 1M context window directly from JSON input"
+assert_eq "      1K/840K  ·  Claude Sonnet 4  ·  💧 1 tablespoons" "$json_detected_line" "statusline should honor a 1M context window directly from JSON input"
 
 printf 'ok\n'

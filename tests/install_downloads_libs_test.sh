@@ -54,9 +54,11 @@ printf 'malicious-display\n' > "$home_dir/.claude/lib/statusline_display.sh"
 printf 'malicious-usage\n' > "$home_dir/.claude/lib/statusline_usage.sh"
 printf 'malicious-parser\n' > "$home_dir/.claude/lib/jsonl_parser.pl"
 printf 'malicious-pricing\n' > "$home_dir/.claude/lib/anthropic_pricing.json"
+printf 'malicious-themes\n' > "$home_dir/.claude/lib/statusline_themes.sh"
 
 cp "$repo_root/statusline.sh" "$download_dir/statusline.sh"
 cp "$repo_root/lib/statusline_display.sh" "$download_dir/lib/statusline_display.sh"
+cp "$repo_root/lib/statusline_themes.sh" "$download_dir/lib/statusline_themes.sh"
 cp "$repo_root/lib/statusline_usage.sh" "$download_dir/lib/statusline_usage.sh"
 cp "$repo_root/lib/jsonl_parser.pl" "$download_dir/lib/jsonl_parser.pl"
 cp "$repo_root/lib/anthropic_pricing.json" "$download_dir/lib/anthropic_pricing.json"
@@ -88,6 +90,7 @@ done
 case "$url" in
     */statusline.sh) src="$src_root/statusline.sh" ;;
     */lib/statusline_display.sh) src="$src_root/lib/statusline_display.sh" ;;
+    */lib/statusline_themes.sh) src="$src_root/lib/statusline_themes.sh" ;;
     */lib/statusline_usage.sh) src="$src_root/lib/statusline_usage.sh" ;;
     */lib/jsonl_parser.pl) src="$src_root/lib/jsonl_parser.pl" ;;
     */lib/anthropic_pricing.json) src="$src_root/lib/anthropic_pricing.json" ;;
@@ -133,6 +136,7 @@ bash "$repo_root/install.sh" > "$tmpdir/install.out"
 
 assert_file_contains 'source "$STATUSLINE_DIR/lib/statusline_display.sh"' "$HOME/.claude/statusline.sh" "installer writes the sourced statusline"
 assert_file_contains '# shellcheck shell=bash' "$HOME/.claude/lib/statusline_display.sh" "installer downloads display module"
+assert_file_contains '# shellcheck shell=bash' "$HOME/.claude/lib/statusline_themes.sh" "installer downloads themes module"
 assert_file_contains '# shellcheck shell=bash' "$HOME/.claude/lib/statusline_usage.sh" "installer downloads usage module"
 assert_file_contains 'use strict;' "$HOME/.claude/lib/jsonl_parser.pl" "installer downloads JSONL parser module"
 assert_file_contains '"pricing_source_url"' "$HOME/.claude/lib/anthropic_pricing.json" "installer downloads pricing manifest"
@@ -140,6 +144,11 @@ assert_eq "700" "$(get_perm "$HOME/.claude/statusline.sh")" "statusline remains 
 
 if grep -Fq 'malicious-display' "$HOME/.claude/lib/statusline_display.sh"; then
     echo "FAIL: installer should replace preexisting display module content" >&2
+    exit 1
+fi
+
+if grep -Fq 'malicious-themes' "$HOME/.claude/lib/statusline_themes.sh"; then
+    echo "FAIL: installer should replace preexisting themes module content" >&2
     exit 1
 fi
 

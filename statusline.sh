@@ -195,9 +195,9 @@ JSONL_CACHE="$CACHE_DIR/.jsonl-cache"
 JSONL_STATE="$CACHE_DIR/.jsonl-state"
 EXTRA_USAGE_CACHE="$CACHE_DIR/.extra-usage-cache"
 EXTRA_USAGE_LOCK="$CACHE_DIR/.extra-usage-fetch.lock"
-EXTRA_USAGE_TTL=600
+EXTRA_USAGE_TTL=${EXTRA_USAGE_TTL:-600}
 USAGE_HISTORY="$CACHE_DIR/.usage-history"
-TREND_WINDOW=900   # 15 minutes in seconds
+TREND_WINDOW=${TREND_WINDOW:-900}   # 15 minutes in seconds
 AUTO_COMPACT_THRESHOLD_PCT=84
 # ALLTIME_COST_ITEMS is defined in lib/statusline_display.sh
 ALLTIME_NORMAL_CATALOG_ITEM_COUNT=${#ALLTIME_COST_ITEMS[@]}
@@ -542,7 +542,6 @@ fi
 CREDIT_INDICATOR=""
 if seg_on "$_SEG_CREDIT" && [ -n "$EXTRA_UTIL" ] && [ "$EXTRA_UTIL" != "_" ] && [ "$EXTRA_UTIL" != "null" ]; then
     EXTRA_PCT=$(round_decimal_to_int_or_default "$EXTRA_UTIL" 0 "extra usage")
-    WEEKLY_PCT=$(round_decimal_to_int_or_default "$WEEKLY_USAGE" 0 "weekly usage")
     if [ "$EXTRA_PCT" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
         if [ "${WEEKLY_PCT:-0}" -ge 100 ] 2>>"$STATUSLINE_DEBUG_LOG" || [ "${BURST_PCT:-0}" -ge 100 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
             CREDIT_INDICATOR="${DIM}💳${EXTRA_PCT}%${RESET}"
@@ -553,11 +552,19 @@ fi
 # Terminal width for responsive layout (drop low-priority segments to prevent wrapping)
 TERM_WIDTH="${COLUMNS:-$(tput cols 2>/dev/null || echo 120)}"
 
-# Measure visible width of a string (strip ANSI escapes + account for wide emoji)
+# Measure visible width of a string by stripping ANSI escapes and counting characters.
+# Uses bash parameter expansion and REPLY to avoid subprocesses in the hot path.
 _visible_len() {
-    local stripped
-    stripped=$(printf '%b' "$1" | sed $'s/\033\[[0-9;]*m//g')
-    printf '%s' "$stripped" | wc -m | tr -d ' '
+    local stripped prefix suffix
+
+    printf -v stripped '%b' "$1"
+    while [[ "$stripped" == *$'\033['*m* ]]; do
+        prefix="${stripped%%$'\033['*}"
+        suffix="${stripped#*$'\033['}"
+        stripped="${prefix}${suffix#*m}"
+    done
+
+    REPLY=${#stripped}
 }
 
 # Build a line from segments, dropping lowest-priority segments if it exceeds terminal width.
@@ -565,7 +572,7 @@ _visible_len() {
 _build_responsive_line() {
     local width=$1; shift
     local count=$#
-    local line="" i
+    local line="" i visible_len
 
     # Try with all segments first
     line=""
@@ -574,7 +581,13 @@ _build_responsive_line() {
     done
 
     # If it fits or width is unknown, return
-    if [ "$width" -le 0 ] 2>/dev/null || [ "$(_visible_len "$line")" -le "$width" ]; then
+    if [ "$width" -le 0 ] 2>/dev/null; then
+        printf '%s' "$line"
+        return
+    fi
+    _visible_len "$line"
+    visible_len=$REPLY
+    if [ "$visible_len" -le "$width" ]; then
         printf '%s' "$line"
         return
     fi
@@ -586,7 +599,9 @@ _build_responsive_line() {
         for ((i=1; i<=try; i++)); do
             [ -n "${!i}" ] && _append_seg line "${!i}"
         done
-        if [ "$(_visible_len "$line")" -le "$width" ]; then
+        _visible_len "$line"
+        visible_len=$REPLY
+        if [ "$visible_len" -le "$width" ]; then
             printf '%s' "$line"
             return
         fi

@@ -29,14 +29,14 @@ assert_not_contains() {
 
 assert_contains "$statusline" 'AUTO_COMPACT_THRESHOLD_PCT=84' "statusline should name the auto-compact threshold percentage"
 assert_contains "$statusline" 'ALLTIME_NORMAL_FIXED_ITEMS=(' "statusline should define the fixed all-time normal items in one place"
-assert_contains "$statusline" 'ALLTIME_NORMAL_CATALOG_ITEMS=(' "statusline should define the rotating all-time catalog items locally"
-assert_contains "$statusline" 'ALLTIME_NORMAL_CATALOG_ITEM_COUNT=${#ALLTIME_NORMAL_CATALOG_ITEMS[@]}' "statusline should derive the all-time catalog item count from the local catalog list"
+assert_contains "$statusline" 'ALLTIME_COST_ITEMS' "statusline should reference the all-time cost items from the display module"
+assert_contains "$statusline" 'ALLTIME_NORMAL_CATALOG_ITEM_COUNT=${#ALLTIME_COST_ITEMS[@]}' "statusline should derive the all-time catalog item count from the cost items array"
 assert_contains "$statusline" 'ALLTIME_NORMAL_FIXED_ITEM_COUNT=${#ALLTIME_NORMAL_FIXED_ITEMS[@]}' "statusline should derive the fixed all-time normal item count from the fixed item list"
 assert_contains "$statusline" 'ALLTIME_NORMAL_ITEM_COUNT=$((ALLTIME_NORMAL_CATALOG_ITEM_COUNT + ALLTIME_NORMAL_FIXED_ITEM_COUNT))' "statusline should derive the all-time normal cycle size from named counts"
 assert_contains "$statusline" 'AUTO_COMPACT_THRESHOLD=$((CONTEXT_WINDOW_SIZE * AUTO_COMPACT_THRESHOLD_PCT / 100))' "statusline should use the named auto-compact threshold percentage"
 assert_contains "$statusline" 'ALLTIME_NORMAL_CYCLE=$(( (NOW_DIV_10 / CYCLE_LEN) % ALLTIME_NORMAL_ITEM_COUNT ))' "statusline should use the named all-time normal cycle size"
 assert_not_contains "$statusline" 'AUTO_COMPACT_THRESHOLD=$((CONTEXT_WINDOW_SIZE * 84 / 100))' "statusline should not inline the auto-compact threshold percentage"
-assert_not_contains "$statusline" 'ALLTIME_NORMAL_CATALOG_ITEM_COUNT=${#ALLTIME_COST_ITEMS[@]}' "statusline should not depend on display module source order for the all-time catalog count"
+assert_not_contains "$statusline" 'ALLTIME_NORMAL_CATALOG_ITEM_COUNT=${#ALLTIME_NORMAL_CATALOG_ITEMS[@]}' "statusline should not use the old catalog items array name"
 assert_not_contains "$statusline" 'ALLTIME_NORMAL_FIXED_ITEM_COUNT=5' "statusline should not hardcode the fixed all-time normal item count"
 assert_not_contains "$statusline" 'ALLTIME_NORMAL_CYCLE=$(( (NOW_DIV_10 / CYCLE_LEN) % 15 ))' "statusline should not inline the all-time normal cycle size"
 

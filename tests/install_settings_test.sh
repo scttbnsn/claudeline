@@ -42,6 +42,7 @@ make_downloads() {
     mkdir -p "$root/lib"
     cp "$repo_root/statusline.sh" "$root/statusline.sh"
     cp "$repo_root/lib/statusline_display.sh" "$root/lib/statusline_display.sh"
+    cp "$repo_root/lib/statusline_themes.sh" "$root/lib/statusline_themes.sh"
     cp "$repo_root/lib/statusline_usage.sh" "$root/lib/statusline_usage.sh"
     cp "$repo_root/lib/jsonl_parser.pl" "$root/lib/jsonl_parser.pl"
     cp "$repo_root/lib/anthropic_pricing.json" "$root/lib/anthropic_pricing.json"
@@ -78,6 +79,7 @@ done
 case "$url" in
     */statusline.sh) src="$src_root/statusline.sh" ;;
     */lib/statusline_display.sh) src="$src_root/lib/statusline_display.sh" ;;
+    */lib/statusline_themes.sh) src="$src_root/lib/statusline_themes.sh" ;;
     */lib/statusline_usage.sh) src="$src_root/lib/statusline_usage.sh" ;;
     */lib/jsonl_parser.pl) src="$src_root/lib/jsonl_parser.pl" ;;
     */lib/anthropic_pricing.json) src="$src_root/lib/anthropic_pricing.json" ;;
