@@ -64,6 +64,7 @@ Then restart Claude Code. That's it.
    curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/lib/statusline_display.sh -o ~/.claude/lib/statusline_display.sh
    curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/lib/statusline_usage.sh -o ~/.claude/lib/statusline_usage.sh
    curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/lib/jsonl_parser.pl -o ~/.claude/lib/jsonl_parser.pl
+   curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/lib/anthropic_pricing.json -o ~/.claude/lib/anthropic_pricing.json
    chmod +x ~/.claude/statusline.sh
    ```
 
@@ -372,6 +373,8 @@ claudeline makes **one optional API call** to `https://api.anthropic.com/api/oau
 The OAuth token is read from:
 - **macOS:** macOS Keychain via `security find-generic-password`
 - **Linux:** `~/.config/claude/credentials.json`
+
+claudeline also reads `~/.claude.json` to detect the auto-compact setting (controls context bar scaling).
 
 The API call runs in a **non-blocking background subshell** so it never stalls the status line.
 

@@ -20,6 +20,17 @@ jobs:
           git --version
           perl --version
 
+      - name: Install ShellCheck
+        run: |
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            sudo apt-get update && sudo apt-get install -y shellcheck
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            brew install shellcheck
+          fi
+
+      - name: Lint shell scripts
+        run: shellcheck -x statusline.sh lib/statusline_display.sh lib/statusline_usage.sh
+
       - name: Syntax check shell scripts
         run: |
           bash -n statusline.sh
