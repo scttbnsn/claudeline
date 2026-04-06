@@ -61,6 +61,7 @@ Then restart Claude Code. That's it.
    ```bash
    mkdir -p ~/.claude/lib
    curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/statusline.sh -o ~/.claude/statusline.sh
+   curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/lib/statusline_themes.sh -o ~/.claude/lib/statusline_themes.sh
    curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/lib/statusline_display.sh -o ~/.claude/lib/statusline_display.sh
    curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/lib/statusline_usage.sh -o ~/.claude/lib/statusline_usage.sh
    curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/lib/jsonl_parser.pl -o ~/.claude/lib/jsonl_parser.pl
@@ -122,8 +123,8 @@ Cumulative usage across all sessions from JSONL files, shown with 🏆 trophy on
 Repo/branch with status indicators — unstaged, staged, ahead/behind, stash count
 </td>
 <td align="center" width="33%">
-<h3>24-Bit True Color</h3>
-Vibey 2025 palette with distinct colors for every tier and indicator
+<h3>5 Built-in Themes</h3>
+Vibey (default), Dark, Light, Nord, and Gruvbox — plus NO_COLOR support
 </td>
 <td align="center" width="33%">
 <h3>1M Context Support</h3>
@@ -380,6 +381,8 @@ The API call runs in a **non-blocking background subshell** so it never stalls t
 
 | Variable | Effect |
 |----------|--------|
+| `CLAUDELINE_THEME=nord` | Theme: `vibey` (default), `dark`, `light`, `nord`, `gruvbox` |
+| `NO_COLOR=1` | Disables all color output ([spec](https://no-color.org)) |
 | `CLAUDELINE_NO_NETWORK=1` | Disables all network access — the API call is skipped entirely |
 | `CLAUDELINE_DEBUG=1` | Enables debug logging to `$TMPDIR/claudeline-statusline-debug.log` |
 | `CLAUDELINE_DEBUG_LOG=/path` | Custom debug log path (requires `CLAUDELINE_DEBUG=1`) |
@@ -418,7 +421,7 @@ The API call runs in a **non-blocking background subshell** so it never stalls t
 ```bash
 # Remove statusline files
 rm -f ~/.claude/statusline.sh
-rm -rf ~/.claude/lib/statusline_display.sh ~/.claude/lib/statusline_usage.sh ~/.claude/lib/jsonl_parser.pl ~/.claude/lib/anthropic_pricing.json
+rm -rf ~/.claude/lib/statusline_themes.sh ~/.claude/lib/statusline_display.sh ~/.claude/lib/statusline_usage.sh ~/.claude/lib/jsonl_parser.pl ~/.claude/lib/anthropic_pricing.json
 
 # Remove the statusLine key from settings.json
 jq 'del(.statusLine)' ~/.claude/settings.json > ~/.claude/settings.json.tmp && mv ~/.claude/settings.json.tmp ~/.claude/settings.json

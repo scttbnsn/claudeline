@@ -17,15 +17,17 @@ REPO_URL="https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main"
 CLAUDE_DIR="$HOME/.claude"
 CLAUDE_LIB_DIR="$CLAUDE_DIR/lib"
 SCRIPT_PATH="$CLAUDE_DIR/statusline.sh"
+THEMES_LIB_PATH="$CLAUDE_LIB_DIR/statusline_themes.sh"
 DISPLAY_LIB_PATH="$CLAUDE_LIB_DIR/statusline_display.sh"
 USAGE_LIB_PATH="$CLAUDE_LIB_DIR/statusline_usage.sh"
 JSONL_PARSER_PATH="$CLAUDE_LIB_DIR/jsonl_parser.pl"
 PRICING_MANIFEST_PATH="$CLAUDE_LIB_DIR/anthropic_pricing.json"
 SETTINGS_PATH="$CLAUDE_DIR/settings.json"
-STATUSLINE_SHA256="c9daabc5cfcca22665c853de3aafcbe359abc65f72c0b7894a73d16fd75e1db3"
-DISPLAY_LIB_SHA256="aa083e0c17d16261b5c5790dc2922e1208a7a8a668778c082b6190f572a70fdd"
+STATUSLINE_SHA256="b594ee51bab6b06cf6e428be66072f9cec10dfbc6b82e5bbcf6ba1a8f7f75f01"
+DISPLAY_LIB_SHA256="74a9835d8b03f48c82a330152911d317d88ddca2d5185f56d246ce579cf5a063"
 USAGE_LIB_SHA256="e1f0bc3a021947156efd012ce344e93a1f0acf3a36c31241f2807b71bfd0d202"
 JSONL_PARSER_SHA256="c8be3728c09c91214f4ac911835338488f4f519d7b57d60ab35afc2302f99cae"
+THEMES_LIB_SHA256="89c69196f4d2083914b2c6ce39eb5e45720904ad423c413a42b8e991c0c0e669"
 PRICING_MANIFEST_SHA256="fdabdf68043d58a919166ce083f6d4685693e9503213d229142788ca60d8cc37"
 
 echo -e "${CYAN}${BOLD}"
@@ -110,16 +112,19 @@ download_stage_file() {
 # Download statusline runtime files
 echo -e "${DIM}Downloading statusline runtime...${NC}"
 if download_stage_file "statusline.sh" 700 "$STATUSLINE_SHA256" \
+    && download_stage_file "lib/statusline_themes.sh" 600 "$THEMES_LIB_SHA256" \
     && download_stage_file "lib/statusline_display.sh" 600 "$DISPLAY_LIB_SHA256" \
     && download_stage_file "lib/statusline_usage.sh" 600 "$USAGE_LIB_SHA256" \
     && download_stage_file "lib/jsonl_parser.pl" 600 "$JSONL_PARSER_SHA256" \
     && download_stage_file "lib/anthropic_pricing.json" 600 "$PRICING_MANIFEST_SHA256"; then
     mv "$stage_dir/statusline.sh" "$SCRIPT_PATH"
+    mv "$stage_dir/lib/statusline_themes.sh" "$THEMES_LIB_PATH"
     mv "$stage_dir/lib/statusline_display.sh" "$DISPLAY_LIB_PATH"
     mv "$stage_dir/lib/statusline_usage.sh" "$USAGE_LIB_PATH"
     mv "$stage_dir/lib/jsonl_parser.pl" "$JSONL_PARSER_PATH"
     mv "$stage_dir/lib/anthropic_pricing.json" "$PRICING_MANIFEST_PATH"
     echo -e "${GREEN}✓${NC} Installed $SCRIPT_PATH"
+    echo -e "${GREEN}✓${NC} Installed $THEMES_LIB_PATH"
     echo -e "${GREEN}✓${NC} Installed $DISPLAY_LIB_PATH"
     echo -e "${GREEN}✓${NC} Installed $USAGE_LIB_PATH"
     echo -e "${GREEN}✓${NC} Installed $JSONL_PARSER_PATH"
