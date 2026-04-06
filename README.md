@@ -40,6 +40,7 @@
 - [⚡ Performance](#performance)
 - [🔒 Privacy & Network Access](#privacy--network-access)
 - [🔧 Requirements](#requirements)
+- [🗑 Uninstall](#uninstall)
 
 <hr>
 
@@ -379,6 +380,16 @@ The API call runs in a **non-blocking background subshell** so it never stalls t
 | `CLAUDELINE_NO_NETWORK=1` | Disables all network access — the API call is skipped entirely |
 | `CLAUDELINE_DEBUG=1` | Enables debug logging to `$TMPDIR/claudeline-statusline-debug.log` |
 
+**Local data stored** in `~/.claude-usage.d/` (created with `chmod 700`):
+
+| File | Purpose |
+|------|---------|
+| `.jsonl-cache` | Cached all-time token/cost totals (5-min TTL) |
+| `.jsonl-state` | Per-file JSONL scan state for incremental updates |
+| `.usage-history` | Rolling 24h usage samples for trend arrows |
+| `.extra-usage-cache` | Cached overage/credit data |
+| `.claude-config-cache` | Cached auto-compact setting |
+
 <hr>
 
 <h2 align="center" id="requirements">🔧 Requirements</h2>
@@ -390,6 +401,24 @@ The API call runs in a **non-blocking background subshell** so it never stalls t
 [![perl](https://img.shields.io/badge/perl-JSONL_parsing-39457E?logo=perl&logoColor=white)](https://www.perl.org/)
 
 </div>
+
+<hr>
+
+<h2 align="center" id="uninstall">🗑 Uninstall</h2>
+
+```bash
+# Remove statusline files
+rm -f ~/.claude/statusline.sh
+rm -rf ~/.claude/lib/statusline_display.sh ~/.claude/lib/statusline_usage.sh ~/.claude/lib/jsonl_parser.pl ~/.claude/lib/anthropic_pricing.json
+
+# Remove the statusLine key from settings.json
+jq 'del(.statusLine)' ~/.claude/settings.json > ~/.claude/settings.json.tmp && mv ~/.claude/settings.json.tmp ~/.claude/settings.json
+
+# Remove cached data (optional)
+rm -rf ~/.claude-usage.d
+```
+
+Then restart Claude Code.
 
 ---
 
