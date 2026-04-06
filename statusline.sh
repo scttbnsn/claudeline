@@ -132,6 +132,37 @@ source "$STATUSLINE_DIR/lib/statusline_display.sh"
 # shellcheck source=lib/statusline_usage.sh
 source "$STATUSLINE_DIR/lib/statusline_usage.sh"
 
+# Segment visibility — parse CLAUDELINE_SEGMENTS into a fast lookup
+# Default: all segments enabled. Set e.g. CLAUDELINE_SEGMENTS="context,git,pace,duration"
+_SEG_ALL=1
+if [ -n "${CLAUDELINE_SEGMENTS:-}" ]; then
+    _SEG_ALL=0
+    _SEG_CONTEXT=0; _SEG_GIT=0; _SEG_LINES=0; _SEG_PACE=0
+    _SEG_BURST=0; _SEG_DURATION=0; _SEG_CREDIT=0
+    _SEG_TOKENS=0; _SEG_METRIC=0; _SEG_MODEL=0
+    IFS=',' read -ra _segs <<< "$CLAUDELINE_SEGMENTS"
+    for _s in "${_segs[@]}"; do
+        case "${_s## }" in  # trim leading space
+            context)  _SEG_CONTEXT=1 ;;
+            git)      _SEG_GIT=1 ;;
+            lines)    _SEG_LINES=1 ;;
+            pace)     _SEG_PACE=1 ;;
+            burst)    _SEG_BURST=1 ;;
+            duration) _SEG_DURATION=1 ;;
+            credit)   _SEG_CREDIT=1 ;;
+            tokens)   _SEG_TOKENS=1 ;;
+            metric)   _SEG_METRIC=1 ;;
+            model)    _SEG_MODEL=1 ;;
+        esac
+    done
+else
+    _SEG_CONTEXT=1; _SEG_GIT=1; _SEG_LINES=1; _SEG_PACE=1
+    _SEG_BURST=1; _SEG_DURATION=1; _SEG_CREDIT=1
+    _SEG_TOKENS=1; _SEG_METRIC=1; _SEG_MODEL=1
+fi
+
+seg_on() { [ "${_SEG_ALL}" -eq 1 ] || [ "${1:-0}" -eq 1 ]; }
+
 # Cache directory for API and JSONL data
 CACHE_DIR="$HOME/.claude-usage.d"
 JSONL_CACHE="$CACHE_DIR/.jsonl-cache"
@@ -297,7 +328,7 @@ PROGRESS_BAR="${CTX_COLOR}${BAR}${RESET}"
 BRANCH=""
 DIR_NAME=""
 GIT_ROOT=""
-if GIT_ROOT=$(git rev-parse --show-toplevel 2>>"$STATUSLINE_DEBUG_LOG"); then
+if seg_on "$_SEG_GIT" && GIT_ROOT=$(git rev-parse --show-toplevel 2>>"$STATUSLINE_DEBUG_LOG"); then
     DIR_NAME="${GIT_ROOT##*/}"  # basename using bash
 
     # git status -sb gives: ## branch...upstream [ahead N, behind M] + file status
@@ -421,26 +452,44 @@ if [ "$SESSION_TOKENS" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG" || [ "$ALL_TIME_TOKENS
     fi
 fi
 
-DURATION_INFO=""
-if [ "$DURATION_MS" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
-    DURATION_INFO="${DIM}⏱️ $(format_duration "$DURATION_MS")${RESET}"
-fi
-
-# Format lines changed (show —/— if none)
-if [ "$LINES_ADDED" != "0" ] || [ "$LINES_REMOVED" != "0" ]; then
-    LINES_INFO="${GREEN}+${LINES_ADDED}${DIM}/${RESET}${RED}-${LINES_REMOVED}${RESET}"
-else
-    LINES_INFO="${DIM}—/—${RESET}"
-fi
-
 # Separator
 SEP="${DIM}  ·  ${RESET}"
 
-# Combine repo/branch (repo first)
-if [ -n "$BRANCH" ]; then
-    REPO_BRANCH="${SKY}${DIR_NAME}${DIM}/${RESET}${PURPLE}${BRANCH}${RESET}"
-else
-    REPO_BRANCH="${SKY}${DIR_NAME}${RESET}"
+# Helper to append a segment with separator
+_append_seg() {
+    local var_name=$1 content=$2
+    if [ -n "$content" ]; then
+        local current="${!var_name}"
+        if [ -n "$current" ]; then
+            printf -v "$var_name" '%s' "${current}${SEP}${content}"
+        else
+            printf -v "$var_name" '%s' "$content"
+        fi
+    fi
+}
+
+# Compute enabled segments (skip computation for disabled segments)
+DURATION_INFO=""
+if seg_on "$_SEG_DURATION" && [ "$DURATION_MS" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
+    DURATION_INFO="${DIM}⏱️ $(format_duration "$DURATION_MS")${RESET}"
+fi
+
+LINES_INFO=""
+if seg_on "$_SEG_LINES"; then
+    if [ "$LINES_ADDED" != "0" ] || [ "$LINES_REMOVED" != "0" ]; then
+        LINES_INFO="${GREEN}+${LINES_ADDED}${DIM}/${RESET}${RED}-${LINES_REMOVED}${RESET}"
+    else
+        LINES_INFO="${DIM}—/—${RESET}"
+    fi
+fi
+
+REPO_BRANCH=""
+if seg_on "$_SEG_GIT"; then
+    if [ -n "$BRANCH" ]; then
+        REPO_BRANCH="${SKY}${DIR_NAME}${DIM}/${RESET}${PURPLE}${BRANCH}${RESET}"
+    elif [ -n "$DIR_NAME" ]; then
+        REPO_BRANCH="${SKY}${DIR_NAME}${RESET}"
+    fi
 fi
 
 # Rate limit data extracted from stdin (rate_limits.seven_day / five_hour)
@@ -448,24 +497,22 @@ fi
 EXTRA_UTIL=""
 WEEKLY_PCT=$(round_decimal_to_int_or_default "$WEEKLY_USAGE" 0 "weekly usage")
 BURST_PCT=$(round_decimal_to_int_or_default "$BURST_USAGE" 0 "burst usage")
-if [ "${WEEKLY_PCT:-0}" -ge 100 ] 2>>"$STATUSLINE_DEBUG_LOG" || [ "${BURST_PCT:-0}" -ge 100 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
+if seg_on "$_SEG_CREDIT" && { [ "${WEEKLY_PCT:-0}" -ge 100 ] 2>>"$STATUSLINE_DEBUG_LOG" || [ "${BURST_PCT:-0}" -ge 100 ] 2>>"$STATUSLINE_DEBUG_LOG"; }; then
     EXTRA_UTIL=$(get_extra_usage_util_nonblocking "$NOW")
 fi
 
-# Smart pace indicator (trend-based)
 PACE_INDICATOR=""
-if [ -n "$WEEKLY_USAGE" ]; then
+if seg_on "$_SEG_PACE" && [ -n "$WEEKLY_USAGE" ]; then
     PACE_INDICATOR="$(get_smart_pace_indicator "$WEEKLY_USAGE" "$RESETS_AT" "$NOW")"
 fi
 
-# Burst indicator (💥 with colored bar, only when > 0%)
-# Uses effective rate (max of burn_rate, pressure) for 5-hour window — same approach as weekly pace
-# 8 levels: ▁▂▃▄▅▆▇█ with color gradient cyan→teal→green→yellow→orange→red→magenta→bright magenta
-BURST_INDICATOR="$(format_burst_indicator "$BURST_USAGE" "$BURST_RESETS" "$NOW")"
+BURST_INDICATOR=""
+if seg_on "$_SEG_BURST"; then
+    BURST_INDICATOR="$(format_burst_indicator "$BURST_USAGE" "$BURST_RESETS" "$NOW")"
+fi
 
-# Credit indicator (💳) - shown in overage (weekly or burst at 100%) with active credit spend
 CREDIT_INDICATOR=""
-if [ -n "$EXTRA_UTIL" ] && [ "$EXTRA_UTIL" != "_" ] && [ "$EXTRA_UTIL" != "null" ]; then
+if seg_on "$_SEG_CREDIT" && [ -n "$EXTRA_UTIL" ] && [ "$EXTRA_UTIL" != "_" ] && [ "$EXTRA_UTIL" != "null" ]; then
     EXTRA_PCT=$(round_decimal_to_int_or_default "$EXTRA_UTIL" 0 "extra usage")
     WEEKLY_PCT=$(round_decimal_to_int_or_default "$WEEKLY_USAGE" 0 "weekly usage")
     if [ "$EXTRA_PCT" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
@@ -475,32 +522,26 @@ if [ -n "$EXTRA_UTIL" ] && [ "$EXTRA_UTIL" != "_" ] && [ "$EXTRA_UTIL" != "null"
     fi
 fi
 
-# Build the status line (most important first, model at end)
-# Compose indicators section (pace + burst + credit)
-INDICATORS=""
-for ind in "$PACE_INDICATOR" "$BURST_INDICATOR"; do
-    if [ -n "$ind" ]; then
-        if [ -n "$INDICATORS" ]; then
-            INDICATORS="${INDICATORS}${SEP}${ind}"
-        else
-            INDICATORS="${ind}"
-        fi
-    fi
-done
+# Build Line 1: assemble enabled segments with separators
+LINE1=""
+seg_on "$_SEG_CONTEXT" && _append_seg LINE1 "${CTX_ICON} ${PROGRESS_BAR}"
+seg_on "$_SEG_GIT" && _append_seg LINE1 "$REPO_BRANCH"
+seg_on "$_SEG_LINES" && _append_seg LINE1 "$LINES_INFO"
+seg_on "$_SEG_PACE" && [ -n "$PACE_INDICATOR" ] && _append_seg LINE1 "$PACE_INDICATOR"
+seg_on "$_SEG_BURST" && [ -n "$BURST_INDICATOR" ] && _append_seg LINE1 "$BURST_INDICATOR"
+seg_on "$_SEG_DURATION" && _append_seg LINE1 "$DURATION_INFO"
+seg_on "$_SEG_CREDIT" && [ -n "$CREDIT_INDICATOR" ] && _append_seg LINE1 "$CREDIT_INDICATOR"
+echo -e "$LINE1"
 
-# Line 1: Essential info (progress, repo, lines, pace, duration, credit)
-CREDIT_SUFFIX=""
-[ -n "$CREDIT_INDICATOR" ] && CREDIT_SUFFIX="${SEP}${CREDIT_INDICATOR}"
-if [ -n "$INDICATORS" ]; then
-    echo -e "${CTX_ICON} ${PROGRESS_BAR}${SEP}${REPO_BRANCH}${SEP}${LINES_INFO}${SEP}${INDICATORS}${SEP}${DURATION_INFO}${CREDIT_SUFFIX}"
-else
-    echo -e "${CTX_ICON} ${PROGRESS_BAR}${SEP}${REPO_BRANCH}${SEP}${LINES_INFO}${SEP}${DURATION_INFO}${CREDIT_SUFFIX}"
+# Build Line 2: context stats + metric + model
+LINE2=""
+if seg_on "$_SEG_TOKENS"; then
+    CTX_CURRENT=$(format_number "$CURRENT_TOKENS")
+    CTX_THRESHOLD=$(format_number "$AUTO_COMPACT_THRESHOLD")
+    CTX_STATS="${CTX_CURRENT}/${CTX_THRESHOLD}"
+    CTX_PADDED=$(printf "%13s" "$CTX_STATS")
+    _append_seg LINE2 "${DIM}${CTX_PADDED}${RESET}"
 fi
-
-# Line 2: Context stats (under progress bar) + fun stats + model
-CTX_CURRENT=$(format_number "$CURRENT_TOKENS")
-CTX_THRESHOLD=$(format_number "$AUTO_COMPACT_THRESHOLD")
-CTX_STATS="${CTX_CURRENT}/${CTX_THRESHOLD}"
-# Right-align to 13 chars so K stays under bar's right edge
-CTX_PADDED=$(printf "%13s" "$CTX_STATS")
-echo -e "${DIM}${CTX_PADDED}${RESET}${SEP}${METRIC_INFO}${SEP}${DIM}${MODEL}${RESET}"
+seg_on "$_SEG_METRIC" && _append_seg LINE2 "$METRIC_INFO"
+seg_on "$_SEG_MODEL" && _append_seg LINE2 "${DIM}${MODEL}${RESET}"
+echo -e "$LINE2"
