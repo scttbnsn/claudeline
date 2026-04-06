@@ -6,11 +6,44 @@ JSONL_CACHE_TTL=${JSONL_CACHE_TTL:-300}
 TREND_HISTORY_MAX_AGE=${TREND_HISTORY_MAX_AGE:-$SECONDS_PER_DAY}
 STATUSLINE_USAGE_DIR=$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 STATUSLINE_JSONL_PARSER=${STATUSLINE_JSONL_PARSER:-$STATUSLINE_USAGE_DIR/jsonl_parser.pl}
+STATUSLINE_STAT_MTIME_FLAG=${STATUSLINE_STAT_MTIME_FLAG:-}
+STATUSLINE_STAT_MTIME_FORMAT=${STATUSLINE_STAT_MTIME_FORMAT:-}
 
 is_decimal_value() {
     local value=$1
     [[ "$value" =~ ^-?([0-9]+([.][0-9]+)?|[.][0-9]+)$ ]]
 }
+
+detect_stat_mtime_reader() {
+    local probe_path=${1:-$STATUSLINE_USAGE_DIR}
+    local debug_log_path=${STATUSLINE_DEBUG_LOG:-/dev/null}
+    local mtime=""
+
+    if [ -n "$STATUSLINE_STAT_MTIME_FLAG" ] && [ -n "$STATUSLINE_STAT_MTIME_FORMAT" ]; then
+        return 0
+    fi
+
+    if mtime=$(stat -f '%m' "$probe_path" 2>>"$debug_log_path"); then
+        STATUSLINE_STAT_MTIME_FLAG='-f'
+        STATUSLINE_STAT_MTIME_FORMAT='%m'
+        return 0
+    fi
+
+    if mtime=$(stat -c '%Y' "$probe_path" 2>>"$debug_log_path"); then
+        STATUSLINE_STAT_MTIME_FLAG='-c'
+        STATUSLINE_STAT_MTIME_FORMAT='%Y'
+        return 0
+    fi
+
+    if declare -F debug_log >/dev/null 2>&1; then
+        debug_log "Failed to detect portable stat mtime format"
+    fi
+    STATUSLINE_STAT_MTIME_FLAG=''
+    STATUSLINE_STAT_MTIME_FORMAT=''
+    return 1
+}
+
+detect_stat_mtime_reader "$STATUSLINE_USAGE_DIR" || true
 
 # Calculate all-time usage from JSONL files (cached for 5 minutes)
 # Uses persistent per-file running sums so cache misses do not trigger full rescans.
@@ -33,7 +66,7 @@ write_jsonl_cache() {
         "$total_input" "$total_output" "$total_cw" "$total_cr" > "$JSONL_CACHE"
 }
 
-emit_file_contents() {
+emit_two_line_file() {
     local path=$1
     local first_line second_line
 
@@ -143,7 +176,7 @@ get_jsonl_totals() {
 
     # Return cached values if fresh (JSONL_CACHE_TTL seconds = 5 minutes by default)
     if [ "$cache_age" -lt "$JSONL_CACHE_TTL" ] && [ -f "$JSONL_CACHE" ]; then
-        emit_file_contents "$JSONL_CACHE"
+        emit_two_line_file "$JSONL_CACHE"
         return
     fi
 
@@ -159,19 +192,19 @@ get_jsonl_totals() {
     fi
 
     if [ "$state_age" -lt "$JSONL_CACHE_TTL" ] && restore_jsonl_cache_from_state "$now"; then
-        emit_file_contents "$JSONL_CACHE"
+        emit_two_line_file "$JSONL_CACHE"
         return
     fi
 
     if refresh_jsonl_state "$now"; then
-        emit_file_contents "$JSONL_CACHE"
+        emit_two_line_file "$JSONL_CACHE"
         return
     fi
 
     # Fall back to the last persistent state if refresh fails.
     if restore_jsonl_cache_from_state "$now"; then
         debug_log "Using prior JSONL state after refresh failure"
-        emit_file_contents "$JSONL_CACHE"
+        emit_two_line_file "$JSONL_CACHE"
         return
     fi
 
@@ -311,11 +344,16 @@ get_path_mtime_epoch() {
         return 1
     fi
 
-    if ! mtime=$(stat -f '%m' "$path" 2>>"$STATUSLINE_DEBUG_LOG"); then
-        if ! mtime=$(stat -c '%Y' "$path" 2>>"$STATUSLINE_DEBUG_LOG"); then
+    if ! [ -n "$STATUSLINE_STAT_MTIME_FLAG" ] || ! [ -n "$STATUSLINE_STAT_MTIME_FORMAT" ]; then
+        detect_stat_mtime_reader "$path" || {
             debug_log "Failed to read mtime for $path"
             return 1
-        fi
+        }
+    fi
+
+    if ! mtime=$(stat "$STATUSLINE_STAT_MTIME_FLAG" "$STATUSLINE_STAT_MTIME_FORMAT" "$path" 2>>"$STATUSLINE_DEBUG_LOG"); then
+        debug_log "Failed to read mtime for $path"
+        return 1
     fi
 
     if ! [[ "$mtime" =~ ^[0-9]+$ ]]; then
@@ -502,72 +540,132 @@ get_trend_arrow() {
 # Trend arrows: ↑ (heating fast), ↗ (warming), → (stable), ↘ (cooling), ↓ (cooling fast)
 # If at limit (>=100%), shows time until reset: 🚨 -1.2d
 # Alternates: emoji+arrow 9 times, then raw % once
+normalize_pace_usage_pct() {
+    local usage=$1
+    local out_var=$2
+    local normalized_pct=""
+
+    if [ -z "$usage" ] || [ "$usage" = "_" ] || [ "$usage" = "null" ]; then
+        printf -v "$out_var" '%s' ""
+        return
+    fi
+
+    if ! normalized_pct=$(printf "%.0f" "$usage" 2>>"$STATUSLINE_DEBUG_LOG"); then
+        debug_log "Invalid weekly usage value '${usage:-<empty>}'; omitting pace indicator"
+        printf -v "$out_var" '%s' ""
+        return
+    fi
+
+    printf -v "$out_var" '%s' "${normalized_pct:-0}"
+}
+
+format_pace_reset_suffix() {
+    local days_until_x10k=$1
+    local out_var=$2
+    local formatted_suffix=""
+
+    if [ "$days_until_x10k" -ge 10000 ]; then
+        local days_int=$(( days_until_x10k / 10000 ))
+        local days_frac=$(( (days_until_x10k % 10000) / 1000 ))
+        formatted_suffix=" -${days_int}.${days_frac}d"
+    else
+        local hours_until=$(( days_until_x10k * 24 / 10000 ))
+        formatted_suffix=" -${hours_until}h"
+    fi
+
+    printf -v "$out_var" '%s' "$formatted_suffix"
+}
+
+calculate_pace_signals() {
+    local pct=$1
+    local resets_at=$2
+    local now=$3
+    local week_start_var=$4
+    local burn_rate_var=$5
+    local pressure_var=$6
+    local reset_suffix_var=$7
+
+    local calc_week_start=0
+    local calc_burn_rate_x10k=10000
+    local calc_pressure_x10k=10000
+    local calc_reset_suffix=""
+
+    if [ -n "$resets_at" ] && [ "$resets_at" != "_" ] && [ "$resets_at" != "null" ]; then
+        local reset_epoch="$resets_at"
+
+        if [ -n "$reset_epoch" ] && [ "$reset_epoch" -gt "$now" ]; then
+            local seconds_until_reset=$((reset_epoch - now))
+            local days_until_x10k
+            local days_elapsed_x10k
+            local remaining
+
+            calc_week_start=$((reset_epoch - SECONDS_PER_WEEK))
+            days_until_x10k=$(( seconds_until_reset * 10000 / SECONDS_PER_DAY ))
+            days_elapsed_x10k=$(( 70000 - days_until_x10k ))
+
+            if [ "$days_elapsed_x10k" -gt 100 ]; then
+                calc_burn_rate_x10k=$(( pct * 7000000 / days_elapsed_x10k ))
+            elif [ "$pct" -gt 0 ]; then
+                calc_burn_rate_x10k=100000
+            else
+                calc_burn_rate_x10k=0
+            fi
+
+            remaining=$((100 - pct))
+            if [ "$remaining" -gt 0 ] && [ "$days_until_x10k" -gt 0 ]; then
+                calc_pressure_x10k=$(( days_until_x10k * 100 / (remaining * 7) ))
+            fi
+
+            format_pace_reset_suffix "$days_until_x10k" calc_reset_suffix
+        fi
+    fi
+
+    printf -v "$week_start_var" '%s' "$calc_week_start"
+    printf -v "$burn_rate_var" '%s' "$calc_burn_rate_x10k"
+    printf -v "$pressure_var" '%s' "$calc_pressure_x10k"
+    printf -v "$reset_suffix_var" '%s' "$calc_reset_suffix"
+}
+
+pace_emoji_for_rate() {
+    local effective_rate_x10k=$1
+    local out_var=$2
+    local selected_emoji=""
+
+    if [ "$effective_rate_x10k" -lt 3000 ]; then
+        selected_emoji="❄️"
+    elif [ "$effective_rate_x10k" -lt 6000 ]; then
+        selected_emoji="🧊"
+    elif [ "$effective_rate_x10k" -lt 8500 ]; then
+        selected_emoji="🙂"
+    elif [ "$effective_rate_x10k" -lt 11500 ]; then
+        selected_emoji="👌"
+    elif [ "$effective_rate_x10k" -lt 14000 ]; then
+        selected_emoji="♨️"
+    elif [ "$effective_rate_x10k" -lt 18000 ]; then
+        selected_emoji="🥵"
+    elif [ "$effective_rate_x10k" -lt 25000 ]; then
+        selected_emoji="🔥"
+    else
+        selected_emoji="🚨"
+    fi
+
+    printf -v "$out_var" '%s' "$selected_emoji"
+}
+
 get_smart_pace_indicator() {
     local usage=$1
     local resets_at=$2
     local now=${3:-$(date +%s)}
-    if [ -z "$usage" ] || [ "$usage" = "_" ] || [ "$usage" = "null" ]; then
-        echo ""
-        return
-    fi
-    local pct
-    if ! pct=$(printf "%.0f" "$usage" 2>>"$STATUSLINE_DEBUG_LOG"); then
-        debug_log "Invalid weekly usage value '${usage:-<empty>}'; omitting pace indicator"
+    local pct=""
+    normalize_pace_usage_pct "$usage" pct
+    if [ -z "$pct" ]; then
         echo ""
         return
     fi
     pct=${pct:-0}
 
-    local reset_suffix=""
-    local week_start=0
-    local days_elapsed_x10k=70000  # 7 days * 10000 (default: full week elapsed)
-    local burn_rate_x10k=10000     # 1.0 * 10000 (default: on pace)
-    local pressure_x10k=10000      # 1.0 * 10000 (default: on pace)
-
-    if [ -n "$resets_at" ] && [ "$resets_at" != "_" ] && [ "$resets_at" != "null" ]; then
-        local reset_epoch="$resets_at"  # Already epoch seconds from status line JSON
-
-        if [ -n "$reset_epoch" ] && [ "$reset_epoch" -gt "$now" ]; then
-            local seconds_until_reset=$((reset_epoch - now))
-            week_start=$((reset_epoch - SECONDS_PER_WEEK))  # 7 days before reset = week start
-
-            # Use integer math: multiply by 10000 to preserve 4 decimal places
-            # SECONDS_PER_DAY seconds = 1 day
-            local days_until_x10k=$(( seconds_until_reset * 10000 / SECONDS_PER_DAY ))
-            days_elapsed_x10k=$(( 70000 - days_until_x10k ))  # 7 * 10000
-
-            # Calculate burn rate: (pct / days_elapsed) * 7 / 100
-            # burn_rate_x10k = burn_rate * 10000 = pct * 7 * 10000 / days_elapsed / 100
-            #                = pct * 700 / days_elapsed = pct * 7000000 / days_elapsed_x10k
-            if [ "$days_elapsed_x10k" -gt 100 ]; then  # > 0.01 days
-                burn_rate_x10k=$(( pct * 7000000 / days_elapsed_x10k ))
-            elif [ "$pct" -gt 0 ]; then
-                burn_rate_x10k=100000  # 10.0
-            else
-                burn_rate_x10k=0
-            fi
-
-            # Budget pressure: time_remaining / budget_remaining_in_days
-            # Amplifies signal when budget is thin (e.g., 9% left for 2.7 days)
-            local remaining=$((100 - pct))
-            if [ "$remaining" -gt 0 ] && [ "$days_until_x10k" -gt 0 ]; then
-                # pressure = days_until / (remaining * 7 / 100)
-                # pressure_x10k = days_until_x10k * 100 / (remaining * 7)
-                pressure_x10k=$(( days_until_x10k * 100 / (remaining * 7) ))
-            fi
-
-            # Format reset time suffix for when at limit (only place needing float)
-            if [ "$days_until_x10k" -ge 10000 ]; then  # >= 1 day
-                # Format: days_until_x10k / 10000 with 1 decimal
-                local days_int=$(( days_until_x10k / 10000 ))
-                local days_frac=$(( (days_until_x10k % 10000) / 1000 ))
-                reset_suffix=" -${days_int}.${days_frac}d"
-            else
-                local hours_until=$(( days_until_x10k * 24 / 10000 ))
-                reset_suffix=" -${hours_until}h"
-            fi
-        fi
-    fi
+    local reset_suffix="" week_start=0 burn_rate_x10k=10000 pressure_x10k=10000
+    calculate_pace_signals "$pct" "$resets_at" "$now" week_start burn_rate_x10k pressure_x10k reset_suffix
 
     # Alternate display: emoji+arrow 7 times, then raw % 3 times (every 10 sec update)
     # Check cycle FIRST so raw % always shows on its cycles, regardless of alarm state
@@ -589,28 +687,12 @@ get_smart_pace_indicator() {
 
     # Effective rate = max(burn_rate, pressure)
     # Burn rate captures velocity, pressure captures remaining runway
-    local emoji
-    local br=${burn_rate_x10k:-10000}
-    if [ "${pressure_x10k:-10000}" -gt "$br" ]; then
-        br=$pressure_x10k
+    local emoji=""
+    local effective_rate_x10k=${burn_rate_x10k:-10000}
+    if [ "${pressure_x10k:-10000}" -gt "$effective_rate_x10k" ]; then
+        effective_rate_x10k=$pressure_x10k
     fi
-    if [ "$br" -lt 3000 ]; then
-        emoji="❄️"   # Way under - using < 30% of sustainable rate
-    elif [ "$br" -lt 6000 ]; then
-        emoji="🧊"   # Under pace - will use ~40-60% by reset
-    elif [ "$br" -lt 8500 ]; then
-        emoji="🙂"   # Comfortable - will use ~60-85% by reset
-    elif [ "$br" -lt 11500 ]; then
-        emoji="👌"   # On pace - will use ~85-115% by reset
-    elif [ "$br" -lt 14000 ]; then
-        emoji="♨️"   # Warming - will run out ~day 5-6
-    elif [ "$br" -lt 18000 ]; then
-        emoji="🥵"   # Hot - will run out ~day 4-5
-    elif [ "$br" -lt 25000 ]; then
-        emoji="🔥"   # Very hot - will run out ~day 3-4
-    else
-        emoji="🚨"   # Alarm - effective rate >= 2.5
-    fi
+    pace_emoji_for_rate "$effective_rate_x10k" emoji
 
     echo "${emoji}${arrow}"
 }
