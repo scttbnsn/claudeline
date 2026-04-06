@@ -1,0 +1,41 @@
+pre-commit:
+  parallel: true
+  commands:
+    shellcheck:
+      run: shellcheck -x -e SC2034 -S warning statusline.sh lib/statusline_themes.sh lib/statusline_display.sh lib/statusline_usage.sh
+    syntax-bash:
+      run: bash -n statusline.sh && bash -n lib/statusline_themes.sh && bash -n lib/statusline_display.sh && bash -n lib/statusline_usage.sh
+    syntax-perl:
+      run: perl -c lib/jsonl_parser.pl
+    sha256-check:
+      run: |
+        for pair in \
+          "statusline.sh:STATUSLINE_SHA256" \
+          "lib/statusline_themes.sh:THEMES_LIB_SHA256" \
+          "lib/statusline_display.sh:DISPLAY_LIB_SHA256" \
+          "lib/statusline_usage.sh:USAGE_LIB_SHA256" \
+          "lib/jsonl_parser.pl:JSONL_PARSER_SHA256" \
+          "lib/anthropic_pricing.json:PRICING_MANIFEST_SHA256"; do
+          file="${pair%%:*}"
+          var="${pair##*:}"
+          actual=$(shasum -a 256 "$file" | cut -d' ' -f1)
+          expected=$(grep "${var}=" install.sh | cut -d'"' -f2)
+          if [ "$actual" != "$expected" ]; then
+            echo "SHA-256 mismatch: $file (update $var in install.sh)"
+            exit 1
+          fi
+        done
+
+pre-push:
+  commands:
+    tests:
+      run: |
+        failed=0
+        for f in tests/*.sh; do
+          if ! bash "$f" >/dev/null 2>&1; then
+            echo "FAIL: $(basename $f)"
+            bash "$f" 2>&1 | tail -3
+            ((failed++))
+          fi
+        done
+        [ "$failed" -eq 0 ] || exit 1
