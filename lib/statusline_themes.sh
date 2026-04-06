@@ -1,116 +1,96 @@
 # shellcheck shell=bash
-# Theme system — each function sets all color variables.
+# Theme system — palettes are data, loaded through one shared setter.
 # Selected via CLAUDELINE_THEME env var. NO_COLOR disables all colors.
 
-_theme_vibey() {
-    RESET="\033[0m"; DIM="\033[2m"
-    PURPLE="\033[38;2;187;134;252m";    SKY="\033[38;2;92;200;255m"
-    CTX_CYAN="\033[38;2;100;255;218m";  CTX_LIME="\033[38;2;194;255;74m"
-    CTX_YELLOW="\033[38;2;255;234;0m";  CTX_ORANGE="\033[38;2;255;165;0m"
-    CTX_CORAL="\033[38;2;254;117;63m";  CTX_RED="\033[38;2;255;77;106m"
-    CTX_HOT_PINK="\033[38;2;255;110;199m"; CTX_MAGENTA="\033[38;2;255;0;255m"
-    CTX_VIOLET="\033[38;2;190;60;255m"; CTX_WHITE_HOT="\033[38;2;255;200;255m"
-    VEL_HOT="\033[38;2;255;77;106m";    VEL_WARM="\033[38;2;255;165;0m"
-    VEL_STABLE="\033[38;2;194;255;74m"; VEL_COOL="\033[38;2;0;200;170m"
-    VEL_COLD="\033[38;2;100;255;218m"
-    BURST_CYAN="\033[38;2;32;232;182m";     BURST_TEAL="\033[38;2;0;200;170m"
-    BURST_GREEN="\033[38;2;100;220;100m";   BURST_YELLOW="\033[38;2;255;234;0m"
-    BURST_ORANGE="\033[38;2;255;165;0m";    BURST_RED="\033[38;2;255;77;106m"
-    BURST_MAGENTA="\033[38;2;255;0;255m";   BURST_BRIGHT_MAG="\033[38;2;255;100;255m"
+# Bash 3.2 lacks associative arrays and namerefs, so keep an ordered variable list
+# plus one matching values array per theme.
+THEME_COLOR_VARS=(
+    RESET DIM
+    PURPLE SKY
+    CTX_CYAN CTX_LIME CTX_YELLOW CTX_ORANGE CTX_CORAL CTX_RED CTX_HOT_PINK CTX_MAGENTA CTX_VIOLET CTX_WHITE_HOT
+    VEL_HOT VEL_WARM VEL_STABLE VEL_COOL VEL_COLD
+    BURST_CYAN BURST_TEAL BURST_GREEN BURST_YELLOW BURST_ORANGE BURST_RED BURST_MAGENTA BURST_BRIGHT_MAG
+)
+
+THEME_VIBEY_VALUES=(
+    '\033[0m' '\033[2m'
+    '\033[38;2;187;134;252m' '\033[38;2;92;200;255m'
+    '\033[38;2;100;255;218m' '\033[38;2;194;255;74m' '\033[38;2;255;234;0m' '\033[38;2;255;165;0m' '\033[38;2;254;117;63m' '\033[38;2;255;77;106m' '\033[38;2;255;110;199m' '\033[38;2;255;0;255m' '\033[38;2;190;60;255m' '\033[38;2;255;200;255m'
+    '\033[38;2;255;77;106m' '\033[38;2;255;165;0m' '\033[38;2;194;255;74m' '\033[38;2;0;200;170m' '\033[38;2;100;255;218m'
+    '\033[38;2;32;232;182m' '\033[38;2;0;200;170m' '\033[38;2;100;220;100m' '\033[38;2;255;234;0m' '\033[38;2;255;165;0m' '\033[38;2;255;77;106m' '\033[38;2;255;0;255m' '\033[38;2;255;100;255m'
+)
+
+THEME_DARK_VALUES=(
+    '\033[0m' '\033[2m'
+    '\033[38;2;150;120;200m' '\033[38;2;80;160;210m'
+    '\033[38;2;80;200;180m' '\033[38;2;160;210;80m' '\033[38;2;220;200;60m' '\033[38;2;220;150;40m' '\033[38;2;210;100;60m' '\033[38;2;210;70;80m' '\033[38;2;200;90;150m' '\033[38;2;180;60;180m' '\033[38;2;150;60;200m' '\033[38;2;200;170;200m'
+    '\033[38;2;210;70;80m' '\033[38;2;220;150;40m' '\033[38;2;160;210;80m' '\033[38;2;60;170;140m' '\033[38;2;80;200;180m'
+    '\033[38;2;60;190;160m' '\033[38;2;50;170;140m' '\033[38;2;90;180;90m' '\033[38;2;220;200;60m' '\033[38;2;220;150;40m' '\033[38;2;210;70;80m' '\033[38;2;180;60;180m' '\033[38;2;200;90;200m'
+)
+
+THEME_LIGHT_VALUES=(
+    '\033[0m' '\033[2m'
+    '\033[38;2;120;70;180m' '\033[38;2;30;100;170m'
+    '\033[38;2;0;140;120m' '\033[38;2;80;140;20m' '\033[38;2;160;140;0m' '\033[38;2;180;100;0m' '\033[38;2;190;70;30m' '\033[38;2;190;40;50m' '\033[38;2;180;50;120m' '\033[38;2;160;0;160m' '\033[38;2;120;30;180m' '\033[38;2;140;60;140m'
+    '\033[38;2;190;40;50m' '\033[38;2;180;100;0m' '\033[38;2;80;140;20m' '\033[38;2;0;130;110m' '\033[38;2;0;140;120m'
+    '\033[38;2;0;150;130m' '\033[38;2;0;130;110m' '\033[38;2;50;140;50m' '\033[38;2;160;140;0m' '\033[38;2;180;100;0m' '\033[38;2;190;40;50m' '\033[38;2;160;0;160m' '\033[38;2;180;50;180m'
+)
+
+# Based on Nord palette: https://www.nordtheme.com
+THEME_NORD_VALUES=(
+    '\033[0m' '\033[2m'
+    '\033[38;2;180;142;173m' '\033[38;2;136;192;208m'
+    '\033[38;2;143;188;187m' '\033[38;2;163;190;140m' '\033[38;2;235;203;139m' '\033[38;2;208;135;112m' '\033[38;2;208;135;112m' '\033[38;2;191;97;106m' '\033[38;2;180;142;173m' '\033[38;2;180;142;173m' '\033[38;2;180;142;173m' '\033[38;2;229;233;240m'
+    '\033[38;2;191;97;106m' '\033[38;2;208;135;112m' '\033[38;2;163;190;140m' '\033[38;2;136;192;208m' '\033[38;2;143;188;187m'
+    '\033[38;2;143;188;187m' '\033[38;2;136;192;208m' '\033[38;2;163;190;140m' '\033[38;2;235;203;139m' '\033[38;2;208;135;112m' '\033[38;2;191;97;106m' '\033[38;2;180;142;173m' '\033[38;2;180;142;173m'
+)
+
+# Based on Gruvbox palette: https://github.com/morhetz/gruvbox
+THEME_GRUVBOX_VALUES=(
+    '\033[0m' '\033[2m'
+    '\033[38;2;211;134;155m' '\033[38;2;131;165;152m'
+    '\033[38;2;142;192;124m' '\033[38;2;184;187;38m' '\033[38;2;250;189;47m' '\033[38;2;254;128;25m' '\033[38;2;254;128;25m' '\033[38;2;251;73;52m' '\033[38;2;211;134;155m' '\033[38;2;211;134;155m' '\033[38;2;211;134;155m' '\033[38;2;253;244;193m'
+    '\033[38;2;251;73;52m' '\033[38;2;254;128;25m' '\033[38;2;184;187;38m' '\033[38;2;131;165;152m' '\033[38;2;142;192;124m'
+    '\033[38;2;142;192;124m' '\033[38;2;131;165;152m' '\033[38;2;184;187;38m' '\033[38;2;250;189;47m' '\033[38;2;254;128;25m' '\033[38;2;251;73;52m' '\033[38;2;211;134;155m' '\033[38;2;211;134;155m'
+)
+
+THEME_NO_COLOR_VALUES=(
+    '' ''
+    '' ''
+    '' '' '' '' '' '' '' '' '' ''
+    '' '' '' '' ''
+    '' '' '' '' '' '' '' ''
+)
+
+_apply_theme_values() {
+    local values_name=$1
+    local index var_name value value_count=0
+
+    eval "value_count=\${#${values_name}[@]}"
+    [ "$value_count" -eq "${#THEME_COLOR_VARS[@]}" ] || return 1
+
+    for index in "${!THEME_COLOR_VARS[@]}"; do
+        var_name=${THEME_COLOR_VARS[$index]}
+        eval "value=\${${values_name}[$index]}"
+        printf -v "$var_name" '%s' "$value"
+    done
 }
 
-_theme_dark() {
-    RESET="\033[0m"; DIM="\033[2m"
-    PURPLE="\033[38;2;150;120;200m";    SKY="\033[38;2;80;160;210m"
-    CTX_CYAN="\033[38;2;80;200;180m";   CTX_LIME="\033[38;2;160;210;80m"
-    CTX_YELLOW="\033[38;2;220;200;60m"; CTX_ORANGE="\033[38;2;220;150;40m"
-    CTX_CORAL="\033[38;2;210;100;60m";  CTX_RED="\033[38;2;210;70;80m"
-    CTX_HOT_PINK="\033[38;2;200;90;150m"; CTX_MAGENTA="\033[38;2;180;60;180m"
-    CTX_VIOLET="\033[38;2;150;60;200m"; CTX_WHITE_HOT="\033[38;2;200;170;200m"
-    VEL_HOT="\033[38;2;210;70;80m";     VEL_WARM="\033[38;2;220;150;40m"
-    VEL_STABLE="\033[38;2;160;210;80m"; VEL_COOL="\033[38;2;60;170;140m"
-    VEL_COLD="\033[38;2;80;200;180m"
-    BURST_CYAN="\033[38;2;60;190;160m";     BURST_TEAL="\033[38;2;50;170;140m"
-    BURST_GREEN="\033[38;2;90;180;90m";     BURST_YELLOW="\033[38;2;220;200;60m"
-    BURST_ORANGE="\033[38;2;220;150;40m";   BURST_RED="\033[38;2;210;70;80m"
-    BURST_MAGENTA="\033[38;2;180;60;180m";  BURST_BRIGHT_MAG="\033[38;2;200;90;200m"
-}
-
-_theme_light() {
-    RESET="\033[0m"; DIM="\033[2m"
-    PURPLE="\033[38;2;120;70;180m";     SKY="\033[38;2;30;100;170m"
-    CTX_CYAN="\033[38;2;0;140;120m";    CTX_LIME="\033[38;2;80;140;20m"
-    CTX_YELLOW="\033[38;2;160;140;0m";  CTX_ORANGE="\033[38;2;180;100;0m"
-    CTX_CORAL="\033[38;2;190;70;30m";   CTX_RED="\033[38;2;190;40;50m"
-    CTX_HOT_PINK="\033[38;2;180;50;120m"; CTX_MAGENTA="\033[38;2;160;0;160m"
-    CTX_VIOLET="\033[38;2;120;30;180m"; CTX_WHITE_HOT="\033[38;2;140;60;140m"
-    VEL_HOT="\033[38;2;190;40;50m";     VEL_WARM="\033[38;2;180;100;0m"
-    VEL_STABLE="\033[38;2;80;140;20m";  VEL_COOL="\033[38;2;0;130;110m"
-    VEL_COLD="\033[38;2;0;140;120m"
-    BURST_CYAN="\033[38;2;0;150;130m";      BURST_TEAL="\033[38;2;0;130;110m"
-    BURST_GREEN="\033[38;2;50;140;50m";     BURST_YELLOW="\033[38;2;160;140;0m"
-    BURST_ORANGE="\033[38;2;180;100;0m";    BURST_RED="\033[38;2;190;40;50m"
-    BURST_MAGENTA="\033[38;2;160;0;160m";   BURST_BRIGHT_MAG="\033[38;2;180;50;180m"
-}
-
-_theme_nord() {
-    # Based on Nord palette: https://www.nordtheme.com
-    RESET="\033[0m"; DIM="\033[2m"
-    PURPLE="\033[38;2;180;142;173m";    SKY="\033[38;2;136;192;208m"      # nord15, nord8
-    CTX_CYAN="\033[38;2;143;188;187m";  CTX_LIME="\033[38;2;163;190;140m" # nord7, nord14
-    CTX_YELLOW="\033[38;2;235;203;139m"; CTX_ORANGE="\033[38;2;208;135;112m" # nord13, nord12
-    CTX_CORAL="\033[38;2;208;135;112m"; CTX_RED="\033[38;2;191;97;106m"   # nord12, nord11
-    CTX_HOT_PINK="\033[38;2;180;142;173m"; CTX_MAGENTA="\033[38;2;180;142;173m" # nord15
-    CTX_VIOLET="\033[38;2;180;142;173m"; CTX_WHITE_HOT="\033[38;2;229;233;240m" # nord5
-    VEL_HOT="\033[38;2;191;97;106m";    VEL_WARM="\033[38;2;208;135;112m" # nord11, nord12
-    VEL_STABLE="\033[38;2;163;190;140m"; VEL_COOL="\033[38;2;136;192;208m" # nord14, nord8
-    VEL_COLD="\033[38;2;143;188;187m"                                      # nord7
-    BURST_CYAN="\033[38;2;143;188;187m";    BURST_TEAL="\033[38;2;136;192;208m"
-    BURST_GREEN="\033[38;2;163;190;140m";   BURST_YELLOW="\033[38;2;235;203;139m"
-    BURST_ORANGE="\033[38;2;208;135;112m";  BURST_RED="\033[38;2;191;97;106m"
-    BURST_MAGENTA="\033[38;2;180;142;173m"; BURST_BRIGHT_MAG="\033[38;2;180;142;173m"
-}
-
-_theme_gruvbox() {
-    # Based on Gruvbox palette: https://github.com/morhetz/gruvbox
-    RESET="\033[0m"; DIM="\033[2m"
-    PURPLE="\033[38;2;211;134;155m";    SKY="\033[38;2;131;165;152m"      # purple, aqua
-    CTX_CYAN="\033[38;2;142;192;124m";  CTX_LIME="\033[38;2;184;187;38m"  # green, yellow-green
-    CTX_YELLOW="\033[38;2;250;189;47m"; CTX_ORANGE="\033[38;2;254;128;25m" # yellow, orange
-    CTX_CORAL="\033[38;2;254;128;25m";  CTX_RED="\033[38;2;251;73;52m"    # orange, red
-    CTX_HOT_PINK="\033[38;2;211;134;155m"; CTX_MAGENTA="\033[38;2;211;134;155m" # purple
-    CTX_VIOLET="\033[38;2;211;134;155m"; CTX_WHITE_HOT="\033[38;2;253;244;193m" # fg0
-    VEL_HOT="\033[38;2;251;73;52m";     VEL_WARM="\033[38;2;254;128;25m"  # red, orange
-    VEL_STABLE="\033[38;2;184;187;38m"; VEL_COOL="\033[38;2;131;165;152m" # yellow-green, aqua
-    VEL_COLD="\033[38;2;142;192;124m"                                      # green
-    BURST_CYAN="\033[38;2;142;192;124m";    BURST_TEAL="\033[38;2;131;165;152m"
-    BURST_GREEN="\033[38;2;184;187;38m";    BURST_YELLOW="\033[38;2;250;189;47m"
-    BURST_ORANGE="\033[38;2;254;128;25m";   BURST_RED="\033[38;2;251;73;52m"
-    BURST_MAGENTA="\033[38;2;211;134;155m"; BURST_BRIGHT_MAG="\033[38;2;211;134;155m"
-}
-
-_theme_no_color() {
-    RESET=""; DIM=""
-    PURPLE=""; SKY=""
-    CTX_CYAN=""; CTX_LIME=""; CTX_YELLOW=""; CTX_ORANGE=""
-    CTX_CORAL=""; CTX_RED=""; CTX_HOT_PINK=""; CTX_MAGENTA=""
-    CTX_VIOLET=""; CTX_WHITE_HOT=""
-    VEL_HOT=""; VEL_WARM=""; VEL_STABLE=""; VEL_COOL=""; VEL_COLD=""
-    BURST_CYAN=""; BURST_TEAL=""; BURST_GREEN=""; BURST_YELLOW=""
-    BURST_ORANGE=""; BURST_RED=""; BURST_MAGENTA=""; BURST_BRIGHT_MAG=""
+_load_selected_theme() {
+    case "${1:-vibey}" in
+        dark)     _apply_theme_values THEME_DARK_VALUES ;;
+        light)    _apply_theme_values THEME_LIGHT_VALUES ;;
+        nord)     _apply_theme_values THEME_NORD_VALUES ;;
+        gruvbox)  _apply_theme_values THEME_GRUVBOX_VALUES ;;
+        *)        _apply_theme_values THEME_VIBEY_VALUES ;;
+    esac
 }
 
 # NO_COLOR takes absolute precedence (https://no-color.org)
 if [ -n "${NO_COLOR:-}" ]; then
-    _theme_no_color
+    _apply_theme_values THEME_NO_COLOR_VALUES
 else
-    case "${CLAUDELINE_THEME:-vibey}" in
-        dark)     _theme_dark ;;
-        light)    _theme_light ;;
-        nord)     _theme_nord ;;
-        gruvbox)  _theme_gruvbox ;;
-        *)        _theme_vibey ;;
-    esac
+    _load_selected_theme "${CLAUDELINE_THEME:-vibey}"
 fi
 
 # Aliases (must be set after theme loads)

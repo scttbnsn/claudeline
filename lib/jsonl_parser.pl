@@ -23,6 +23,15 @@ sub slurp {
     return $content // '';
 }
 
+sub compile_manifest_regex {
+    my ($match_value, $path) = @_;
+
+    die "invalid regex rule in $path: unsupported pattern $match_value\n"
+        unless $match_value =~ /\A\^(?:[A-Za-z0-9.-]+|\\d\{(?:[1-9]|[1-9]\d)\})+\$\z/;
+
+    return qr/$match_value/;
+}
+
 sub load_pricing_manifest {
     my $doc = decode_json(slurp($PRICING_MANIFEST_PATH));
 
@@ -49,7 +58,9 @@ sub load_pricing_manifest {
             pricing_key => $pricing_key,
             match_kind => $match_kind,
             match_value => $match_value,
-            compiled_regex => $match_kind eq 'regex' ? qr/$match_value/ : undef,
+            compiled_regex => $match_kind eq 'regex'
+                ? compile_manifest_regex($match_value, $PRICING_MANIFEST_PATH)
+                : undef,
         };
     } @{$doc->{rules}};
 

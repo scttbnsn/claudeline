@@ -63,12 +63,10 @@ normalize_scalar_var() {
             is_decimal_value "$value" && return 0
             ;;
         rate)
-            case "$value" in
-                ""|_|null)
-                    printf -v "$var_name" '%s' "_"
-                    return 0
-                    ;;
-            esac
+            if is_sentinel_value "$value"; then
+                printf -v "$var_name" '%s' "_"
+                return 0
+            fi
             is_decimal_value "$value" && return 0
             ;;
         *)
@@ -86,12 +84,10 @@ round_decimal_to_int_or_default() {
     local label=${3:-value}
     local rounded
 
-    case "$value" in
-        ""|_|null)
-            printf -v REPLY '%s' "$default_value"
-            return 0
-            ;;
-    esac
+    if is_sentinel_value "$value"; then
+        printf -v REPLY '%s' "$default_value"
+        return 0
+    fi
 
     if ! printf -v rounded "%.0f" "$value" 2>>"$STATUSLINE_DEBUG_LOG"; then
         debug_log "Invalid $label value '${value:-<empty>}'; defaulting to $default_value"
@@ -271,6 +267,168 @@ fi
 NOW=${EPOCHSECONDS:-$(date +%s)}
 NOW_DIV_10=$((NOW / 10))
 
+read_git_status_info() {
+    local current_dir=$1
+    local git_root="" git_status_out="" first_line="" rest="" line="" branch="" git_status=""
+    local has_unstaged="" has_staged=""
+
+    BRANCH=""
+    DIR_NAME="${current_dir##*/}"
+
+    if ! git_root=$(git rev-parse --show-toplevel 2>>"$STATUSLINE_DEBUG_LOG"); then
+        return 0
+    fi
+
+    DIR_NAME="${git_root##*/}"
+
+    # git status -sb gives: ## branch...upstream [ahead N, behind M] + file status
+    if ! git_status_out=$(git status -sb 2>>"$STATUSLINE_DEBUG_LOG"); then
+        debug_log "Failed to read git status for $git_root; omitting branch info"
+        return 0
+    fi
+
+    # Parse first line for branch and ahead/behind (pure bash, no head/sed)
+    first_line="${git_status_out%%$'\n'*}"
+    # Remove "## " prefix and extract branch (before "..." or end)
+    branch="${first_line#\#\# }"
+    branch="${branch%%...*}"
+    branch="${branch%% \[*}"  # Remove [ahead/behind] if no upstream
+
+    [ -n "$branch" ] || return 0
+
+    # Parse status lines for staged/unstaged (pure bash, no grep)
+    # Status lines start after first line; check first two chars of each
+    rest="${git_status_out#*$'\n'}"
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        [ -z "$has_unstaged" ] && case "${line:1:1}" in [MADRC]) has_unstaged=1 ;; esac
+        [ -z "$has_staged" ] && case "${line:0:1}" in [MADRC]) has_staged=1 ;; esac
+        [ -n "$has_unstaged" ] && [ -n "$has_staged" ] && break
+    done <<< "$rest"
+    [ -n "$has_unstaged" ] && git_status+="*"
+    [ -n "$has_staged" ] && git_status+="+"
+
+    # Extract ahead/behind from first line
+    [[ "$first_line" =~ ahead\ ([0-9]+) ]] && git_status+="↑${BASH_REMATCH[1]}"
+    [[ "$first_line" =~ behind\ ([0-9]+) ]] && git_status+="↓${BASH_REMATCH[1]}"
+
+    # Stash check via refs/stash avoids walking the stash reflog.
+    if git rev-parse --verify refs/stash >/dev/null 2>>"$STATUSLINE_DEBUG_LOG"; then
+        git_status+="\$"
+    fi
+
+    BRANCH="${branch}${git_status}"
+}
+
+build_rotating_metric_info() {
+    local now_div_10=$1
+    local session_tokens=$2
+    local session_cost=$3
+    local all_time_tokens=$4
+    local all_time_cost=$5
+    local cycle_len=8 cycle_pos=0 is_alltime=0 is_absurd=0 category_index=0 item_cycle=0
+    local power_item_index=0 utility_item_index=0 fun_cost_item_id="" alltime_absurd_index=0
+    local metric_info="" use_tokens="" use_cost="" use_cost_fmt="" trophy=""
+    local alltime_normal_cycle=0 alltime_cost_id="" alltime_normal_fixed_index=0 alltime_normal_fixed_item=""
+
+    if ! [ "$session_tokens" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG" && ! [ "$all_time_tokens" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
+        printf -v REPLY '%s' ""
+        return 0
+    fi
+
+    # 8-cycle rotation pattern: 3 session → 1 all-time normal 🏆 → 3 session → 1 all-time absurd 🏆 → repeat
+    # Session metrics: water(1), power(7), utility(3), fun_cost(28 session-tier) = 39 total
+    cycle_pos=$((now_div_10 % cycle_len))
+    if [ "$cycle_pos" -eq 3 ]; then
+        is_alltime=1
+        is_absurd=0
+    elif [ "$cycle_pos" -eq 7 ]; then
+        is_alltime=1
+        is_absurd=1
+    fi
+
+    # Session metric: 4 equal categories, rotate items within each
+    # Categories: 0=water(1), 1=power(7), 2=utility(3), 3=fun_cost(24 session-tier)
+    category_index=$((now_div_10 % 4))
+    # Item within category rotates on slower cycle (every 40s = 4 categories * 10s)
+    item_cycle=$((now_div_10 / 4))
+    power_item_index=$((item_cycle % 7))      # 0=standard, 1-6=fun power (no coal/reactor)
+    utility_item_index=$((item_cycle % 3))    # 0=tokens, 1=money, 2=data
+    fun_cost_item_id=${SESSION_COST_ITEMS[$((item_cycle % ${#SESSION_COST_ITEMS[@]}))]}  # session-tier only (price <= $20)
+
+    # All-time item indices (rotate through items within their category)
+    # Normal: 10 cost + coal + reactor + tokens + cost + data = 15; Absurd: 7 items
+    alltime_absurd_index=$((now_div_10 % ${#ABSURD_EMOJI[@]}))
+
+    if [ "$is_alltime" -eq 1 ]; then
+        use_tokens=$all_time_tokens
+        use_cost=$all_time_cost
+        printf -v use_cost_fmt '%.2f' "$use_cost"
+        trophy=" 🏆"
+
+        if [ "$is_absurd" -eq 1 ]; then
+            metric_info="${DIM}$(format_absurd_cost "$use_cost" "$alltime_absurd_index")${trophy}${RESET}"
+        else
+            # Use now_div_10/cycle_len so cycle advances each time the outer cycle completes
+            # (avoids modular conflict with cycle_pos which also uses now_div_10)
+            alltime_normal_cycle=$(( (now_div_10 / cycle_len) % ALLTIME_NORMAL_ITEM_COUNT ))
+            if [ "$alltime_normal_cycle" -lt "$ALLTIME_NORMAL_CATALOG_ITEM_COUNT" ]; then
+                alltime_cost_id=${ALLTIME_COST_ITEMS[$alltime_normal_cycle]}
+                metric_info="${DIM}$(format_fun_cost "$use_cost" "$alltime_cost_id")${trophy}${RESET}"
+            else
+                alltime_normal_fixed_index=$((alltime_normal_cycle - ALLTIME_NORMAL_CATALOG_ITEM_COUNT))
+                alltime_normal_fixed_item=${ALLTIME_NORMAL_FIXED_ITEMS[$alltime_normal_fixed_index]}
+                case "$alltime_normal_fixed_item" in
+                    coal)
+                        metric_info="${DIM}$(format_fun_power "$use_tokens" "6")${trophy}${RESET}"
+                        ;;
+                    reactor)
+                        metric_info="${DIM}$(format_fun_power "$use_tokens" "7")${trophy}${RESET}"
+                        ;;
+                    tokens)
+                        metric_info="${DIM}🎟️ $(format_number "$use_tokens")${trophy}${RESET}"
+                        ;;
+                    cost)
+                        metric_info="${DIM}💰 \$$use_cost_fmt${trophy}${RESET}"
+                        ;;
+                    data)
+                        metric_info="${DIM}📡 $(format_data "$use_tokens")${trophy}${RESET}"
+                        ;;
+                esac
+            fi
+        fi
+    else
+        use_tokens=$session_tokens
+        use_cost=$session_cost
+        printf -v use_cost_fmt '%.2f' "$use_cost"
+
+        case "$category_index" in
+            0)
+                metric_info="${DIM}💧 $(format_water "$use_tokens")${RESET}"
+                ;;
+            1)
+                if [ "$power_item_index" -eq 0 ]; then
+                    metric_info="${DIM}⚡ $(format_power "$use_tokens")${RESET}"
+                else
+                    metric_info="${DIM}$(format_fun_power "$use_tokens" "$((power_item_index - 1))")${RESET}"
+                fi
+                ;;
+            2)
+                case "$utility_item_index" in
+                    0) metric_info="${DIM}🎟️ $(format_number "$use_tokens")${RESET}" ;;
+                    1) metric_info="${DIM}💰 \$$use_cost_fmt${RESET}" ;;
+                    2) metric_info="${DIM}📡 $(format_data "$use_tokens")${RESET}" ;;
+                esac
+                ;;
+            3)
+                metric_info="${DIM}$(format_fun_cost "$use_cost" "$fun_cost_item_id")${RESET}"
+                ;;
+        esac
+    fi
+
+    printf -v REPLY '%s' "$metric_info"
+}
+
 # Get all-time totals from JSONL files (cached)
 # Consolidate: 2 echo + 2 tail + 2 awk + 1 bc → 1 read (pure bash)
 JSONL_DATA=$(get_jsonl_totals "$NOW")
@@ -281,34 +439,6 @@ ALL_TIME_COST_CENTS=${ALL_TIME_COST_CENTS:-0}
 ALL_TIME_COST="$((ALL_TIME_COST_CENTS / 100)).$((ALL_TIME_COST_CENTS % 100))"
 # Pad single-digit cents: "2.7" → "2.07"
 [[ "$ALL_TIME_COST" =~ \.([0-9])$ ]] && ALL_TIME_COST="${ALL_TIME_COST%.*}.0${BASH_REMATCH[1]}"
-
-# 8-cycle rotation pattern: 3 session → 1 all-time normal 🏆 → 3 session → 1 all-time absurd 🏆 → repeat
-# Session metrics: water(1), power(7), utility(3), fun_cost(28 session-tier) = 39 total
-CYCLE_LEN=8
-CYCLE_POS=$((NOW_DIV_10 % CYCLE_LEN))
-if [ "$CYCLE_POS" -eq 3 ]; then
-    IS_ALLTIME=1
-    IS_ABSURD=0
-elif [ "$CYCLE_POS" -eq 7 ]; then
-    IS_ALLTIME=1
-    IS_ABSURD=1
-else
-    IS_ALLTIME=0
-    IS_ABSURD=0
-fi
-
-# Session metric: 4 equal categories, rotate items within each
-# Categories: 0=water(1), 1=power(7), 2=utility(3), 3=fun_cost(24 session-tier)
-CATEGORY_INDEX=$((NOW_DIV_10 % 4))
-# Item within category rotates on slower cycle (every 40s = 4 categories * 10s)
-ITEM_CYCLE=$((NOW_DIV_10 / 4))
-POWER_ITEM_INDEX=$((ITEM_CYCLE % 7))      # 0=standard, 1-6=fun power (no coal/reactor)
-UTILITY_ITEM_INDEX=$((ITEM_CYCLE % 3))    # 0=tokens, 1=money, 2=data
-FUN_COST_ITEM_ID=${SESSION_COST_ITEMS[$((ITEM_CYCLE % ${#SESSION_COST_ITEMS[@]}))]}  # session-tier only (price <= $20)
-
-# All-time item indices (rotate through items within their category)
-# Normal: 10 cost + coal + reactor + tokens + cost + data = 15; Absurd: 7 items
-ALLTIME_ABSURD_INDEX=$((NOW_DIV_10 % ${#ABSURD_EMOJI[@]}))
 
 # Calculate context percentage (scaled to context limit)
 # Detect 1M context from JSON field OR model display name (e.g. "Opus 4.6 1M context")
@@ -353,134 +483,15 @@ for ((i=0; i<EMPTY; i++)); do BAR+="$EMPTY_CHAR"; done
 
 PROGRESS_BAR="${CTX_COLOR}${BAR}${RESET}"
 
-# Get git info with minimal calls (9 calls → 4)
-# * = unstaged, + = staged, ↑n = ahead, ↓n = behind, $ = stash
 BRANCH=""
 DIR_NAME=""
-GIT_ROOT=""
-if seg_on "$_SEG_GIT" && GIT_ROOT=$(git rev-parse --show-toplevel 2>>"$STATUSLINE_DEBUG_LOG"); then
-    DIR_NAME="${GIT_ROOT##*/}"  # basename using bash
-
-    # git status -sb gives: ## branch...upstream [ahead N, behind M] + file status
-    if GIT_STATUS_OUT=$(git status -sb 2>>"$STATUSLINE_DEBUG_LOG"); then
-        # Parse first line for branch and ahead/behind (pure bash, no head/sed)
-        FIRST_LINE="${GIT_STATUS_OUT%%$'\n'*}"
-        # Remove "## " prefix and extract branch (before "..." or end)
-        BRANCH="${FIRST_LINE#\#\# }"
-        BRANCH="${BRANCH%%...*}"
-        BRANCH="${BRANCH%% \[*}"  # Remove [ahead/behind] if no upstream
-
-        if [ -n "$BRANCH" ]; then
-            GIT_STATUS=""
-
-            # Parse status lines for staged/unstaged (pure bash, no grep)
-            # Status lines start after first line; check first two chars of each
-            REST="${GIT_STATUS_OUT#*$'\n'}"
-            has_unstaged="" has_staged=""
-            while IFS= read -r line; do
-                [ -z "$line" ] && continue
-                [ -z "$has_unstaged" ] && case "${line:1:1}" in [MADRC]) has_unstaged=1;; esac
-                [ -z "$has_staged" ] && case "${line:0:1}" in [MADRC]) has_staged=1;; esac
-                [ -n "$has_unstaged" ] && [ -n "$has_staged" ] && break
-            done <<< "$REST"
-            [ -n "$has_unstaged" ] && GIT_STATUS+="*"
-            [ -n "$has_staged" ] && GIT_STATUS+="+"
-
-            # Extract ahead/behind from first line
-            [[ "$FIRST_LINE" =~ ahead\ ([0-9]+) ]] && GIT_STATUS+="↑${BASH_REMATCH[1]}"
-            [[ "$FIRST_LINE" =~ behind\ ([0-9]+) ]] && GIT_STATUS+="↓${BASH_REMATCH[1]}"
-
-            # Stash check via refs/stash avoids walking the stash reflog.
-            if git rev-parse --verify refs/stash >/dev/null 2>>"$STATUSLINE_DEBUG_LOG"; then
-                GIT_STATUS+="\$"
-            fi
-
-            BRANCH="${BRANCH}${GIT_STATUS}"
-        fi
-    else
-        debug_log "Failed to read git status for $GIT_ROOT; omitting branch info"
-        BRANCH=""
-    fi
+if seg_on "$_SEG_GIT"; then
+    read_git_status_info "$CURRENT_DIR"
 fi
 
-# Fallback to current dir basename if not in git repo
-[ -z "$DIR_NAME" ] && DIR_NAME="${CURRENT_DIR##*/}"
-
-# Build rotating metric display
-# 8-cycle pattern: 3 session → 1 all-time normal 🏆 → 3 session → 1 all-time absurd 🏆 → repeat
-# Session: water(1), power(7), utility(3), fun_cost(24 session-tier ≤$20)
 METRIC_INFO=""
-if [ "$SESSION_TOKENS" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG" || [ "$ALL_TIME_TOKENS" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
-    if [ "$IS_ALLTIME" -eq 1 ]; then
-        # All-time display with trophy
-        USE_TOKENS="$ALL_TIME_TOKENS"
-        USE_COST="$ALL_TIME_COST"
-        printf -v USE_COST_FMT '%.2f' "$USE_COST"
-        TROPHY=" 🏆"
-        if [ "$IS_ABSURD" -eq 1 ]; then
-            # All-time absurd: rotate through absurd items
-            METRIC_INFO="${DIM}$(format_absurd_cost "$USE_COST" "$ALLTIME_ABSURD_INDEX")${TROPHY}${RESET}"
-        else
-            # All-time normal: cost-item catalog + coal + reactor + tokens + cost + data
-            # Use NOW_DIV_10/CYCLE_LEN so cycle advances each time the outer cycle completes
-            # (avoids modular conflict with CYCLE_POS which also uses NOW_DIV_10)
-            ALLTIME_NORMAL_CYCLE=$(( (NOW_DIV_10 / CYCLE_LEN) % ALLTIME_NORMAL_ITEM_COUNT ))
-            if [ "$ALLTIME_NORMAL_CYCLE" -lt "$ALLTIME_NORMAL_CATALOG_ITEM_COUNT" ]; then
-                ALLTIME_COST_ID=${ALLTIME_COST_ITEMS[$ALLTIME_NORMAL_CYCLE]}
-                METRIC_INFO="${DIM}$(format_fun_cost "$USE_COST" "$ALLTIME_COST_ID")${TROPHY}${RESET}"
-            else
-                ALLTIME_NORMAL_FIXED_INDEX=$((ALLTIME_NORMAL_CYCLE - ALLTIME_NORMAL_CATALOG_ITEM_COUNT))
-                ALLTIME_NORMAL_FIXED_ITEM=${ALLTIME_NORMAL_FIXED_ITEMS[$ALLTIME_NORMAL_FIXED_INDEX]}
-                case "$ALLTIME_NORMAL_FIXED_ITEM" in
-                    coal)
-                        METRIC_INFO="${DIM}$(format_fun_power "$USE_TOKENS" "6")${TROPHY}${RESET}"
-                        ;;
-                    reactor)
-                        METRIC_INFO="${DIM}$(format_fun_power "$USE_TOKENS" "7")${TROPHY}${RESET}"
-                        ;;
-                    tokens)
-                        METRIC_INFO="${DIM}🎟️ $(format_number "$USE_TOKENS")${TROPHY}${RESET}"
-                        ;;
-                    cost)
-                        METRIC_INFO="${DIM}💰 \$$USE_COST_FMT${TROPHY}${RESET}"
-                        ;;
-                    data)
-                        METRIC_INFO="${DIM}📡 $(format_data "$USE_TOKENS")${TROPHY}${RESET}"
-                        ;;
-                esac
-            fi
-        fi
-    else
-        # Session display: 4 equal categories (25% each)
-        USE_TOKENS="$SESSION_TOKENS"
-        USE_COST="$TOTAL_COST"
-        printf -v USE_COST_FMT '%.2f' "$USE_COST"
-        TROPHY=""
-
-        case $CATEGORY_INDEX in
-            0)  # Water category (25%): standard water only
-                METRIC_INFO="${DIM}💧 $(format_water "$USE_TOKENS")${RESET}"
-                ;;
-            1)  # Power category (25%)
-                if [ "$POWER_ITEM_INDEX" -eq 0 ]; then
-                    METRIC_INFO="${DIM}⚡ $(format_power "$USE_TOKENS")${RESET}"
-                else
-                    METRIC_INFO="${DIM}$(format_fun_power "$USE_TOKENS" "$((POWER_ITEM_INDEX - 1))")${RESET}"
-                fi
-                ;;
-            2)  # Utility category (25%)
-                case $UTILITY_ITEM_INDEX in
-                    0) METRIC_INFO="${DIM}🎟️ $(format_number "$USE_TOKENS")${RESET}" ;;
-                    1) METRIC_INFO="${DIM}💰 \$$USE_COST_FMT${RESET}" ;;
-                    2) METRIC_INFO="${DIM}📡 $(format_data "$USE_TOKENS")${RESET}" ;;
-                esac
-                ;;
-            3)  # Fun cost category (25%)
-                METRIC_INFO="${DIM}$(format_fun_cost "$USE_COST" "$FUN_COST_ITEM_ID")${RESET}"
-                ;;
-        esac
-    fi
-fi
+build_rotating_metric_info "$NOW_DIV_10" "$SESSION_TOKENS" "$TOTAL_COST" "$ALL_TIME_TOKENS" "$ALL_TIME_COST"
+METRIC_INFO=$REPLY
 
 # Separator
 SEP="${DIM}  ·  ${RESET}"
@@ -546,7 +557,7 @@ if seg_on "$_SEG_BURST"; then
 fi
 
 CREDIT_INDICATOR=""
-if seg_on "$_SEG_CREDIT" && [ -n "$EXTRA_UTIL" ] && [ "$EXTRA_UTIL" != "_" ] && [ "$EXTRA_UTIL" != "null" ]; then
+if seg_on "$_SEG_CREDIT" && ! is_sentinel_value "$EXTRA_UTIL"; then
     round_decimal_to_int_or_default "$EXTRA_UTIL" 0 "extra usage"
     EXTRA_PCT=$REPLY
     if [ "$EXTRA_PCT" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
@@ -557,7 +568,7 @@ if seg_on "$_SEG_CREDIT" && [ -n "$EXTRA_UTIL" ] && [ "$EXTRA_UTIL" != "_" ] && 
 fi
 
 # Terminal width for responsive layout (drop low-priority segments to prevent wrapping)
-TERM_WIDTH="${COLUMNS:-$(tput cols 2>/dev/null || echo 120)}"
+TERM_WIDTH="${COLUMNS:-120}"
 
 # Measure visible width of a string by stripping ANSI escapes and counting characters.
 # Uses bash parameter expansion and REPLY to avoid subprocesses in the hot path.

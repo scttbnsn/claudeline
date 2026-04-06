@@ -1,6 +1,13 @@
 # shellcheck shell=bash
 # Colors are defined by the active theme in lib/statusline_themes.sh
 
+if ! declare -F is_sentinel_value >/dev/null 2>&1; then
+    is_sentinel_value() {
+        local value=${1-}
+        [ -z "$value" ] || [ "$value" = "_" ] || [ "$value" = "null" ]
+    }
+fi
+
 # Environmental impact rates (per million tokens)
 # Sources: arxiv:2304.03271 (water), arxiv:2505.09598 (energy), updated 2026
 # Water: 1gal=760k tokens (see format_water for full conversion table)
@@ -44,6 +51,22 @@ CONTEXT_TIERS_FULL_WINDOW=(
     "95|CTX_HOT_PINK|🫠"
     "101|CTX_MAGENTA|💀"
 )
+
+# Burst bands split the 0-99% range into 8 visual tiers with integer cutoffs
+# rounded to the nearest eighth: 12.5, 25, 37.5, 50, 62.5, 75, 87.5, 100.
+BURST_BAND_MAXES=(13 25 38 50 63 75 88 100)
+BURST_BAND_BARS=("▁" "▂" "▃" "▄" "▅" "▆" "▇" "█")
+BURST_BAND_COLOR_NAMES=(
+    "BURST_CYAN"
+    "BURST_TEAL"
+    "BURST_GREEN"
+    "BURST_YELLOW"
+    "BURST_ORANGE"
+    "BURST_RED"
+    "BURST_MAGENTA"
+    "BURST_BRIGHT_MAG"
+)
+BURST_COUNTDOWN_MIN_PCT=${BURST_BAND_MAXES[5]}
 
 set_context_tier() {
     local percent_used=$1
@@ -785,8 +808,10 @@ format_burst_indicator() {
     local burst_bar=""
     local burst_color=""
     local mins=0
+    local burst_color_name=""
+    local i=0
 
-    if [ -z "$burst_usage" ] || [ "$burst_usage" = "_" ] || [ "$burst_usage" = "null" ]; then
+    if is_sentinel_value "$burst_usage"; then
         REPLY=""
         return
     fi
@@ -800,7 +825,7 @@ format_burst_indicator() {
         return
     fi
 
-    if [ -n "$burst_resets" ] && [ "$burst_resets" != "_" ] && [ "$burst_resets" != "null" ] && [ "$burst_resets" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
+    if ! is_sentinel_value "$burst_resets" && [ "$burst_resets" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
         burst_reset_epoch="$burst_resets"
         secs_left=$((burst_reset_epoch - now))
     fi
@@ -815,25 +840,16 @@ format_burst_indicator() {
         return
     fi
 
-    if [ "$burst_pct" -lt 13 ]; then
-        burst_bar="▁"; burst_color="$BURST_CYAN"
-    elif [ "$burst_pct" -lt 25 ]; then
-        burst_bar="▂"; burst_color="$BURST_TEAL"
-    elif [ "$burst_pct" -lt 38 ]; then
-        burst_bar="▃"; burst_color="$BURST_GREEN"
-    elif [ "$burst_pct" -lt 50 ]; then
-        burst_bar="▄"; burst_color="$BURST_YELLOW"
-    elif [ "$burst_pct" -lt 63 ]; then
-        burst_bar="▅"; burst_color="$BURST_ORANGE"
-    elif [ "$burst_pct" -lt 75 ]; then
-        burst_bar="▆"; burst_color="$BURST_RED"
-    elif [ "$burst_pct" -lt 88 ]; then
-        burst_bar="▇"; burst_color="$BURST_MAGENTA"
-    else
-        burst_bar="█"; burst_color="$BURST_BRIGHT_MAG"
-    fi
+    for ((i=0; i<${#BURST_BAND_MAXES[@]}; i++)); do
+        if [ "$burst_pct" -lt "${BURST_BAND_MAXES[$i]}" ]; then
+            burst_bar=${BURST_BAND_BARS[$i]}
+            burst_color_name=${BURST_BAND_COLOR_NAMES[$i]}
+            burst_color=${!burst_color_name}
+            break
+        fi
+    done
 
-    if [ "$burst_pct" -ge 75 ] && [ -n "$burst_reset_epoch" ] && [ "$secs_left" -gt 0 ]; then
+    if [ "$burst_pct" -ge "$BURST_COUNTDOWN_MIN_PCT" ] && [ -n "$burst_reset_epoch" ] && [ "$secs_left" -gt 0 ]; then
         mins=$(( (secs_left + 59) / 60 ))
         REPLY="💥${burst_color}${burst_bar}${RESET} ${DIM}-${mins}m${RESET}"
     else

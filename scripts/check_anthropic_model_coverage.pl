@@ -19,6 +19,15 @@ sub slurp {
     return $content // '';
 }
 
+sub compile_manifest_regex {
+    my ($match_value, $path) = @_;
+
+    die "invalid regex rule in $path: unsupported pattern $match_value\n"
+        unless $match_value =~ /\A\^(?:[A-Za-z0-9.-]+|\\d\{(?:[1-9]|[1-9]\d)\})+\$\z/;
+
+    return qr/$match_value/;
+}
+
 sub load_manifest {
     my ($path) = @_;
     my $doc = decode_json(slurp($path));
@@ -34,6 +43,9 @@ sub load_manifest {
         {
             match_kind => $match_kind,
             match_value => $match_value,
+            compiled_regex => $match_kind eq 'regex'
+                ? compile_manifest_regex($match_value, $path)
+                : undef,
         };
     } @{$doc->{rules}};
 
@@ -46,7 +58,7 @@ sub model_is_covered {
         if ($rule->{match_kind} eq 'exact' && $model_id eq $rule->{match_value}) {
             return 1;
         }
-        if ($rule->{match_kind} eq 'regex' && $model_id =~ /$rule->{match_value}/) {
+        if ($rule->{match_kind} eq 'regex' && $model_id =~ $rule->{compiled_regex}) {
             return 1;
         }
     }

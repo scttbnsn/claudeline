@@ -9,6 +9,13 @@ STATUSLINE_JSONL_PARSER=${STATUSLINE_JSONL_PARSER:-$STATUSLINE_USAGE_DIR/jsonl_p
 STATUSLINE_STAT_MTIME_FLAG=${STATUSLINE_STAT_MTIME_FLAG:-}
 STATUSLINE_STAT_MTIME_FORMAT=${STATUSLINE_STAT_MTIME_FORMAT:-}
 
+if ! declare -F is_sentinel_value >/dev/null 2>&1; then
+    is_sentinel_value() {
+        local value=${1-}
+        [ -z "$value" ] || [ "$value" = "_" ] || [ "$value" = "null" ]
+    }
+fi
+
 is_decimal_value() {
     local value=$1
     [[ "$value" =~ ^-?([0-9]+([.][0-9]+)?|[.][0-9]+)$ ]]
@@ -405,6 +412,13 @@ acquire_extra_usage_lock() {
     return 1
 }
 
+signal_extra_usage_refresh_done() {
+    local signal_path=${STATUSLINE_EXTRA_USAGE_ASYNC_DONE_SIGNAL:-}
+
+    [ -n "$signal_path" ] || return 0
+    printf 'done\n' > "$signal_path" 2>>"$STATUSLINE_DEBUG_LOG" || true
+}
+
 start_extra_usage_refresh() {
     local now=${1:-${NOW:-$(date +%s)}}
 
@@ -415,7 +429,7 @@ start_extra_usage_refresh() {
 
     acquire_extra_usage_lock "$now" || return 0
     (
-        trap 'rmdir "$EXTRA_USAGE_LOCK" 2>>"$STATUSLINE_DEBUG_LOG" || true' EXIT
+        trap 'rmdir "$EXTRA_USAGE_LOCK" 2>>"$STATUSLINE_DEBUG_LOG" || true; signal_extra_usage_refresh_done' EXIT
         refresh_extra_usage_cache_now "$now" >/dev/null
     ) </dev/null >>"$STATUSLINE_DEBUG_LOG" 2>&1 &
 }
@@ -578,7 +592,7 @@ normalize_pace_usage_pct() {
     local out_var=$2
     local normalized_pct=""
 
-    if [ -z "$usage" ] || [ "$usage" = "_" ] || [ "$usage" = "null" ]; then
+    if is_sentinel_value "$usage"; then
         printf -v "$out_var" '%s' ""
         return
     fi
@@ -623,7 +637,7 @@ calculate_pace_signals() {
     local calc_pressure_x10k=10000
     local calc_reset_suffix=""
 
-    if [ -n "$resets_at" ] && [ "$resets_at" != "_" ] && [ "$resets_at" != "null" ]; then
+    if ! is_sentinel_value "$resets_at"; then
         local reset_epoch="$resets_at"
 
         if [ -n "$reset_epoch" ] && [ "$reset_epoch" -gt "$now" ]; then
