@@ -42,8 +42,9 @@ jobs:
         run: perl -c lib/jsonl_parser.pl
 
       - name: Run tests
+        timeout-minutes: 5
         run: |
           for f in tests/*.sh; do
             echo "--- Running $f ---"
-            bash "$f" || exit 1
+            timeout 30 bash "$f" || { echo "FAIL or TIMEOUT: $f"; exit 1; }
           done
