@@ -308,8 +308,17 @@ refresh_extra_usage_cache_now() {
 
     oauth_token=$(read_claude_oauth_token)
     [ -n "$oauth_token" ] || return 1
+    # Validate token format: must be printable ASCII/UTF-8, 20-4096 chars, no shell metacharacters
     if [[ "$oauth_token" =~ [[:cntrl:]] ]]; then
         debug_log "Ignoring OAuth token with control characters"
+        return 1
+    fi
+    if [ "${#oauth_token}" -lt 20 ] || [ "${#oauth_token}" -gt 4096 ]; then
+        debug_log "Ignoring OAuth token with unexpected length (${#oauth_token})"
+        return 1
+    fi
+    if [[ "$oauth_token" =~ [\;\|\&\$\`\(\)\{\}] ]]; then
+        debug_log "Ignoring OAuth token with shell metacharacters"
         return 1
     fi
 

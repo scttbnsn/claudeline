@@ -52,6 +52,8 @@
 curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/install.sh | bash
 ```
 
+> **Tip:** Review the [install script](install.sh) before running. The installer verifies SHA-256 checksums of all downloaded files before installing them.
+
 Then restart Claude Code. That's it.
 
 <details>

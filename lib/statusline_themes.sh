@@ -62,11 +62,15 @@ THEME_NO_COLOR_VALUES=(
     '' '' '' '' '' '' '' ''
 )
 
+# Apply a theme's color values to the global color variables.
+# Uses eval for Bash 3.2 compatibility (no namerefs). Safe because
+# values_name is always one of the hardcoded THEME_*_VALUES arrays
+# defined above — never user input.
 _apply_theme_values() {
     local values_name=$1
     local index var_name value value_count=0
 
-    eval "value_count=\${#${values_name}[@]}"
+    eval "value_count=\${#${values_name}[@]}"  # shellcheck disable=SC2086
     [ "$value_count" -eq "${#THEME_COLOR_VARS[@]}" ] || return 1
 
     for index in "${!THEME_COLOR_VARS[@]}"; do
