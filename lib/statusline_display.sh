@@ -117,7 +117,7 @@ set_context_tier() {
 format_number() {
     local num=$1
     # Handle empty or non-numeric input
-    [[ -z "$num" || ! "$num" =~ ^[0-9]+$ ]] && { echo "0"; return; }
+    [[ -z "$num" || ! "$num" =~ ^[0-9]+$ ]] && { printf '%s\n' "0"; return; }
     if [ "$num" -ge 999950000000 ]; then
         mul_div_round "$num" 10 1000000000000
         format_tenths "$REPLY"
@@ -147,7 +147,7 @@ format_number() {
 format_count() {
     local raw_count=$1
     if ! decimal_to_scaled "$raw_count" 6; then
-        echo "0"
+        printf '%s\n' "0"
         return
     fi
     format_count_scaled6 "$REPLY"
@@ -273,7 +273,7 @@ format_count_scaled6() {
 # Format water with dynamic units (drops → tsp → tbsp → oz → cups → pints → quarts → gal)
 format_water() {
     local tokens=$1
-    [ "$tokens" -eq 0 ] && echo "0 drops" && return
+    [ "$tokens" -eq 0 ] && { printf '%s\n' "0 drops"; return; }
     local tenths unit
     if [ "$tokens" -lt 1000 ]; then
         tenths=$((tokens * 10 / 17)); unit="drops"
@@ -299,12 +299,12 @@ format_water() {
 # Format power with dynamic units (Wh → kWh → MWh)
 format_power() {
     local tokens=$1
-    [ "$tokens" -eq 0 ] && echo "0 watt-hours" && return
+    [ "$tokens" -eq 0 ] && { printf '%s\n' "0 watt-hours"; return; }
     local micro_wh=$((tokens * MICRO_WH_PER_TOKEN))
     local wh=$((micro_wh / 1000000))
     local tenths unit
     if [ "$wh" -lt 1000 ]; then
-        echo "${wh} watt-hours"
+        printf '%s\n' "${wh} watt-hours"
         return
     elif [ "$wh" -lt 1000000 ]; then
         tenths=$((wh / 100)); unit="kilowatt-hours"
@@ -318,11 +318,11 @@ format_power() {
 # Format data transfer with dynamic units (B → KB → MB → GB)
 format_data() {
     local tokens=$1
-    [ "$tokens" -eq 0 ] && echo "0B" && return
+    [ "$tokens" -eq 0 ] && { printf '%s\n' "0B"; return; }
     local bytes=$((tokens * BYTES_PER_TOKEN))
     local val unit
     if [ "$bytes" -lt 1024 ]; then
-        echo "${bytes}B"
+        printf '%s\n' "${bytes}B"
         return
     elif [ "$bytes" -lt 1048576 ]; then
         mul_div_floor "$bytes" 10 1024
@@ -337,80 +337,102 @@ format_data() {
         format_tenths "$REPLY"
         val=$REPLY; unit="GB"
     fi
-    echo "${val}${unit}"
+    printf '%s\n' "${val}${unit}"
 }
 
-# Fun power conversions (time to power devices, distance for 4xe/jet, mass for coal)
-FUN_POWER_EMOJI=("🔌" "💡" "🏠" "🏢" "🚗" "✈️" "🪨" "☢️")
-FUN_POWER_NAME=("phone-charging" "hue-light®" "home-power" "395-hudson®" "4xe®" "a320neo®" "coal" "reactor-output")
-FUN_POWER_WATTS=(5 10 1000 2000000 -1 -2 0 1000000000)
+# Fun power conversions (time for devices, distance for vehicles, mass for coal).
+FUN_POWER_DATA=(
+    "time|🔌|phone-charging|5"
+    "time|💡|hue-light®|10"
+    "time|🏠|home-power|1000"
+    "time|🏢|395-hudson®|2000000"
+    "distance|🚗|4xe®|145|100"
+    "distance|✈️|a320neo®|1942|100000"
+    "mass|🪨|coal|2000"
+    "time|☢️|reactor-output|1000000000"
+)
 
-format_fun_power() {
-    local tokens=$1
-    local item_idx=${2:-$(( (NOW / 10) % ${#FUN_POWER_EMOJI[@]} ))}
-    [ "$tokens" -eq 0 ] && echo "⚡ 0h phone-charging" && return
+_parse_fun_power_entry() {
+    local entry=$1
+    local kind_var=$2
+    local emoji_var=$3
+    local name_var=$4
+    local arg1_var=$5
+    local arg2_var=${6:-}
+    local parsed_kind="" parsed_emoji="" parsed_name="" parsed_arg1="" parsed_arg2=""
 
-    local micro_wh=$((tokens * MICRO_WH_PER_TOKEN))
-    local kwh_scaled6=$((micro_wh / 1000))
+    IFS='|' read -r parsed_kind parsed_emoji parsed_name parsed_arg1 parsed_arg2 <<< "$entry"
+    printf -v "$kind_var" '%s' "$parsed_kind"
+    printf -v "$emoji_var" '%s' "$parsed_emoji"
+    printf -v "$name_var" '%s' "$parsed_name"
+    printf -v "$arg1_var" '%s' "$parsed_arg1"
+    [ -n "$arg2_var" ] && printf -v "$arg2_var" '%s' "$parsed_arg2"
+}
 
-    local emoji="${FUN_POWER_EMOJI[$item_idx]}"
-    local name="${FUN_POWER_NAME[$item_idx]}"
-    local watts="${FUN_POWER_WATTS[$item_idx]}"
+format_fun_power_distance() {
+    local kwh_scaled6=$1
+    local emoji=$2
+    local name=$3
+    local miles_num=$4
+    local miles_den=$5
+    local miles_scaled6 feet_tenths dist_val dist_unit
 
-    if [ "$watts" -eq -1 ] || [ "$watts" -eq -2 ]; then
-        local miles_scaled6 feet_tenths dist_val dist_unit
-        if [ "$watts" -eq -1 ]; then
-            mul_div_floor "$kwh_scaled6" 145 100
+    mul_div_floor "$kwh_scaled6" "$miles_num" "$miles_den"
+    miles_scaled6=$REPLY
+
+    if [ "$miles_scaled6" -ge 1000000 ]; then
+        scaled6_to_decimal "$miles_scaled6"
+        printf -v dist_val '%.1f' "$REPLY"
+        dist_val="${dist_val%.0}"
+        dist_unit="mi"
+    else
+        mul_div_floor "$miles_scaled6" 33 625
+        feet_tenths=$REPLY
+        if [ "$feet_tenths" -ge 10 ]; then
+            mul_div_round "$miles_scaled6" 33 625
+            format_tenths "$REPLY"
+            dist_val=$REPLY
+            dist_unit="ft"
         else
-            mul_div_floor "$kwh_scaled6" 1942 100000
+            mul_div_round "$miles_scaled6" 25146 15625
+            format_tenths "$REPLY"
+            dist_val=$REPLY
+            dist_unit="cm"
         fi
-        miles_scaled6=$REPLY
-
-        if [ "$miles_scaled6" -ge 1000000 ]; then
-            scaled6_to_decimal "$miles_scaled6"
-            printf -v dist_val '%.1f' "$REPLY"
-            dist_val="${dist_val%.0}"
-            dist_unit="mi"
-        else
-            mul_div_floor "$miles_scaled6" 33 625
-            feet_tenths=$REPLY
-            if [ "$feet_tenths" -ge 10 ]; then
-                mul_div_round "$miles_scaled6" 33 625
-                format_tenths "$REPLY"
-                dist_val=$REPLY
-                dist_unit="ft"
-            else
-                mul_div_round "$miles_scaled6" 25146 15625
-                format_tenths "$REPLY"
-                dist_val=$REPLY
-                dist_unit="cm"
-            fi
-        fi
-
-        echo "$emoji ${dist_val}${dist_unit} $name"
-        return
     fi
 
-    if [ "$watts" -eq 0 ]; then
-        if [ "$kwh_scaled6" -ge 2000000000 ]; then
-            local tons_scaled6=$((kwh_scaled6 / 2000))
-            local count
-            format_count_scaled6 "$tons_scaled6"
-            count=$REPLY
-            echo "$emoji $count tons $name"
-        else
-            local lbs
-            format_count_scaled6 "$kwh_scaled6"
-            lbs=$REPLY
-            echo "$emoji $lbs lbs $name"
-        fi
-        return
-    fi
+    printf '%s\n' "$emoji ${dist_val}${dist_unit} $name"
+}
 
-    local hours_scaled10
+format_fun_power_mass() {
+    local kwh_scaled6=$1
+    local emoji=$2
+    local name=$3
+    local pounds_per_ton=${4:-2000}
+
+    if [ "$kwh_scaled6" -ge $((pounds_per_ton * 1000000)) ]; then
+        local tons_scaled6=$((kwh_scaled6 / pounds_per_ton))
+        local count
+        format_count_scaled6 "$tons_scaled6"
+        count=$REPLY
+        printf '%s\n' "$emoji $count tons $name"
+    else
+        local lbs
+        format_count_scaled6 "$kwh_scaled6"
+        lbs=$REPLY
+        printf '%s\n' "$emoji $lbs lbs $name"
+    fi
+}
+
+format_fun_power_time() {
+    local micro_wh=$1
+    local emoji=$2
+    local name=$3
+    local watts=$4
+    local hours_scaled10 time_val time_unit
+
     mul_div_floor "$micro_wh" 10000 "$watts"
     hours_scaled10=$REPLY
-    local time_val time_unit
     if [ "$hours_scaled10" -ge 10000000000 ]; then
         scaled10_to_decimal "$hours_scaled10"
         printf -v time_val '%.1f' "$REPLY"
@@ -433,7 +455,36 @@ format_fun_power() {
         time_unit="µs"
     fi
 
-    echo "$emoji ${time_val%.0}$time_unit $name"
+    printf '%s\n' "$emoji ${time_val%.0}$time_unit $name"
+}
+
+format_fun_power() {
+    local tokens=$1
+    local item_idx=${2:-$(( (NOW / 10) % ${#FUN_POWER_DATA[@]} ))}
+    [ "$tokens" -eq 0 ] && { printf '%s\n' "⚡ 0h phone-charging"; return; }
+
+    local micro_wh=$((tokens * MICRO_WH_PER_TOKEN))
+    local kwh_scaled6=$((micro_wh / 1000))
+    local entry="${FUN_POWER_DATA[$item_idx]}"
+    local kind="" emoji="" name="" arg1="" arg2=""
+    [ -n "$entry" ] || entry="${FUN_POWER_DATA[0]}"
+    _parse_fun_power_entry "$entry" kind emoji name arg1 arg2
+
+    case "$kind" in
+        distance)
+            format_fun_power_distance "$kwh_scaled6" "$emoji" "$name" "$arg1" "$arg2"
+            ;;
+        mass)
+            format_fun_power_mass "$kwh_scaled6" "$emoji" "$name" "$arg1"
+            ;;
+        time)
+            format_fun_power_time "$micro_wh" "$emoji" "$name" "$arg1"
+            ;;
+        *)
+            debug_log "Unknown fun power kind '$kind'; defaulting to phone charging"
+            format_fun_power_time "$micro_wh" "🔌" "phone-charging" 5
+            ;;
+    esac
 }
 
 # Fun money conversions - NORMAL items (session + all-time normal)
@@ -491,13 +542,13 @@ format_two_tier() {
         count_scaled6=$REPLY
         format_count_scaled6 "$count_scaled6"
         count=$REPLY
-        echo "$emoji $count $name"
+        printf '%s\n' "$emoji $count $name"
     else
         ratio_to_scaled6 "$cost_milli" "$sub_price_milli"
         count_scaled6=$REPLY
         format_count_scaled6 "$count_scaled6"
         count=$REPLY
-        echo "$emoji $count $sub_name @ ${name%s®}®"
+        printf '%s\n' "$emoji $count $sub_name @ ${name%s®}®"
     fi
 }
 
@@ -515,19 +566,19 @@ format_three_tier() {
         count_scaled6=$REPLY
         format_count_scaled6 "$count_scaled6"
         count=$REPLY
-        echo "$emoji $count $super_name @ ${name%s®}®"
+        printf '%s\n' "$emoji $count $super_name @ ${name%s®}®"
     elif [ "$cost_milli" -ge "$price_milli" ]; then
         ratio_to_scaled6 "$cost_milli" "$price_milli"
         count_scaled6=$REPLY
         format_count_scaled6 "$count_scaled6"
         count=$REPLY
-        echo "$emoji $count $name"
+        printf '%s\n' "$emoji $count $name"
     else
         ratio_to_scaled6 "$cost_milli" "$sub_price_milli"
         count_scaled6=$REPLY
         format_count_scaled6 "$count_scaled6"
         count=$REPLY
-        echo "$emoji $count $sub_name @ ${name%s®}®"
+        printf '%s\n' "$emoji $count $sub_name @ ${name%s®}®"
     fi
 }
 
@@ -546,7 +597,7 @@ format_time_tier() {
             count_scaled6=$REPLY
             format_count_scaled6 "$count_scaled6"
             count=$REPLY
-            echo "$emoji ${count}${suffix} @ $name"
+            printf '%s\n' "$emoji ${count}${suffix} @ $name"
             return
         fi
     done
@@ -559,22 +610,75 @@ FUN_SUB_DATA=(
     "levain:bites:0.83" "chipotle:bites:0.80" "juice-press:sips:0.58" "pommes-frites:fries:0.36" "cronut:bites:0.97"
 )
 
+FUN_LOOKUP_HAS_ASSOC=0
+if [ "${BASH_VERSINFO[0]:-0}" -ge 4 ]; then
+    declare -A FUN_ITEM_LOOKUP=()
+    declare -A FUN_SUB_LOOKUP=()
+
+    for __fun_lookup_entry in "${FUN_ITEM_DATA[@]}"; do
+        FUN_ITEM_LOOKUP["${__fun_lookup_entry%%|*}"]="$__fun_lookup_entry"
+    done
+    for __fun_lookup_entry in "${FUN_SUB_DATA[@]}"; do
+        FUN_SUB_LOOKUP["${__fun_lookup_entry%%:*}"]="$__fun_lookup_entry"
+    done
+    unset __fun_lookup_entry
+
+    FUN_LOOKUP_HAS_ASSOC=1
+fi
+
+_parse_fun_item_entry() {
+    local entry=$1
+    local emoji_var=$2
+    local name_var=$3
+    local price_var=$4
+    local rest found_emoji found_name found_price
+
+    [ -n "$entry" ] || return 1
+
+    rest="${entry#*|}"
+    found_emoji="${rest%%|*}"
+    rest="${rest#*|}"
+    found_name="${rest%%|*}"
+    found_price="${rest#*|}"
+
+    printf -v "$emoji_var" '%s' "$found_emoji"
+    printf -v "$name_var" '%s' "$found_name"
+    printf -v "$price_var" '%s' "$found_price"
+}
+
+_parse_fun_sub_entry() {
+    local entry=$1
+    local name_var=$2
+    local price_var=$3
+    local rest found_sub_name found_sub_price
+
+    [ -n "$entry" ] || return 1
+
+    rest="${entry#*:}"
+    found_sub_name="${rest%%:*}"
+    found_sub_price="${rest#*:}"
+
+    printf -v "$name_var" '%s' "$found_sub_name"
+    printf -v "$price_var" '%s' "$found_sub_price"
+}
+
 _lookup_fun_item() {
     local item_id=$1
     local emoji_var=$2
     local name_var=$3
     local price_var=$4
-    local entry rest found_emoji found_name found_price
+    local entry
+
+    if [ "$FUN_LOOKUP_HAS_ASSOC" -eq 1 ]; then
+        entry=${FUN_ITEM_LOOKUP[$item_id]-}
+        [ -n "$entry" ] || return 1
+        _parse_fun_item_entry "$entry" "$emoji_var" "$name_var" "$price_var"
+        return
+    fi
+
     for entry in "${FUN_ITEM_DATA[@]}"; do
         if [ "${entry%%|*}" = "$item_id" ]; then
-            rest="${entry#*|}"
-            found_emoji="${rest%%|*}"
-            rest="${rest#*|}"
-            found_name="${rest%%|*}"
-            found_price="${rest#*|}"
-            printf -v "$emoji_var" '%s' "$found_emoji"
-            printf -v "$name_var" '%s' "$found_name"
-            printf -v "$price_var" '%s' "$found_price"
+            _parse_fun_item_entry "$entry" "$emoji_var" "$name_var" "$price_var"
             return 0
         fi
     done
@@ -585,14 +689,18 @@ _lookup_sub() {
     local item_id=$1
     local name_var=$2
     local price_var=$3
-    local entry rest found_sub_name found_sub_price
+    local entry
+
+    if [ "$FUN_LOOKUP_HAS_ASSOC" -eq 1 ]; then
+        entry=${FUN_SUB_LOOKUP[$item_id]-}
+        [ -n "$entry" ] || return 1
+        _parse_fun_sub_entry "$entry" "$name_var" "$price_var"
+        return
+    fi
+
     for entry in "${FUN_SUB_DATA[@]}"; do
         if [ "${entry%%:*}" = "$item_id" ]; then
-            rest="${entry#*:}"
-            found_sub_name="${rest%%:*}"
-            found_sub_price="${rest#*:}"
-            printf -v "$name_var" '%s' "$found_sub_name"
-            printf -v "$price_var" '%s' "$found_sub_price"
+            _parse_fun_sub_entry "$entry" "$name_var" "$price_var"
             return 0
         fi
     done
@@ -613,7 +721,7 @@ format_single_unit() {
     format_count_scaled6 "$count_scaled6"
     count=$REPLY
 
-    echo "$emoji $count $name"
+    printf '%s\n' "$emoji $count $name"
 }
 
 format_fun_cost() {
@@ -621,11 +729,11 @@ format_fun_cost() {
     local item_ref=${2:-$(( (NOW / 10) % ${#FUN_ITEM_DATA[@]} ))}
     local cost_milli
     if ! dollars_to_millis "$cost"; then
-        echo "💰 \$0"
+        printf '%s\n' "💰 \$0"
         return
     fi
     cost_milli=$REPLY
-    [ "$cost_milli" -eq 0 ] && echo "💰 \$0" && return
+    [ "$cost_milli" -eq 0 ] && { printf '%s\n' "💰 \$0"; return; }
 
     local item_id="$item_ref"
     local emoji="" name="" price="" sub_name="" sub_price=""
@@ -635,7 +743,7 @@ format_fun_cost() {
     if ! _lookup_fun_item "$item_id" emoji name price; then
         debug_log "Unknown fun cost item '$item_ref'; defaulting to starbucks"
         item_id="starbucks"
-        _lookup_fun_item "$item_id" emoji name price || { echo "💰 \$0"; return; }
+        _lookup_fun_item "$item_id" emoji name price || { printf '%s\n' "💰 \$0"; return; }
     fi
 
     case $item_id in
@@ -666,11 +774,11 @@ format_absurd_cost() {
     local item_idx=${2:-$(( (NOW / 10) % ${#ABSURD_EMOJI[@]} ))}
     local cost_milli
     if ! dollars_to_millis "$cost"; then
-        echo "💰 \$0"
+        printf '%s\n' "💰 \$0"
         return
     fi
     cost_milli=$REPLY
-    [ "$cost_milli" -eq 0 ] && echo "💰 \$0" && return
+    [ "$cost_milli" -eq 0 ] && { printf '%s\n' "💰 \$0"; return; }
 
     local emoji="${ABSURD_EMOJI[$item_idx]}"
     local name="${ABSURD_NAME[$item_idx]}"
@@ -683,7 +791,7 @@ format_absurd_cost() {
     format_count_scaled6 "$count_scaled6"
     count=$REPLY
 
-    echo "$emoji $count $name"
+    printf '%s\n' "$emoji $count $name"
 }
 
 format_duration() {
@@ -705,7 +813,7 @@ format_burst_indicator() {
     local now=${3:-${NOW:-$(date +%s)}}
 
     if [ -z "$burst_usage" ] || [ "$burst_usage" = "_" ] || [ "$burst_usage" = "null" ]; then
-        echo ""
+        printf '%s\n' ""
         return
     fi
 
@@ -713,7 +821,7 @@ format_burst_indicator() {
     burst_pct=$(printf "%.0f" "$burst_usage" 2>>"$STATUSLINE_DEBUG_LOG")
     burst_pct=${burst_pct:-0}
     if ! [ "$burst_pct" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
-        echo ""
+        printf '%s\n' ""
         return
     fi
 
@@ -727,9 +835,9 @@ format_burst_indicator() {
     if [ "$burst_pct" -ge 100 ]; then
         if [ -n "$burst_reset_epoch" ] && [ "$secs_left" -gt 0 ]; then
             local mins=$(( (secs_left + 59) / 60 ))
-            echo "💥🤑 ${DIM}-${mins}m${RESET}"
+            printf '%s\n' "💥🤑 ${DIM}-${mins}m${RESET}"
         else
-            echo "💥🤑"
+            printf '%s\n' "💥🤑"
         fi
         return
     fi
@@ -755,8 +863,8 @@ format_burst_indicator() {
 
     if [ "$burst_pct" -ge 75 ] && [ -n "$burst_reset_epoch" ] && [ "$secs_left" -gt 0 ]; then
         local mins=$(( (secs_left + 59) / 60 ))
-        echo "💥${burst_color}${burst_bar}${RESET} ${DIM}-${mins}m${RESET}"
+        printf '%s\n' "💥${burst_color}${burst_bar}${RESET} ${DIM}-${mins}m${RESET}"
     else
-        echo "💥${burst_color}${burst_bar}${RESET}"
+        printf '%s\n' "💥${burst_color}${burst_bar}${RESET}"
     fi
 }
