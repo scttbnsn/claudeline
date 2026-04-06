@@ -408,6 +408,11 @@ acquire_extra_usage_lock() {
 start_extra_usage_refresh() {
     local now=${1:-${NOW:-$(date +%s)}}
 
+    # Skip network access entirely when disabled by the user.
+    case "${CLAUDELINE_NO_NETWORK:-}" in
+        1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]) return 0 ;;
+    esac
+
     acquire_extra_usage_lock "$now" || return 0
     (
         trap 'rmdir "$EXTRA_USAGE_LOCK" 2>>"$STATUSLINE_DEBUG_LOG" || true' EXIT

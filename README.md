@@ -38,6 +38,7 @@
 - [🌍 Environmental Impact](#environmental-impact)
 - [🏆 All-Time Tracking](#all-time-tracking)
 - [⚡ Performance](#performance)
+- [🔒 Privacy & Network Access](#privacy--network-access)
 - [🔧 Requirements](#requirements)
 
 <hr>
@@ -360,6 +361,23 @@ The 🏆 trophy indicates all-time totals. The 8-cycle rotation (10s each) shows
 | Source libs + rest | ~27ms | bash |
 
 Rate limit data comes directly from the Claude Code status line JSON — zero network calls during normal operation. Cold JSONL scans use a fast streaming pipeline (`xargs cat | perl`) for immediate results, then build per-file state lazily so subsequent scans only process appended bytes.
+
+<hr>
+
+<h2 align="center" id="privacy--network-access">🔒 Privacy & Network Access</h2>
+
+claudeline makes **one optional API call** to `https://api.anthropic.com/api/oauth/usage` — a `GET` request with only an `Authorization` header. No telemetry, no tracking, no data sent in the request body. This call only triggers when weekly or burst rate limits reach 100%, to fetch overage/credit utilization.
+
+The OAuth token is read from:
+- **macOS:** macOS Keychain via `security find-generic-password`
+- **Linux:** `~/.config/claude/credentials.json`
+
+The API call runs in a **non-blocking background subshell** so it never stalls the status line.
+
+| Variable | Effect |
+|----------|--------|
+| `CLAUDELINE_NO_NETWORK=1` | Disables all network access — the API call is skipped entirely |
+| `CLAUDELINE_DEBUG=1` | Enables debug logging to `$TMPDIR/claudeline-statusline-debug.log` |
 
 <hr>
 
