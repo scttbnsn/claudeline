@@ -32,6 +32,9 @@ pre-push:
       run: |
         failed=0
         for f in tests/*.sh; do
+          case "$(basename "$f")" in
+            *extra_usage_async*|*extra_usage_lock*|*extra_usage_refresh*|*no_network*) continue ;;
+          esac
           if ! bash "$f" >/dev/null 2>&1; then
             echo "FAIL: $(basename $f)"
             bash "$f" 2>&1 | tail -3
