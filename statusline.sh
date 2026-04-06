@@ -200,9 +200,11 @@ normalize_int_var BURST_RESETS 0 "burst reset epoch"
 
 # Derived values (pure bash math, no bc)
 SESSION_TOKENS=$((TOTAL_INPUT + TOTAL_OUTPUT))
-if ! TOTAL_COST_CENTS=$(awk -v total_cost="$TOTAL_COST" 'BEGIN { printf "%.0f", total_cost * 100 }' 2>>"$STATUSLINE_DEBUG_LOG"); then
+if ! decimal_to_scaled "$TOTAL_COST" 2; then
     debug_log "Invalid total cost value '${TOTAL_COST:-<empty>}'; defaulting session cost to 0"
     TOTAL_COST_CENTS=0
+else
+    TOTAL_COST_CENTS=$REPLY
 fi
 
 # Cache current timestamp (used multiple times - avoid repeated date calls)
