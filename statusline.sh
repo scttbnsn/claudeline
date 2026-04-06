@@ -23,41 +23,36 @@ debug_log() {
     printf '[%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >> "$STATUSLINE_DEBUG_LOG"
 }
 
-normalize_int_var() {
+normalize_scalar_var() {
     local var_name=$1
-    local default_value=$2
-    local label=${3:-$var_name}
+    local mode=$2
+    local default_value=$3
+    local label=${4:-$var_name}
     local value=${!var_name-}
-    if ! [[ "$value" =~ ^-?[0-9]+$ ]]; then
-        debug_log "Invalid $label value '${value:-<empty>}'; defaulting to $default_value"
-        printf -v "$var_name" '%s' "$default_value"
-    fi
-}
 
-normalize_decimal_var() {
-    local var_name=$1
-    local default_value=$2
-    local label=${3:-$var_name}
-    local value=${!var_name-}
-    if ! is_decimal_value "$value"; then
-        debug_log "Invalid $label value '${value:-<empty>}'; defaulting to $default_value"
-        printf -v "$var_name" '%s' "$default_value"
-    fi
-}
-
-normalize_rate_var() {
-    local var_name=$1
-    local label=${2:-$var_name}
-    local value=${!var_name-}
-    case "$value" in
-        ""|_|null) printf -v "$var_name" '%s' "_" ;;
+    case "$mode" in
+        int)
+            [[ "$value" =~ ^-?[0-9]+$ ]] && return 0
+            ;;
+        decimal)
+            is_decimal_value "$value" && return 0
+            ;;
+        rate)
+            case "$value" in
+                ""|_|null)
+                    printf -v "$var_name" '%s' "_"
+                    return 0
+                    ;;
+            esac
+            is_decimal_value "$value" && return 0
+            ;;
         *)
-            if ! is_decimal_value "$value"; then
-                debug_log "Invalid $label value '${value:-<empty>}'; defaulting to _"
-                printf -v "$var_name" '%s' "_"
-            fi
+            debug_log "Unknown normalize mode '$mode' for $label; defaulting to $default_value"
             ;;
     esac
+
+    debug_log "Invalid $label value '${value:-<empty>}'; defaulting to $default_value"
+    printf -v "$var_name" '%s' "$default_value"
 }
 
 round_decimal_to_int_or_default() {
@@ -145,8 +140,13 @@ EXTRA_USAGE_TTL=600
 USAGE_HISTORY="$CACHE_DIR/.usage-history"
 TREND_WINDOW=900   # 15 minutes in seconds
 AUTO_COMPACT_THRESHOLD_PCT=84
-ALLTIME_NORMAL_CATALOG_ITEM_COUNT=${#ALLTIME_COST_ITEMS[@]}
-ALLTIME_NORMAL_FIXED_ITEM_COUNT=5
+ALLTIME_NORMAL_CATALOG_ITEMS=(
+    "gta6" "lugers" "exxon-valdez" "carbone" "redlobster"
+    "equinox" "soulcycle" "razor" "magic-mouse" "iphone"
+)
+ALLTIME_NORMAL_CATALOG_ITEM_COUNT=${#ALLTIME_NORMAL_CATALOG_ITEMS[@]}
+ALLTIME_NORMAL_FIXED_ITEMS=("coal" "reactor" "tokens" "cost" "data")
+ALLTIME_NORMAL_FIXED_ITEM_COUNT=${#ALLTIME_NORMAL_FIXED_ITEMS[@]}
 ALLTIME_NORMAL_ITEM_COUNT=$((ALLTIME_NORMAL_CATALOG_ITEM_COUNT + ALLTIME_NORMAL_FIXED_ITEM_COUNT))
 (umask 077 && mkdir -p "$CACHE_DIR") 2>>"$STATUSLINE_DEBUG_LOG"
 
@@ -185,18 +185,18 @@ IFS=$'\t' read -r MODEL CURRENT_DIR LINES_ADDED LINES_REMOVED \
     TOTAL_INPUT TOTAL_OUTPUT DURATION_MS TOTAL_COST CURRENT_TOKENS CONTEXT_WINDOW_SIZE \
     WEEKLY_USAGE RESETS_AT BURST_USAGE BURST_RESETS <<< "$INPUT_FIELDS"
 
-normalize_int_var LINES_ADDED 0 "lines added"
-normalize_int_var LINES_REMOVED 0 "lines removed"
-normalize_int_var TOTAL_INPUT 0 "total input tokens"
-normalize_int_var TOTAL_OUTPUT 0 "total output tokens"
-normalize_int_var DURATION_MS 0 "duration ms"
-normalize_decimal_var TOTAL_COST 0 "total cost usd"
-normalize_int_var CURRENT_TOKENS 0 "current tokens"
-normalize_int_var CONTEXT_WINDOW_SIZE 200000 "context window size"
-normalize_rate_var WEEKLY_USAGE "weekly usage"
-normalize_rate_var BURST_USAGE "burst usage"
-normalize_int_var RESETS_AT 0 "weekly reset epoch"
-normalize_int_var BURST_RESETS 0 "burst reset epoch"
+normalize_scalar_var LINES_ADDED int 0 "lines added"
+normalize_scalar_var LINES_REMOVED int 0 "lines removed"
+normalize_scalar_var TOTAL_INPUT int 0 "total input tokens"
+normalize_scalar_var TOTAL_OUTPUT int 0 "total output tokens"
+normalize_scalar_var DURATION_MS int 0 "duration ms"
+normalize_scalar_var TOTAL_COST decimal 0 "total cost usd"
+normalize_scalar_var CURRENT_TOKENS int 0 "current tokens"
+normalize_scalar_var CONTEXT_WINDOW_SIZE int 200000 "context window size"
+normalize_scalar_var WEEKLY_USAGE rate "_" "weekly usage"
+normalize_scalar_var BURST_USAGE rate "_" "burst usage"
+normalize_scalar_var RESETS_AT int 0 "weekly reset epoch"
+normalize_scalar_var BURST_RESETS int 0 "burst reset epoch"
 
 # Derived values (pure bash math, no bc)
 SESSION_TOKENS=$((TOTAL_INPUT + TOTAL_OUTPUT))
@@ -365,21 +365,29 @@ if [ "$SESSION_TOKENS" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG" || [ "$ALL_TIME_TOKENS
             # Use NOW_DIV_10/CYCLE_LEN so cycle advances each time the outer cycle completes
             # (avoids modular conflict with CYCLE_POS which also uses NOW_DIV_10)
             ALLTIME_NORMAL_CYCLE=$(( (NOW_DIV_10 / CYCLE_LEN) % ALLTIME_NORMAL_ITEM_COUNT ))
-            if [ "$ALLTIME_NORMAL_CYCLE" -eq 10 ]; then
-                # Coal (fun power index 6)
-                METRIC_INFO="${DIM}$(format_fun_power "$USE_TOKENS" "6")${TROPHY}${RESET}"
-            elif [ "$ALLTIME_NORMAL_CYCLE" -eq 11 ]; then
-                # Reactor output (fun power index 7)
-                METRIC_INFO="${DIM}$(format_fun_power "$USE_TOKENS" "7")${TROPHY}${RESET}"
-            elif [ "$ALLTIME_NORMAL_CYCLE" -eq 12 ]; then
-                METRIC_INFO="${DIM}🎟️ $(format_number "$USE_TOKENS")${TROPHY}${RESET}"
-            elif [ "$ALLTIME_NORMAL_CYCLE" -eq 13 ]; then
-                METRIC_INFO="${DIM}💰 \$$USE_COST_FMT${TROPHY}${RESET}"
-            elif [ "$ALLTIME_NORMAL_CYCLE" -eq 14 ]; then
-                METRIC_INFO="${DIM}📡 $(format_data "$USE_TOKENS")${TROPHY}${RESET}"
-            else
-                ALLTIME_COST_ID=${ALLTIME_COST_ITEMS[$ALLTIME_NORMAL_CYCLE]}
+            if [ "$ALLTIME_NORMAL_CYCLE" -lt "$ALLTIME_NORMAL_CATALOG_ITEM_COUNT" ]; then
+                ALLTIME_COST_ID=${ALLTIME_NORMAL_CATALOG_ITEMS[$ALLTIME_NORMAL_CYCLE]}
                 METRIC_INFO="${DIM}$(format_fun_cost "$USE_COST" "$ALLTIME_COST_ID")${TROPHY}${RESET}"
+            else
+                ALLTIME_NORMAL_FIXED_INDEX=$((ALLTIME_NORMAL_CYCLE - ALLTIME_NORMAL_CATALOG_ITEM_COUNT))
+                ALLTIME_NORMAL_FIXED_ITEM=${ALLTIME_NORMAL_FIXED_ITEMS[$ALLTIME_NORMAL_FIXED_INDEX]}
+                case "$ALLTIME_NORMAL_FIXED_ITEM" in
+                    coal)
+                        METRIC_INFO="${DIM}$(format_fun_power "$USE_TOKENS" "6")${TROPHY}${RESET}"
+                        ;;
+                    reactor)
+                        METRIC_INFO="${DIM}$(format_fun_power "$USE_TOKENS" "7")${TROPHY}${RESET}"
+                        ;;
+                    tokens)
+                        METRIC_INFO="${DIM}🎟️ $(format_number "$USE_TOKENS")${TROPHY}${RESET}"
+                        ;;
+                    cost)
+                        METRIC_INFO="${DIM}💰 \$$USE_COST_FMT${TROPHY}${RESET}"
+                        ;;
+                    data)
+                        METRIC_INFO="${DIM}📡 $(format_data "$USE_TOKENS")${TROPHY}${RESET}"
+                        ;;
+                esac
             fi
         fi
     else
