@@ -125,6 +125,8 @@ read_auto_compact_setting() {
 }
 
 STATUSLINE_DIR=$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=lib/statusline_themes.sh
+source "$STATUSLINE_DIR/lib/statusline_themes.sh"
 # shellcheck source=lib/statusline_display.sh
 source "$STATUSLINE_DIR/lib/statusline_display.sh"
 # shellcheck source=lib/statusline_usage.sh

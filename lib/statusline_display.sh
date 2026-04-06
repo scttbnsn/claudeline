@@ -1,40 +1,5 @@
 # shellcheck shell=bash
-
-# Colors (24-bit true color - vibey 2025 palette)
-RESET="\033[0m"
-DIM="\033[2m"
-# Accent colors
-PURPLE="\033[38;2;187;134;252m"    # #BB86FC
-SKY="\033[38;2;92;200;255m"        # #5CC8FF
-# Context tier colors (8-level gradient: 6 base + 2 hyper-pink past compact)
-CTX_CYAN="\033[38;2;100;255;218m"    # #64FFDA
-CTX_LIME="\033[38;2;194;255;74m"     # #C2FF4A
-CTX_YELLOW="\033[38;2;255;234;0m"    # #FFEA00
-CTX_ORANGE="\033[38;2;255;165;0m"    # #FFA500
-CTX_CORAL="\033[38;2;254;117;63m"    # #FE753F
-CTX_RED="\033[38;2;255;77;106m"      # #FF4D6A
-CTX_HOT_PINK="\033[38;2;255;110;199m"  # #FF6EC7
-CTX_MAGENTA="\033[38;2;255;0;255m"     # #FF00FF
-CTX_VIOLET="\033[38;2;190;60;255m"     # #BE3CFF
-CTX_WHITE_HOT="\033[38;2;255;200;255m" # #FFC8FF
-# Velocity arrow colors (5 levels)
-VEL_HOT="\033[38;2;255;77;106m"      # #FF4D6A
-VEL_WARM="\033[38;2;255;165;0m"      # #FFA500
-VEL_STABLE="\033[38;2;194;255;74m"   # #C2FF4A
-VEL_COOL="\033[38;2;0;200;170m"      # #00C8AA
-VEL_COLD="\033[38;2;100;255;218m"    # #64FFDA
-# Aliases (base colors used throughout)
-GREEN="$CTX_LIME"
-RED="$CTX_RED"
-# Burst bar gradient (8 levels)
-BURST_CYAN="\033[38;2;32;232;182m"        # #20E8B6
-BURST_TEAL="\033[38;2;0;200;170m"         # #00C8AA
-BURST_GREEN="\033[38;2;100;220;100m"      # #64DC64
-BURST_YELLOW="\033[38;2;255;234;0m"       # #FFEA00
-BURST_ORANGE="\033[38;2;255;165;0m"       # #FFA500
-BURST_RED="\033[38;2;255;77;106m"         # #FF4D6A
-BURST_MAGENTA="\033[38;2;255;0;255m"      # #FF00FF
-BURST_BRIGHT_MAG="\033[38;2;255;100;255m" # #FF64FF
+# Colors are defined by the active theme in lib/statusline_themes.sh
 
 # Environmental impact rates (per million tokens)
 # Sources: arxiv:2304.03271 (water), arxiv:2505.09598 (energy), updated 2026
