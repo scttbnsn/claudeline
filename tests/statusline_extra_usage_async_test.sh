@@ -27,22 +27,12 @@ assert_true() {
     fi
 }
 
-wait_for_path() {
+wait_for_signal() {
     local path=$1
-    local timeout_secs=$2
-    local label=$3
+    local label=$2
+    local signal=""
 
-    if ! perl -MTime::HiRes=time,sleep -e '
-        use strict;
-        use warnings;
-        my ($path, $timeout) = @ARGV;
-        my $deadline = time + $timeout;
-        while (time < $deadline) {
-            exit 0 if -e $path;
-            sleep 0.05;
-        }
-        exit 1;
-    ' "$path" "$timeout_secs"; then
+    if ! IFS= read -r -t 5 signal < "$path"; then
         printf 'FAIL: %s\n' "$label" >&2
         exit 1
     fi
@@ -52,8 +42,10 @@ home_dir="$tmpdir/home"
 shim_dir="$tmpdir/shim"
 extra_usage_cache="$home_dir/.claude-usage.d/.extra-usage-cache"
 mkdir -p "$home_dir" "$shim_dir"
-started_file="$tmpdir/curl-started"
-done_file="$tmpdir/statusline-done"
+started_pipe="$tmpdir/curl-started.pipe"
+render_done_pipe="$tmpdir/statusline-done.pipe"
+async_done_pipe="$tmpdir/extra-usage-done.pipe"
+mkfifo "$started_pipe" "$render_done_pipe" "$async_done_pipe"
 
 cat > "$shim_dir/security" <<'EOF'
 #!/usr/bin/env bash
@@ -64,7 +56,7 @@ chmod +x "$shim_dir/security"
 cat > "$shim_dir/curl" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$$" > "$TEST_CURL_PID_FILE"
-: > "$TEST_CURL_STARTED_FILE"
+printf 'started\n' > "$TEST_CURL_STARTED_PIPE"
 kill -STOP "$$"
 printf '{"extra_usage":{"utilization":42}}\n'
 EOF
@@ -97,24 +89,25 @@ input_json='{
 
 export HOME="$home_dir"
 export TEST_CURL_PID_FILE="$tmpdir/curl.pid"
-export TEST_CURL_STARTED_FILE="$started_file"
-export TEST_STATUSLINE_DONE_FILE="$done_file"
+export TEST_CURL_STARTED_PIPE="$started_pipe"
+export TEST_STATUSLINE_DONE_PIPE="$render_done_pipe"
+export STATUSLINE_EXTRA_USAGE_ASYNC_DONE_SIGNAL="$async_done_pipe"
 export PATH="$shim_dir:$PATH"
 
 (
     bash "$repo_root/statusline.sh" <<< "$input_json" > "$tmpdir/output.txt"
-    : > "$TEST_STATUSLINE_DONE_FILE"
+    printf 'done\n' > "$TEST_STATUSLINE_DONE_PIPE"
 ) &
 wrapper_pid=$!
 
-wait_for_path "$TEST_CURL_STARTED_FILE" 5 "over-limit render should trigger extra-usage refresh"
-wait_for_path "$TEST_STATUSLINE_DONE_FILE" 5 "statusline render should finish before blocked extra-usage curl resumes"
+wait_for_signal "$TEST_CURL_STARTED_PIPE" "over-limit render should trigger extra-usage refresh"
+wait_for_signal "$TEST_STATUSLINE_DONE_PIPE" "statusline render should finish before blocked extra-usage curl resumes"
 assert_true "[ -f \"$TEST_CURL_PID_FILE\" ]" "curl shim should record its pid for deterministic resume"
 kill -CONT "$(cat "$TEST_CURL_PID_FILE")"
+wait_for_signal "$STATUSLINE_EXTRA_USAGE_ASYNC_DONE_SIGNAL" "async refresh should signal completion after the cache write finishes"
 wait "$wrapper_pid"
 wrapper_pid=""
 
-wait_for_path "$extra_usage_cache" 5 "async refresh should eventually create the extra-usage cache"
 assert_true "grep -Fq '42' \"$extra_usage_cache\"" "async refresh should eventually populate the extra-usage cache"
 
 printf 'ok\n'

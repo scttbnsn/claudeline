@@ -60,8 +60,13 @@ VALUE=bogus
 normalize_scalar_var VALUE rate "_" "test rate"
 assert_eq "_" "$VALUE" "normalize_scalar_var defaults invalid rates"
 
-assert_eq "2" "$(round_decimal_to_int_or_default 1.6 0 "test round")" "round_decimal_to_int_or_default rounds valid decimals"
-assert_eq "0" "$(round_decimal_to_int_or_default "_" 0 "test round")" "round_decimal_to_int_or_default defaults underscore values"
-assert_eq "0" "$(round_decimal_to_int_or_default "bogus" 0 "test round")" "round_decimal_to_int_or_default defaults invalid decimals"
+round_decimal_to_int_or_default 1.6 0 "test round"
+assert_eq "2" "$REPLY" "round_decimal_to_int_or_default rounds valid decimals"
+
+round_decimal_to_int_or_default "_" 0 "test round"
+assert_eq "0" "$REPLY" "round_decimal_to_int_or_default defaults underscore values"
+
+round_decimal_to_int_or_default "bogus" 0 "test round"
+assert_eq "0" "$REPLY" "round_decimal_to_int_or_default defaults invalid decimals"
 
 printf 'ok\n'

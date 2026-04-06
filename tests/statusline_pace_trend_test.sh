@@ -44,6 +44,7 @@ run_trend_case() {
     mkdir -p "$CACHE_DIR"
     printf '%s' "$history_body" > "$USAGE_HISTORY"
     get_trend_arrow "$usage" 0 "$now"
+    printf '%s\n' "$REPLY"
 }
 
 assert_eq "<stable>→<reset>" "$(run_trend_case "" 10 500)" "get_trend_arrow is stable with a single sample"
@@ -70,6 +71,7 @@ EOF
     export TEST_MKTEMP_PATH="$case_dir/cache/trend-random"
     printf '%s' "" > "$USAGE_HISTORY"
     get_trend_arrow "10" 0 "500"
+    printf '%s\n' "$REPLY"
 }
 
 assert_eq "<stable>→<reset>" "$(run_trend_case_with_blocked_predictable_tmp)" "get_trend_arrow avoids the predictable sibling temp path"
@@ -82,20 +84,40 @@ assert_eq "<cool>↘<reset>" "$(run_trend_case $'100,10\n200,10.02\n' 10.02 500)
 assert_eq "<cold>↓<reset>" "$(run_trend_case $'100,10\n200,10.005\n' 10.005 500)" "get_trend_arrow detects very low growth"
 
 get_trend_arrow() {
-    echo "<arrow>"
+    REPLY="<arrow>"
 }
 
-assert_eq "" "$(get_smart_pace_indicator "_" "_" 1000000)" "get_smart_pace_indicator omits missing usage"
-assert_eq "<dim>42%<reset>" "$(get_smart_pace_indicator 42 1502400 1000070)" "get_smart_pace_indicator shows raw percent on raw-display cycles"
-assert_eq "🚨 -1.2d" "$(get_smart_pace_indicator 100 1108000 1000000)" "get_smart_pace_indicator shows reset countdown at the limit"
+get_smart_pace_indicator "_" "_" 1000000
+assert_eq "" "$REPLY" "get_smart_pace_indicator omits missing usage"
 
-assert_eq "❄️<arrow>" "$(get_smart_pace_indicator 1 1172800 1000000)" "get_smart_pace_indicator reaches the cold tier"
-assert_eq "🧊<arrow>" "$(get_smart_pace_indicator 1 1200000 1000000)" "get_smart_pace_indicator reaches the cool tier"
-assert_eq "🙂<arrow>" "$(get_smart_pace_indicator 1 1502400 1000000)" "get_smart_pace_indicator reaches the comfortable tier"
-assert_eq "👌<arrow>" "$(get_smart_pace_indicator 1 1596160 1000000)" "get_smart_pace_indicator reaches the on-pace tier"
-assert_eq "♨️<arrow>" "$(get_smart_pace_indicator 5 1578880 1000000)" "get_smart_pace_indicator reaches the warming tier"
-assert_eq "🥵<arrow>" "$(get_smart_pace_indicator 2 1596160 1000000)" "get_smart_pace_indicator reaches the hot tier"
-assert_eq "🔥<arrow>" "$(get_smart_pace_indicator 3 1596160 1000000)" "get_smart_pace_indicator reaches the very-hot tier"
-assert_eq "🚨<arrow>" "$(get_smart_pace_indicator 4 1596160 1000000)" "get_smart_pace_indicator reaches the alarm tier"
+get_smart_pace_indicator 42 1502400 1000070
+assert_eq "<dim>42%<reset>" "$REPLY" "get_smart_pace_indicator shows raw percent on raw-display cycles"
+
+get_smart_pace_indicator 100 1108000 1000000
+assert_eq "🚨 -1.2d" "$REPLY" "get_smart_pace_indicator shows reset countdown at the limit"
+
+get_smart_pace_indicator 1 1172800 1000000
+assert_eq "❄️<arrow>" "$REPLY" "get_smart_pace_indicator reaches the cold tier"
+
+get_smart_pace_indicator 1 1200000 1000000
+assert_eq "🧊<arrow>" "$REPLY" "get_smart_pace_indicator reaches the cool tier"
+
+get_smart_pace_indicator 1 1502400 1000000
+assert_eq "🙂<arrow>" "$REPLY" "get_smart_pace_indicator reaches the comfortable tier"
+
+get_smart_pace_indicator 1 1596160 1000000
+assert_eq "👌<arrow>" "$REPLY" "get_smart_pace_indicator reaches the on-pace tier"
+
+get_smart_pace_indicator 5 1578880 1000000
+assert_eq "♨️<arrow>" "$REPLY" "get_smart_pace_indicator reaches the warming tier"
+
+get_smart_pace_indicator 2 1596160 1000000
+assert_eq "🥵<arrow>" "$REPLY" "get_smart_pace_indicator reaches the hot tier"
+
+get_smart_pace_indicator 3 1596160 1000000
+assert_eq "🔥<arrow>" "$REPLY" "get_smart_pace_indicator reaches the very-hot tier"
+
+get_smart_pace_indicator 4 1596160 1000000
+assert_eq "🚨<arrow>" "$REPLY" "get_smart_pace_indicator reaches the alarm tier"
 
 printf 'ok\n'

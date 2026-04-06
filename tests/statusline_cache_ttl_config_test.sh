@@ -18,9 +18,11 @@ assert_eq() {
 
 helper_file="$tmpdir/statusline_cache_ttl_config.sh"
 {
-    sed -n '9,32p' "$repo_root/statusline.sh"
+    # Extract config file loader
+    sed -n '/^CLAUDELINE_CONF=/,/^fi$/p' "$repo_root/statusline.sh"
     printf '\n'
-    sed -n '192,200p' "$repo_root/statusline.sh"
+    # Extract default assignments
+    grep -E '^(EXTRA_USAGE_TTL|TREND_WINDOW)=\$\{' "$repo_root/statusline.sh"
 } > "$helper_file"
 
 home_dir="$tmpdir/home"

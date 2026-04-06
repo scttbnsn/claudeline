@@ -18,51 +18,59 @@ mkdir -p "$CACHE_DIR"
 source "$repo_root/lib/statusline_usage.sh"
 
 TEST_REFRESH_MARKER="$tmpdir/refresh-marker"
+TEST_REFRESH_STARTED_PIPE="$tmpdir/refresh-started.pipe"
+TEST_REFRESH_RELEASE_PIPE="$tmpdir/refresh-release.pipe"
+TEST_REFRESH_DONE_PIPE="$tmpdir/refresh-done.pipe"
+STATUSLINE_EXTRA_USAGE_ASYNC_DONE_SIGNAL="$TEST_REFRESH_DONE_PIPE"
+mkfifo "$TEST_REFRESH_STARTED_PIPE" "$TEST_REFRESH_RELEASE_PIPE" "$TEST_REFRESH_DONE_PIPE"
+
+wait_for_signal() {
+    local path=$1
+    local label=$2
+    local signal=""
+
+    if ! IFS= read -r -t 5 signal < "$path"; then
+        printf 'FAIL: %s\n' "$label" >&2
+        exit 1
+    fi
+}
+
 refresh_extra_usage_cache_now() {
     printf '%s\n' "$1" > "$TEST_REFRESH_MARKER"
-}
-
-wait_for_file() {
-    local path=$1
-    local label=$2
-
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
-        [ -e "$path" ] && return 0
-        sleep 0.1
-    done
-
-    printf 'FAIL: %s\n' "$label" >&2
-    exit 1
-}
-
-wait_for_absence() {
-    local path=$1
-    local label=$2
-
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
-        [ ! -e "$path" ] && return 0
-        sleep 0.1
-    done
-
-    printf 'FAIL: %s\n' "$label" >&2
-    exit 1
+    printf 'started\n' > "$TEST_REFRESH_STARTED_PIPE"
+    IFS= read -r _ < "$TEST_REFRESH_RELEASE_PIPE"
 }
 
 mkdir "$EXTRA_USAGE_LOCK"
 perl -e 'utime $ARGV[0], $ARGV[0], $ARGV[1]' 100 "$EXTRA_USAGE_LOCK"
 
 start_extra_usage_refresh 200
-wait_for_file "$TEST_REFRESH_MARKER" "stale extra-usage lock should be cleared and replaced"
-wait_for_absence "$EXTRA_USAGE_LOCK" "extra-usage lock should be released after the background refresh exits"
+wait_for_signal "$TEST_REFRESH_STARTED_PIPE" "stale extra-usage lock should trigger a background refresh"
+[ -f "$TEST_REFRESH_MARKER" ] || {
+    echo "FAIL: stale extra-usage refresh should record its invocation" >&2
+    exit 1
+}
+[ -d "$EXTRA_USAGE_LOCK" ] || {
+    echo "FAIL: reclaimed extra-usage refresh should hold the replacement lock while running" >&2
+    exit 1
+}
+printf 'resume\n' > "$TEST_REFRESH_RELEASE_PIPE"
+wait_for_signal "$TEST_REFRESH_DONE_PIPE" "extra-usage lock should signal async completion after the background refresh exits"
+[ ! -e "$EXTRA_USAGE_LOCK" ] || {
+    echo "FAIL: extra-usage lock should be released after the background refresh exits" >&2
+    exit 1
+}
 
-rm -f "$TEST_REFRESH_MARKER"
+rm -rf "$EXTRA_USAGE_LOCK"
 mkdir "$EXTRA_USAGE_LOCK"
 perl -e 'utime $ARGV[0], $ARGV[0], $ARGV[1]' 180 "$EXTRA_USAGE_LOCK"
 
-start_extra_usage_refresh 200
-sleep 0.2
-[ ! -e "$TEST_REFRESH_MARKER" ] || {
+if acquire_extra_usage_lock 200; then
     echo "FAIL: fresh extra-usage lock should still block duplicate refreshes" >&2
+    exit 1
+fi
+[ -d "$EXTRA_USAGE_LOCK" ] || {
+    echo "FAIL: fresh extra-usage lock should remain in place when refresh is skipped" >&2
     exit 1
 }
 
