@@ -24,7 +24,7 @@
 ```
 
 <div align="center">
-<img src="docs/assets/claudeline-screenshot.png" alt="claudeline in action" width="700">
+<img src="docs/assets/claudeline-screenshot.png" alt="claudeline in action" width="900">
 </div>
 
 <hr>
