@@ -20,11 +20,13 @@ SCRIPT_PATH="$CLAUDE_DIR/statusline.sh"
 DISPLAY_LIB_PATH="$CLAUDE_LIB_DIR/statusline_display.sh"
 USAGE_LIB_PATH="$CLAUDE_LIB_DIR/statusline_usage.sh"
 JSONL_PARSER_PATH="$CLAUDE_LIB_DIR/jsonl_parser.pl"
+PRICING_MANIFEST_PATH="$CLAUDE_LIB_DIR/anthropic_pricing.json"
 SETTINGS_PATH="$CLAUDE_DIR/settings.json"
-STATUSLINE_SHA256="fe1190129841ab66fbcf6616ed0e14901d8cefc2e0cd683fe82b5a8eb32de536"
-DISPLAY_LIB_SHA256="cbcbbea8b5fee58794f83bb5832564721a6780199e494ec085ebd04a188fbc97"
-USAGE_LIB_SHA256="ef4a21554d7fe6a63e061bba5597fc3c1f13faadbf1304eb777f36a4b06c5958"
-JSONL_PARSER_SHA256="c4909b66502c354ea350f194daae51390354e328344b8bdea7c5c101f4589737"
+STATUSLINE_SHA256="d31850e97322e89bc474b02846c8e77cdf799a124e8c73f68f8fad8d283f2135"
+DISPLAY_LIB_SHA256="da4ecc06fc5a0ca900f8ab6bced7f19d26c3ec92d10671bfad758a104fec5c24"
+USAGE_LIB_SHA256="258af32d5e00d79c946bc7dbb5ee768b40759e0cba6574a5d8614af2d0813b77"
+JSONL_PARSER_SHA256="c8be3728c09c91214f4ac911835338488f4f519d7b57d60ab35afc2302f99cae"
+PRICING_MANIFEST_SHA256="fdabdf68043d58a919166ce083f6d4685693e9503213d229142788ca60d8cc37"
 
 echo -e "${CYAN}${BOLD}"
 echo "  ╭──────────────────────────────────────╮"
@@ -110,15 +112,18 @@ echo -e "${DIM}Downloading statusline runtime...${NC}"
 if download_stage_file "statusline.sh" 700 "$STATUSLINE_SHA256" \
     && download_stage_file "lib/statusline_display.sh" 600 "$DISPLAY_LIB_SHA256" \
     && download_stage_file "lib/statusline_usage.sh" 600 "$USAGE_LIB_SHA256" \
-    && download_stage_file "lib/jsonl_parser.pl" 600 "$JSONL_PARSER_SHA256"; then
+    && download_stage_file "lib/jsonl_parser.pl" 600 "$JSONL_PARSER_SHA256" \
+    && download_stage_file "lib/anthropic_pricing.json" 600 "$PRICING_MANIFEST_SHA256"; then
     mv "$stage_dir/statusline.sh" "$SCRIPT_PATH"
     mv "$stage_dir/lib/statusline_display.sh" "$DISPLAY_LIB_PATH"
     mv "$stage_dir/lib/statusline_usage.sh" "$USAGE_LIB_PATH"
     mv "$stage_dir/lib/jsonl_parser.pl" "$JSONL_PARSER_PATH"
+    mv "$stage_dir/lib/anthropic_pricing.json" "$PRICING_MANIFEST_PATH"
     echo -e "${GREEN}✓${NC} Installed $SCRIPT_PATH"
     echo -e "${GREEN}✓${NC} Installed $DISPLAY_LIB_PATH"
     echo -e "${GREEN}✓${NC} Installed $USAGE_LIB_PATH"
     echo -e "${GREEN}✓${NC} Installed $JSONL_PARSER_PATH"
+    echo -e "${GREEN}✓${NC} Installed $PRICING_MANIFEST_PATH"
 else
     echo -e "${RED}✗ Failed to download statusline runtime files${NC}"
     exit 1

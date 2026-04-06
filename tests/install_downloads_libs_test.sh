@@ -53,11 +53,13 @@ mkdir -p "$home_dir/.claude/lib" "$shim_dir" "$download_dir/lib"
 printf 'malicious-display\n' > "$home_dir/.claude/lib/statusline_display.sh"
 printf 'malicious-usage\n' > "$home_dir/.claude/lib/statusline_usage.sh"
 printf 'malicious-parser\n' > "$home_dir/.claude/lib/jsonl_parser.pl"
+printf 'malicious-pricing\n' > "$home_dir/.claude/lib/anthropic_pricing.json"
 
 cp "$repo_root/statusline.sh" "$download_dir/statusline.sh"
 cp "$repo_root/lib/statusline_display.sh" "$download_dir/lib/statusline_display.sh"
 cp "$repo_root/lib/statusline_usage.sh" "$download_dir/lib/statusline_usage.sh"
 cp "$repo_root/lib/jsonl_parser.pl" "$download_dir/lib/jsonl_parser.pl"
+cp "$repo_root/lib/anthropic_pricing.json" "$download_dir/lib/anthropic_pricing.json"
 
 cat > "$shim_dir/curl" <<'EOF'
 #!/usr/bin/env bash
@@ -88,6 +90,7 @@ case "$url" in
     */lib/statusline_display.sh) src="$src_root/lib/statusline_display.sh" ;;
     */lib/statusline_usage.sh) src="$src_root/lib/statusline_usage.sh" ;;
     */lib/jsonl_parser.pl) src="$src_root/lib/jsonl_parser.pl" ;;
+    */lib/anthropic_pricing.json) src="$src_root/lib/anthropic_pricing.json" ;;
     *)
         printf 'unexpected curl url: %s\n' "$url" >&2
         exit 99
@@ -132,6 +135,7 @@ assert_file_contains 'source "$STATUSLINE_DIR/lib/statusline_display.sh"' "$HOME
 assert_file_contains '# shellcheck shell=bash' "$HOME/.claude/lib/statusline_display.sh" "installer downloads display module"
 assert_file_contains '# shellcheck shell=bash' "$HOME/.claude/lib/statusline_usage.sh" "installer downloads usage module"
 assert_file_contains 'use strict;' "$HOME/.claude/lib/jsonl_parser.pl" "installer downloads JSONL parser module"
+assert_file_contains '"pricing_source_url"' "$HOME/.claude/lib/anthropic_pricing.json" "installer downloads pricing manifest"
 assert_eq "700" "$(get_perm "$HOME/.claude/statusline.sh")" "statusline remains executable"
 
 if grep -Fq 'malicious-display' "$HOME/.claude/lib/statusline_display.sh"; then
@@ -146,6 +150,11 @@ fi
 
 if grep -Fq 'malicious-parser' "$HOME/.claude/lib/jsonl_parser.pl"; then
     echo "FAIL: installer should replace preexisting JSONL parser content" >&2
+    exit 1
+fi
+
+if grep -Fq 'malicious-pricing' "$HOME/.claude/lib/anthropic_pricing.json"; then
+    echo "FAIL: installer should replace preexisting pricing manifest content" >&2
     exit 1
 fi
 

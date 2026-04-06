@@ -29,6 +29,7 @@ printf 'trusted-existing\n' > "$home_dir/.claude/lib/statusline_usage.sh"
 cp "$repo_root/statusline.sh" "$download_dir/statusline.sh"
 cp "$repo_root/lib/statusline_display.sh" "$download_dir/lib/statusline_display.sh"
 cp "$repo_root/lib/jsonl_parser.pl" "$download_dir/lib/jsonl_parser.pl"
+cp "$repo_root/lib/anthropic_pricing.json" "$download_dir/lib/anthropic_pricing.json"
 printf 'tampered-usage\n' > "$download_dir/lib/statusline_usage.sh"
 
 cat > "$shim_dir/curl" <<'EOF'
@@ -60,6 +61,7 @@ case "$url" in
     */lib/statusline_display.sh) src="$src_root/lib/statusline_display.sh" ;;
     */lib/statusline_usage.sh) src="$src_root/lib/statusline_usage.sh" ;;
     */lib/jsonl_parser.pl) src="$src_root/lib/jsonl_parser.pl" ;;
+    */lib/anthropic_pricing.json) src="$src_root/lib/anthropic_pricing.json" ;;
     *)
         printf 'unexpected curl url: %s\n' "$url" >&2
         exit 99

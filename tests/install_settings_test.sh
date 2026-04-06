@@ -44,6 +44,7 @@ make_downloads() {
     cp "$repo_root/lib/statusline_display.sh" "$root/lib/statusline_display.sh"
     cp "$repo_root/lib/statusline_usage.sh" "$root/lib/statusline_usage.sh"
     cp "$repo_root/lib/jsonl_parser.pl" "$root/lib/jsonl_parser.pl"
+    cp "$repo_root/lib/anthropic_pricing.json" "$root/lib/anthropic_pricing.json"
 }
 
 make_shims() {
@@ -79,6 +80,7 @@ case "$url" in
     */lib/statusline_display.sh) src="$src_root/lib/statusline_display.sh" ;;
     */lib/statusline_usage.sh) src="$src_root/lib/statusline_usage.sh" ;;
     */lib/jsonl_parser.pl) src="$src_root/lib/jsonl_parser.pl" ;;
+    */lib/anthropic_pricing.json) src="$src_root/lib/anthropic_pricing.json" ;;
     *)
         printf 'unexpected curl url: %s\n' "$url" >&2
         exit 99
