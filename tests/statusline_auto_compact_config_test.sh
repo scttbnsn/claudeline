@@ -108,7 +108,8 @@ input_json='{
 HOME="$home_dir" \
     bash "$repo_root/statusline.sh" <<< "$input_json" > /dev/null
 
-PATH="$shim_dir:$PATH" HOME="$home_dir" \
+# Pin NOW directly to bypass EPOCHSECONDS (Bash 5+ auto-sets it, ignoring date shims)
+PATH="$shim_dir:$PATH" HOME="$home_dir" NOW=1000000 \
     bash "$repo_root/statusline.sh" <<< "$input_json" | perl -pe 's/\e\[[0-9;]*m//g' > "$tmpdir/rendered.txt"
 
 second_line=$(sed -n '2p' "$tmpdir/rendered.txt")

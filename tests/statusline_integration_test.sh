@@ -83,7 +83,7 @@ input_json='{
   }
 }'
 
-PATH="$shim_dir:$PATH" HOME="$home_dir" \
+PATH="$shim_dir:$PATH" HOME="$home_dir" NOW=1000000 \
     bash "$repo_root/statusline.sh" <<< "$input_json" | perl -pe 's/\e\[[0-9;]*m//g' > "$tmpdir/rendered.txt"
 
 lines=()

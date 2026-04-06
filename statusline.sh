@@ -264,7 +264,7 @@ fi
 
 # Cache current timestamp (used multiple times - avoid repeated date calls).
 # EPOCHSECONDS is unavailable on Bash 3.2, so keep date as a compatibility fallback.
-NOW=${EPOCHSECONDS:-$(date +%s)}
+NOW=${NOW:-${EPOCHSECONDS:-$(date +%s)}}
 NOW_DIV_10=$((NOW / 10))
 
 read_git_status_info() {
