@@ -139,7 +139,7 @@ if [ -n "${CLAUDELINE_SEGMENTS:-}" ]; then
     _SEG_ALL=0
     _SEG_CONTEXT=0; _SEG_GIT=0; _SEG_LINES=0; _SEG_PACE=0
     _SEG_BURST=0; _SEG_DURATION=0; _SEG_CREDIT=0
-    _SEG_TOKENS=0; _SEG_METRIC=0; _SEG_MODEL=0
+    _SEG_TOKENS=0; _SEG_METRIC=0; _SEG_THROUGHPUT=0; _SEG_MODEL=0
     IFS=',' read -ra _segs <<< "$CLAUDELINE_SEGMENTS"
     for _s in "${_segs[@]}"; do
         case "${_s## }" in  # trim leading space
@@ -148,17 +148,18 @@ if [ -n "${CLAUDELINE_SEGMENTS:-}" ]; then
             lines)    _SEG_LINES=1 ;;
             pace)     _SEG_PACE=1 ;;
             burst)    _SEG_BURST=1 ;;
-            duration) _SEG_DURATION=1 ;;
-            credit)   _SEG_CREDIT=1 ;;
-            tokens)   _SEG_TOKENS=1 ;;
-            metric)   _SEG_METRIC=1 ;;
-            model)    _SEG_MODEL=1 ;;
+            duration)   _SEG_DURATION=1 ;;
+            credit)     _SEG_CREDIT=1 ;;
+            tokens)     _SEG_TOKENS=1 ;;
+            metric)     _SEG_METRIC=1 ;;
+            throughput) _SEG_THROUGHPUT=1 ;;
+            model)      _SEG_MODEL=1 ;;
         esac
     done
 else
     _SEG_CONTEXT=1; _SEG_GIT=1; _SEG_LINES=1; _SEG_PACE=1
     _SEG_BURST=1; _SEG_DURATION=1; _SEG_CREDIT=1
-    _SEG_TOKENS=1; _SEG_METRIC=1; _SEG_MODEL=1
+    _SEG_TOKENS=1; _SEG_METRIC=1; _SEG_THROUGHPUT=1; _SEG_MODEL=1
 fi
 
 seg_on() { [ "${_SEG_ALL}" -eq 1 ] || [ "${1:-0}" -eq 1 ]; }
@@ -197,6 +198,7 @@ if ! INPUT_FIELDS=$(printf '%s\n' "$input" | jq -r '[
         (.context_window.total_input_tokens // 0),
         (.context_window.total_output_tokens // 0),
         (.cost.total_duration_ms // 0),
+        (.cost.total_api_duration_ms // 0),
         (.cost.total_cost_usd // 0),
         ((.context_window.current_usage.input_tokens // 0) +
          (.context_window.current_usage.cache_creation_input_tokens // 0) +
@@ -208,11 +210,11 @@ if ! INPUT_FIELDS=$(printf '%s\n' "$input" | jq -r '[
         (.rate_limits.five_hour.resets_at // "_")
     ] | @tsv' 2>>"$STATUSLINE_DEBUG_LOG"); then
     debug_log "Failed to parse statusline input; using defaults"
-    INPUT_FIELDS=$'Claude\t\t0\t0\t0\t0\t0\t0\t0\t200000\t_\t_\t_\t_'
+    INPUT_FIELDS=$'Claude\t\t0\t0\t0\t0\t0\t0\t0\t0\t200000\t_\t_\t_\t_'
 fi
 
 IFS=$'\t' read -r MODEL CURRENT_DIR LINES_ADDED LINES_REMOVED \
-    TOTAL_INPUT TOTAL_OUTPUT DURATION_MS TOTAL_COST CURRENT_TOKENS CONTEXT_WINDOW_SIZE \
+    TOTAL_INPUT TOTAL_OUTPUT DURATION_MS API_DURATION_MS TOTAL_COST CURRENT_TOKENS CONTEXT_WINDOW_SIZE \
     WEEKLY_USAGE RESETS_AT BURST_USAGE BURST_RESETS <<< "$INPUT_FIELDS"
 
 normalize_scalar_var LINES_ADDED int 0 "lines added"
@@ -220,6 +222,7 @@ normalize_scalar_var LINES_REMOVED int 0 "lines removed"
 normalize_scalar_var TOTAL_INPUT int 0 "total input tokens"
 normalize_scalar_var TOTAL_OUTPUT int 0 "total output tokens"
 normalize_scalar_var DURATION_MS int 0 "duration ms"
+normalize_scalar_var API_DURATION_MS int 0 "api duration ms"
 normalize_scalar_var TOTAL_COST decimal 0 "total cost usd"
 normalize_scalar_var CURRENT_TOKENS int 0 "current tokens"
 normalize_scalar_var CONTEXT_WINDOW_SIZE int 200000 "context window size"
@@ -543,5 +546,10 @@ if seg_on "$_SEG_TOKENS"; then
     _append_seg LINE2 "${DIM}${CTX_PADDED}${RESET}"
 fi
 seg_on "$_SEG_METRIC" && _append_seg LINE2 "$METRIC_INFO"
+# Throughput: output tokens / API time (tok/s)
+if seg_on "$_SEG_THROUGHPUT" && [ "$API_DURATION_MS" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG" && [ "$TOTAL_OUTPUT" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
+    THROUGHPUT=$((TOTAL_OUTPUT * 1000 / API_DURATION_MS))
+    _append_seg LINE2 "${DIM}${THROUGHPUT} tok/s${RESET}"
+fi
 seg_on "$_SEG_MODEL" && _append_seg LINE2 "${DIM}${MODEL}${RESET}"
 echo -e "$LINE2"
