@@ -55,6 +55,24 @@ curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/insta
 Then restart Claude Code. That's it.
 
 <details>
+<summary>Optional: create a config file</summary>
+
+Create `~/.claude/claudeline.conf` to customize without env vars:
+
+```bash
+# ~/.claude/claudeline.conf
+theme=nord
+segments=context,git,pace,duration,tokens,throughput,model
+no_network=0
+```
+
+Env vars override config file values. All keys are optional.
+
+Available keys: `theme`, `segments`, `no_network`, `no_color`, `debug`, `debug_log`, `jsonl_cache_ttl`, `extra_usage_ttl`, `trend_window`, `trend_history_max_age`
+
+</details>
+
+<details>
 <summary>Manual installation</summary>
 
 1. Download the runtime files:

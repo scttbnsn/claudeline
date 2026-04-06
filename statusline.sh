@@ -6,6 +6,31 @@ set -euo pipefail
 
 input=$(cat)
 
+# Load config file — env vars take precedence over config values
+CLAUDELINE_CONF="${CLAUDELINE_CONF:-$HOME/.claude/claudeline.conf}"
+if [ -f "$CLAUDELINE_CONF" ]; then
+    while IFS='=' read -r _key _val || [ -n "$_key" ]; do
+        # Skip comments and blank lines
+        case "$_key" in '#'*|'') continue ;; esac
+        # Trim whitespace
+        _key="${_key## }"; _key="${_key%% }"
+        _val="${_val## }"; _val="${_val%% }"
+        # Map config keys to env vars (only set if not already defined)
+        case "$_key" in
+            theme)                [ -z "${CLAUDELINE_THEME:-}" ]            && CLAUDELINE_THEME="$_val" ;;
+            segments)             [ -z "${CLAUDELINE_SEGMENTS:-}" ]         && CLAUDELINE_SEGMENTS="$_val" ;;
+            no_network)           [ -z "${CLAUDELINE_NO_NETWORK:-}" ]       && CLAUDELINE_NO_NETWORK="$_val" ;;
+            debug)                [ -z "${CLAUDELINE_DEBUG:-}" ]            && CLAUDELINE_DEBUG="$_val" ;;
+            debug_log)            [ -z "${CLAUDELINE_DEBUG_LOG:-}" ]        && CLAUDELINE_DEBUG_LOG="$_val" ;;
+            no_color)             [ -z "${NO_COLOR:-}" ]                    && NO_COLOR="$_val" ;;
+            jsonl_cache_ttl)      [ -z "${JSONL_CACHE_TTL:-}" ]             && JSONL_CACHE_TTL="$_val" ;;
+            extra_usage_ttl)      [ -z "${EXTRA_USAGE_TTL:-}" ]             && EXTRA_USAGE_TTL="$_val" ;;
+            trend_window)         [ -z "${TREND_WINDOW:-}" ]                && TREND_WINDOW="$_val" ;;
+            trend_history_max_age) [ -z "${TREND_HISTORY_MAX_AGE:-}" ]      && TREND_HISTORY_MAX_AGE="$_val" ;;
+        esac
+    done < "$CLAUDELINE_CONF"
+fi
+
 # Optional debug logging for suppressed stderr paths.
 STATUSLINE_DEBUG_ENABLED=0
 case "${CLAUDELINE_DEBUG:-}" in
