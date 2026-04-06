@@ -17,9 +17,9 @@
 │    bar              + git status    changed  trend
 └─ context icon (✨🌱💭🧠⚡🔥🌡️🫠💀💾)
 
-    73.5K/168K  ·  🍕 3 joe's®  ·  44 tok/s  ·  Opus 4.6
+    73.5K/168K  ·  🍕 3 joe's®  ·  Opus 4.6  ·  ⚡44 tok/s
     └────┬────┘    └─────┬─────┘   └───┬───┘    └───┬───┘
-      context         rotating     throughput      model
+      context         rotating       model      throughput
       tokens          metric
 ```
 

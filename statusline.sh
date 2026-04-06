@@ -655,9 +655,9 @@ _L2_MODEL=""; seg_on "$_SEG_MODEL" && _L2_MODEL="${DIM}${MODEL}${RESET}"
 _L2_THROUGHPUT=""
 if seg_on "$_SEG_THROUGHPUT" && [ "$API_DURATION_MS" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG" && [ "$TOTAL_OUTPUT" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
     THROUGHPUT=$((TOTAL_OUTPUT * 1000 / API_DURATION_MS))
-    _L2_THROUGHPUT="${DIM}${THROUGHPUT} tok/s${RESET}"
+    _L2_THROUGHPUT="${DIM}⚡${THROUGHPUT} tok/s${RESET}"
 fi
 _L2_METRIC=""; seg_on "$_SEG_METRIC" && _L2_METRIC="$METRIC_INFO"
 
-# Priority order: tokens > model > throughput > metric
-printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_MODEL" "$_L2_THROUGHPUT" "$_L2_METRIC")"
+# Priority order: tokens > metric > model > throughput
+printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_METRIC" "$_L2_MODEL" "$_L2_THROUGHPUT")"
