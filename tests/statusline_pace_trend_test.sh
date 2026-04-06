@@ -49,21 +49,31 @@ run_trend_case() {
 assert_eq "<stable>→<reset>" "$(run_trend_case "" 10 500)" "get_trend_arrow is stable with a single sample"
 assert_eq $'500,10' "$(cat "$tmpdir/history")" "get_trend_arrow appends the first sample to history"
 
-run_trend_case_without_mktemp() {
-    local shim_dir="$tmpdir/no-mktemp"
+run_trend_case_with_blocked_predictable_tmp() {
+    local case_dir="$tmpdir/blocked-predictable"
+    local shim_dir="$case_dir/shim"
+    local CACHE_DIR="$case_dir/cache"
+    local USAGE_HISTORY="$case_dir/history"
+    local TREND_WINDOW=900
+    local PATH="$shim_dir:$orig_path"
 
-    mkdir -p "$shim_dir"
+    mkdir -p "$shim_dir" "$case_dir/cache" "$case_dir/history.tmp"
     cat > "$shim_dir/mktemp" <<'EOF'
 #!/usr/bin/env bash
-echo "FAIL: get_trend_arrow should not call mktemp" >&2
-exit 99
+set -euo pipefail
+path="${TEST_MKTEMP_PATH:?}"
+: > "$path"
+printf '%s\n' "$path"
 EOF
     chmod +x "$shim_dir/mktemp"
 
-    PATH="$shim_dir:$orig_path" run_trend_case "" 10 500
+    export TEST_MKTEMP_PATH="$case_dir/cache/trend-random"
+    printf '%s' "" > "$USAGE_HISTORY"
+    get_trend_arrow "10" 0 "500"
 }
 
-assert_eq "<stable>→<reset>" "$(run_trend_case_without_mktemp)" "get_trend_arrow avoids mktemp for history updates"
+assert_eq "<stable>→<reset>" "$(run_trend_case_with_blocked_predictable_tmp)" "get_trend_arrow avoids the predictable sibling temp path"
+assert_eq $'500,10' "$(cat "$tmpdir/blocked-predictable/history")" "get_trend_arrow still updates history when the predictable sibling path is blocked"
 
 assert_eq "<hot>↑<reset>" "$(run_trend_case $'100,10\n200,20\n' 50 500)" "get_trend_arrow detects hot usage growth"
 assert_eq "<warm>↗<reset>" "$(run_trend_case $'100,10\n200,10.11\n' 10.11 500)" "get_trend_arrow detects warm growth"

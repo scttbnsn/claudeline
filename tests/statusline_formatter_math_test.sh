@@ -46,15 +46,24 @@ assert_eq "1020B" "$(format_data 255)" "format_data stays in bytes below 1KB"
 assert_eq "1KB" "$(format_data 256)" "format_data enters KB at 1024 bytes"
 assert_eq "1MB" "$(format_data 262144)" "format_data enters MB at 1048576 bytes"
 
-assert_eq "17" "$(mul_div_floor 7 10 4)" "mul_div_floor truncates partial results"
-assert_eq "18" "$(mul_div_round 7 10 4)" "mul_div_round rounds half up"
-assert_eq "1" "$(format_tenths 10)" "format_tenths strips trailing .0"
-assert_eq "1.5" "$(format_tenths 15)" "format_tenths keeps tenths precision"
-assert_eq "1.234567" "$(scaled6_to_decimal 1234567)" "scaled6_to_decimal restores six decimal places"
-assert_eq "1.2345678901" "$(scaled10_to_decimal 12345678901)" "scaled10_to_decimal restores ten decimal places"
-assert_eq "0.5" "$(format_count_scaled6 500000)" "format_count_scaled6 keeps fractional values below one"
-assert_eq "1" "$(format_count_scaled6 1000000)" "format_count_scaled6 emits whole values at one"
-assert_eq "1.5K" "$(format_count_scaled6 1500000000)" "format_count_scaled6 enters the K tier"
+mul_div_floor 7 10 4
+assert_eq "17" "$REPLY" "mul_div_floor truncates partial results"
+mul_div_round 7 10 4
+assert_eq "18" "$REPLY" "mul_div_round rounds half up"
+format_tenths 10
+assert_eq "1" "$REPLY" "format_tenths strips trailing .0"
+format_tenths 15
+assert_eq "1.5" "$REPLY" "format_tenths keeps tenths precision"
+scaled6_to_decimal 1234567
+assert_eq "1.234567" "$REPLY" "scaled6_to_decimal restores six decimal places"
+scaled10_to_decimal 12345678901
+assert_eq "1.2345678901" "$REPLY" "scaled10_to_decimal restores ten decimal places"
+format_count_scaled6 500000
+assert_eq "0.5" "$REPLY" "format_count_scaled6 keeps fractional values below one"
+format_count_scaled6 1000000
+assert_eq "1" "$REPLY" "format_count_scaled6 emits whole values at one"
+format_count_scaled6 1500000000
+assert_eq "1.5K" "$REPLY" "format_count_scaled6 enters the K tier"
 
 assert_eq "🔌 3s phone-charging" "$(format_fun_power 1 0)" "format_fun_power handles tiny time-based values"
 assert_eq "🚗 6mi 4xe®" "$(format_fun_power 1000000 4)" "format_fun_power formats mile-based distance"

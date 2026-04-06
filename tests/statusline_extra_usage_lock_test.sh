@@ -66,4 +66,34 @@ sleep 0.2
     exit 1
 }
 
+rm -rf "$EXTRA_USAGE_LOCK"
+mkdir "$EXTRA_USAGE_LOCK"
+
+mtime_probe_state="$tmpdir/mtime-probe-state"
+printf '0\n' > "$mtime_probe_state"
+get_path_mtime_epoch() {
+    local count
+    count=$(cat "$mtime_probe_state")
+    count=$((count + 1))
+    printf '%s\n' "$count" > "$mtime_probe_state"
+    if [ "$count" -eq 1 ]; then
+        printf '100\n'
+    else
+        printf '190\n'
+    fi
+}
+
+if acquire_extra_usage_lock 200; then
+    echo "FAIL: stale lock recovery should abort if the lock changes during observation" >&2
+    exit 1
+fi
+[ -d "$EXTRA_USAGE_LOCK" ] || {
+    echo "FAIL: lock path should remain in place when stale recovery aborts" >&2
+    exit 1
+}
+[ "$(cat "$mtime_probe_state")" -eq 2 ] || {
+    echo "FAIL: stale lock recovery should re-check lock mtime before reclaiming" >&2
+    exit 1
+}
+
 printf 'ok\n'

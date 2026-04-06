@@ -102,7 +102,13 @@ export TEST_HEAD_MARKER="$tmpdir/head-called"
 export TEST_CAT_MARKER="$tmpdir/cat-called"
 rm -f "$TEST_HEAD_MARKER" "$TEST_CAT_MARKER"
 export PATH="$shim_dir:$orig_path"
-cached_summary=$(get_jsonl_totals 150 | tail -1)
+cached_summary=$(
+    emit_file_contents() {
+        echo "emit_file_contents should not run when transient JSONL cache is fresh" >&2
+        exit 96
+    }
+    get_jsonl_totals 150 | tail -1
+)
 assert_eq "$initial_summary" "$cached_summary" "fresh transient cache uses builtin reads instead of head/cat"
 [ ! -e "$TEST_HEAD_MARKER" ] || {
     echo "FAIL: get_jsonl_totals should not call head when transient cache is fresh" >&2

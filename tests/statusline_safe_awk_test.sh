@@ -25,7 +25,8 @@ assert_not_contains() {
     fi
 }
 
-assert_contains 'awk -v total_cost="$TOTAL_COST"' "$repo_root/statusline.sh" "statusline cost rounding should pass shell data via awk -v"
+assert_contains 'decimal_to_scaled "$TOTAL_COST" 2' "$repo_root/statusline.sh" "statusline cost rounding should use the shared decimal_to_scaled helper"
+assert_not_contains 'awk -v total_cost="$TOTAL_COST"' "$repo_root/statusline.sh" "statusline cost rounding should not fork awk for cost * 100"
 assert_not_contains 'awk "BEGIN{printf \"%.0f\", $TOTAL_COST * 100}"' "$repo_root/statusline.sh" "statusline should not interpolate TOTAL_COST directly into awk source"
 
 printf 'ok\n'

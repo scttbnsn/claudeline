@@ -16,6 +16,11 @@ assert_eq() {
     fi
 }
 
+run_cold_scan() {
+    local input=$1
+    printf '%s' "$input" | perl "$parser" cold-scan
+}
+
 parser="$repo_root/lib/jsonl_parser.pl"
 usage_lib="$repo_root/lib/statusline_usage.sh"
 
@@ -38,6 +43,10 @@ EOF
 
 cold_summary=$(cat "$jsonl_file" | perl "$parser" cold-scan)
 assert_eq "1000000 300000000 1000000 0 0 0" "$cold_summary" "cold-scan parser returns raw running sums"
+assert_eq "0 0 0 0 0 0" "$(run_cold_scan "")" "cold-scan returns zeros for empty input"
+assert_eq "0 0 0 0 0 0" "$(run_cold_scan $'garbage\nnot-json\n')" "cold-scan ignores garbage lines"
+assert_eq "15 10500 10 5 0 0" "$(run_cold_scan $'{"type":"message","model":"claude-sonnet-4","usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}\n{"type":"message","usage":{"input_tokens":7' )" "cold-scan ignores truncated JSON lines"
+assert_eq "20 23025 12 6 1 1" "$(run_cold_scan $'garbage\n{"type":"message","model":"claude-sonnet-4","usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}\n{"type":"message","usage":{"input_tokens":7\n{"type":"message","model":"claude-opus-4","usage":{"input_tokens":2,"output_tokens":1,"cache_creation_input_tokens":1,"cache_read_input_tokens":1}}\n')" "cold-scan counts only valid JSONL usage lines in mixed input"
 
 state_path="$tmpdir/state"
 initial_size=$(wc -c < "$jsonl_file" | tr -d ' ')
@@ -52,5 +61,34 @@ refresh_summary=$(printf '%s\0' "$jsonl_file" | perl "$parser" refresh-state "$s
 assert_eq "2000000 1800000000 1000000 1000000 0 0" "$refresh_summary" "refresh-state parser appends only new usage"
 assert_eq "200" "$(sed -n '1p' "$out_state")" "refresh-state writes the new timestamp"
 assert_eq "$refresh_summary" "$(sed -n '2p' "$out_state")" "refresh-state writes the new totals line"
+
+deleted_file="$tmpdir/deleted.jsonl"
+cat > "$deleted_file" <<'EOF'
+{"type":"message","model":"claude-sonnet-4","usage":{"input_tokens":3,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}
+EOF
+deleted_size=$(wc -c < "$deleted_file" | tr -d ' ')
+deleted_summary=$(cat "$deleted_file" | perl "$parser" cold-scan)
+state_with_deleted="$tmpdir/state-with-deleted"
+printf '150\n2000003 1800000900 1000003 1000000 0 0\n100\t%s\t1000000\t300000000\t1000000\t0\t0\t0\t%s\n120\t%s\t3\t900\t3\t0\t0\t0\t%s\n' "$initial_size" "$jsonl_file" "$deleted_size" "$deleted_file" > "$state_with_deleted"
+rm -f "$deleted_file"
+deleted_out="$tmpdir/deleted-out"
+deleted_refresh=$(printf '%s\0' "$jsonl_file" | perl "$parser" refresh-state "$state_with_deleted" 250 "$deleted_out")
+assert_eq "2000000 1800000000 1000000 1000000 0 0" "$deleted_refresh" "refresh-state drops deleted files from totals"
+assert_eq "1" "$(tail -n +3 "$deleted_out" | wc -l | tr -d ' ')" "refresh-state rewrites state without deleted file records"
+
+shrunk_file="$tmpdir/shrunk.jsonl"
+cat > "$shrunk_file" <<'EOF'
+{"type":"message","model":"claude-sonnet-4","usage":{"input_tokens":4,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}
+{"type":"message","model":"claude-sonnet-4","usage":{"input_tokens":2,"output_tokens":2,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}
+EOF
+shrunk_size=$(wc -c < "$shrunk_file" | tr -d ' ')
+shrunk_state="$tmpdir/shrunk-state"
+printf '100\n10 13200 6 3 0 0\n100\t%s\t10\t13200\t6\t3\t0\t0\t%s\n' "$shrunk_size" "$shrunk_file" > "$shrunk_state"
+cat > "$shrunk_file" <<'EOF'
+{"type":"message","model":"claude-sonnet-4","usage":{"input_tokens":1,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}
+EOF
+shrunk_out="$tmpdir/shrunk-out"
+shrunk_refresh=$(printf '%s\0' "$shrunk_file" | perl "$parser" refresh-state "$shrunk_state" 300 "$shrunk_out")
+assert_eq "2 1800 1 1 0 0" "$shrunk_refresh" "refresh-state reparses files that shrink"
 
 printf 'ok\n'
