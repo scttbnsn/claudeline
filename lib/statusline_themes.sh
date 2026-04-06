@@ -70,11 +70,13 @@ _apply_theme_values() {
     local values_name=$1
     local index var_name value value_count=0
 
-    eval "value_count=\${#${values_name}[@]}"  # shellcheck disable=SC2086
+    # shellcheck disable=SC2086
+    eval "value_count=\${#${values_name}[@]}"
     [ "$value_count" -eq "${#THEME_COLOR_VARS[@]}" ] || return 1
 
     for index in "${!THEME_COLOR_VARS[@]}"; do
         var_name=${THEME_COLOR_VARS[$index]}
+        # shellcheck disable=SC2086
         eval "value=\${${values_name}[$index]}"
         printf -v "$var_name" '%s' "$value"
     done
