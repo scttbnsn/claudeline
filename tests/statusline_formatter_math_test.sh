@@ -70,7 +70,7 @@ assert_eq "🚗 6mi 4xe®" "$(format_fun_power 1000000 4)" "format_fun_power for
 assert_eq "✈️ 427.6ft a320neo®" "$(format_fun_power 1000000 5)" "format_fun_power formats sub-mile jet distance"
 assert_eq "🪨 4.2 lbs coal" "$(format_fun_power 1000000 6)" "format_fun_power formats coal mass below one ton"
 assert_eq "🪨 2.1 tons coal" "$(format_fun_power 1000000000 6)" "format_fun_power formats coal mass above one ton"
-assert_eq "0m" "$(format_duration 59000)" "format_duration rounds down sub-minute values"
+assert_eq "59s" "$(format_duration 59000)" "format_duration shows seconds for sub-minute values"
 assert_eq "1m" "$(format_duration 61000)" "format_duration formats single-minute values"
 assert_eq "1h5m" "$(format_duration 3900000)" "format_duration formats hour-plus values"
 

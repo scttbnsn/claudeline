@@ -300,7 +300,7 @@ Session displays phone through a320neo. Coal and reactor are all-time only.
 
 <h2 align="center" id="all-time-tracking">🏆 All-Time Tracking</h2>
 
-Cumulative usage across all sessions by scanning JSONL files in `~/.claude/projects/`.
+Cumulative usage across all sessions by scanning JSONL files in `~/.claude/projects/` and `~/.config/claude/projects/`.
 
 The 🏆 trophy indicates all-time totals. The 8-cycle rotation (10s each) shows:
 - **Cycles 0-2, 4-6:** Session metrics (no trophy)
@@ -384,7 +384,9 @@ The API call runs in a **non-blocking background subshell** so it never stalls t
 | `CLAUDELINE_DEBUG=1` | Enables debug logging to `$TMPDIR/claudeline-statusline-debug.log` |
 | `CLAUDELINE_DEBUG_LOG=/path` | Custom debug log path (requires `CLAUDELINE_DEBUG=1`) |
 | `JSONL_CACHE_TTL=300` | JSONL cache lifetime in seconds (default: 300) |
+| `EXTRA_USAGE_TTL=600` | Extra usage / credit cache lifetime in seconds (default: 600) |
 | `TREND_WINDOW=900` | Trend arrow sample window in seconds (default: 900) |
+| `TREND_HISTORY_MAX_AGE=86400` | Max age for trend history entries in seconds (default: 86400) |
 
 **Local data stored** in `~/.claude-usage.d/` (created with `chmod 700`):
 
@@ -394,7 +396,8 @@ The API call runs in a **non-blocking background subshell** so it never stalls t
 | `.jsonl-state` | Per-file JSONL scan state for incremental updates |
 | `.usage-history` | Rolling 24h usage samples for trend arrows |
 | `.extra-usage-cache` | Cached overage/credit data |
-| `.claude-config-cache` | Cached auto-compact setting |
+| `.extra-usage-fetch.lock/` | Lock directory to prevent concurrent API calls |
+| `.claude-config-auto-compact` | Cached auto-compact setting |
 
 <hr>
 
