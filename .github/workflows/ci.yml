@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify dependencies
+        run: |
+          jq --version
+          git --version
+          perl --version
+
+      - name: Syntax check shell scripts
+        run: |
+          bash -n statusline.sh
+          bash -n lib/statusline_display.sh
+          bash -n lib/statusline_usage.sh
+
+      - name: Syntax check Perl script
+        run: perl -c lib/jsonl_parser.pl
+
+      - name: Run tests
+        run: |
+          for f in tests/*.sh; do
+            echo "--- Running $f ---"
+            bash "$f" || exit 1
+          done
