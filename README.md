@@ -65,7 +65,7 @@ Then restart Claude Code. That's it.
    curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/lib/statusline_usage.sh -o ~/.claude/lib/statusline_usage.sh
    curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/lib/jsonl_parser.pl -o ~/.claude/lib/jsonl_parser.pl
    curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/lib/anthropic_pricing.json -o ~/.claude/lib/anthropic_pricing.json
-   chmod +x ~/.claude/statusline.sh
+   chmod 700 ~/.claude/statusline.sh
    ```
 
 2. Add to your `~/.claude/settings.json`:
@@ -382,6 +382,9 @@ The API call runs in a **non-blocking background subshell** so it never stalls t
 |----------|--------|
 | `CLAUDELINE_NO_NETWORK=1` | Disables all network access — the API call is skipped entirely |
 | `CLAUDELINE_DEBUG=1` | Enables debug logging to `$TMPDIR/claudeline-statusline-debug.log` |
+| `CLAUDELINE_DEBUG_LOG=/path` | Custom debug log path (requires `CLAUDELINE_DEBUG=1`) |
+| `JSONL_CACHE_TTL=300` | JSONL cache lifetime in seconds (default: 300) |
+| `TREND_WINDOW=900` | Trend arrow sample window in seconds (default: 900) |
 
 **Local data stored** in `~/.claude-usage.d/` (created with `chmod 700`):
 
