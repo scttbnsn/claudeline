@@ -40,14 +40,11 @@ exit 0
 EOF
 chmod +x "$shim_dir/git"
 
-# Build a PATH that excludes the directory containing perl.
-# This works on both macOS (/usr/bin/perl) and Ubuntu (/usr/bin/perl via /bin -> /usr/bin).
-perl_path=$(command -v perl 2>/dev/null || true)
-perl_dir=$(dirname "$perl_path" 2>/dev/null || true)
+# Build a PATH that excludes ALL directories containing a perl binary.
 clean_path="$shim_dir"
 IFS=: read -ra path_dirs <<< "$PATH"
 for d in "${path_dirs[@]}"; do
-    [ "$d" = "$perl_dir" ] && continue
+    [ -x "$d/perl" ] && continue
     clean_path="$clean_path:$d"
 done
 
