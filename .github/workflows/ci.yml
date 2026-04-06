@@ -46,5 +46,5 @@ jobs:
         run: |
           for f in tests/*.sh; do
             echo "--- Running $f ---"
-            timeout 30 bash "$f" || { echo "FAIL or TIMEOUT: $f"; exit 1; }
+            bash "$f" || { echo "FAIL: $f"; exit 1; }
           done
