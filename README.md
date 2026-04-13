@@ -368,9 +368,9 @@ The 🏆 trophy indicates all-time totals. The 8-cycle rotation (10s each) shows
 | Scenario | Time |
 |----------|------|
 | Fully warm (typical) | ~180ms |
-| Warm state, expired cache | ~195ms |
+| Stale cache (async refresh in background) | ~180ms |
 | Best case | ~175ms |
-| Cold JSONL scan (first run) | ~6s (10K+ files, 1.2GB) |
+| First-ever run, no state file | ~6s (10K+ files, 1.2GB) |
 
 **Cost breakdown** (warm, ~180ms total):
 
@@ -383,7 +383,7 @@ The 🏆 trophy indicates all-time totals. The 8-cycle rotation (10s each) shows
 | Formatting | ~22ms | 1 awk + bash math |
 | Source libs + rest | ~27ms | bash |
 
-Rate limit data comes directly from the Claude Code status line JSON — zero network calls during normal operation. Cold JSONL scans use a fast streaming pipeline (`xargs cat | perl`) for immediate results, then build per-file state lazily so subsequent scans only process appended bytes.
+Rate limit data comes directly from the Claude Code status line JSON — zero network calls during normal operation. The first-ever run uses a fast streaming pipeline (`xargs cat | perl`) to build initial state, then subsequent refreshes only process appended bytes per file. Once state exists, stale caches are served immediately and the refresh runs in a **disowned background subshell** (guarded by `.refresh.lock.d`) so the render path never blocks on a rescan — even on a multi-gigabyte transcript backlog.
 
 <hr>
 
@@ -416,8 +416,9 @@ The API call runs in a **non-blocking background subshell** so it never stalls t
 
 | File | Purpose |
 |------|---------|
-| `.jsonl-cache` | Cached all-time token/cost totals (5-min TTL) |
-| `.jsonl-state` | Per-file JSONL scan state for incremental updates |
+| `.jsonl-cache` | Cached all-time token/cost totals (5-min TTL; stale values are served immediately while a background refresh runs) |
+| `.jsonl-state` | Per-file JSONL scan state for incremental refreshes |
+| `.refresh.lock.d/` | Lock directory to prevent concurrent background JSONL refreshes |
 | `.usage-history` | Rolling 24h usage samples for trend arrows |
 | `.extra-usage-cache` | Cached overage/credit data |
 | `.extra-usage-fetch.lock/` | Lock directory to prevent concurrent API calls |
