@@ -13,6 +13,9 @@ export CACHE_DIR="$cache_dir"
 export JSONL_CACHE="$CACHE_DIR/.jsonl-cache"
 export JSONL_STATE="$CACHE_DIR/.jsonl-state"
 export STATUSLINE_DEBUG_LOG=/dev/null
+# Force sync refresh so stale-cache assertions see the updated summary
+# without needing to wait for a detached background refresh.
+export STATUSLINE_REFRESH_BLOCKING=1
 
 debug_log() { :; }
 

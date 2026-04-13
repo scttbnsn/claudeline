@@ -110,12 +110,29 @@ restore_jsonl_cache_from_state() {
     write_jsonl_cache "$now" "$summary"
 }
 
+# Collect transcript search roots that actually exist. `find` errors out with
+# nonzero exit on a missing starting path, which under `set -o pipefail`
+# fails the whole pipeline — so we filter to existing dirs first.
+# Populates the caller-supplied array via nameref-style eval (bash 3.2 compat).
+collect_jsonl_search_roots() {
+    JSONL_SEARCH_ROOTS=()
+    [ -d "$HOME/.claude/projects" ] && JSONL_SEARCH_ROOTS+=("$HOME/.claude/projects")
+    [ -d "$HOME/.config/claude/projects" ] && JSONL_SEARCH_ROOTS+=("$HOME/.config/claude/projects")
+    [ "${#JSONL_SEARCH_ROOTS[@]}" -gt 0 ]
+}
+
 # Fast streaming scan for cold start (no per-file state, just global totals).
 # Uses xargs cat pipeline (~2-3s) instead of per-file opens (~8-40s on 10K+ files).
 cold_jsonl_scan() {
     local now=$1
     local summary
-    summary=$(find "$HOME/.claude/projects" "$HOME/.config/claude/projects" \
+
+    collect_jsonl_search_roots || {
+        debug_log "No JSONL search roots found for cold scan"
+        return 1
+    }
+
+    summary=$(find "${JSONL_SEARCH_ROOTS[@]}" \
         -name "*.jsonl" -type f -not -type l -print0 2>>"$STATUSLINE_DEBUG_LOG" \
         | xargs -0 cat 2>/dev/null | perl "$STATUSLINE_JSONL_PARSER" cold-scan \
         2>>"$STATUSLINE_DEBUG_LOG") || return 1
@@ -124,6 +141,14 @@ cold_jsonl_scan() {
     write_jsonl_cache "$now" "$summary"
     # Write minimal state (totals only, no per-file records) so next refresh builds full state
     printf '%s\n%s\n' "$now" "$summary" > "$JSONL_STATE" 2>>"$STATUSLINE_DEBUG_LOG"
+}
+
+# Sweep leaked refresh tempfiles (>1h old). Defensive cleanup in case a prior
+# refresh was SIGKILL'd before its trap ran — keeps CACHE_DIR from accumulating
+# thousands of zero-byte files that balloon directory readdir cost.
+sweep_stale_refresh_tempfiles() {
+    find "$CACHE_DIR" -maxdepth 1 -name '.jsonl-state-*' -type f -mmin +60 \
+        -delete 2>>"$STATUSLINE_DEBUG_LOG" || true
 }
 
 refresh_jsonl_state() {
@@ -144,25 +169,77 @@ refresh_jsonl_state() {
         debug_log "Building per-file JSONL state (one-time)"
     fi
 
-    local tmp_state summary
-    tmp_state=$(mktemp "${CACHE_DIR}/.jsonl-state-XXXXXX") || return 1
+    sweep_stale_refresh_tempfiles
 
-    summary=$(find "$HOME/.claude/projects" "$HOME/.config/claude/projects" \
-        -name "*.jsonl" -type f -not -type l -print0 2>>"$STATUSLINE_DEBUG_LOG" \
-        | perl "$STATUSLINE_JSONL_PARSER" refresh-state "$JSONL_STATE" "$now" "$tmp_state" \
-        2>>"$STATUSLINE_DEBUG_LOG") || {
-        debug_log "Failed to refresh JSONL state from project logs; falling back to prior state if available"
-        rm -f "$tmp_state"
+    collect_jsonl_search_roots || {
+        debug_log "No JSONL search roots found for refresh"
         return 1
     }
 
-    mv "$tmp_state" "$JSONL_STATE" 2>>"$STATUSLINE_DEBUG_LOG" || {
-        debug_log "Failed to atomically update $JSONL_STATE"
-        rm -f "$tmp_state"
+    # Run the heavy work in a subshell with an EXIT trap so the tempfile is
+    # always cleaned up — even on SIGPIPE, SIGKILL of parent, or unexpected
+    # abort. The prior version only cleaned up on known-error branches, which
+    # leaked tempfiles under concurrent/interrupted runs.
+    local summary
+    summary=$(
+        tmp_state=$(mktemp "${CACHE_DIR}/.jsonl-state-XXXXXX") || exit 1
+        # shellcheck disable=SC2064  # expand $tmp_state at trap setup, not signal time
+        trap "rm -f '$tmp_state' 2>/dev/null" EXIT INT TERM
+
+        s=$(find "${JSONL_SEARCH_ROOTS[@]}" \
+            -name "*.jsonl" -type f -not -type l -print0 2>>"$STATUSLINE_DEBUG_LOG" \
+            | perl "$STATUSLINE_JSONL_PARSER" refresh-state "$JSONL_STATE" "$now" "$tmp_state" \
+            2>>"$STATUSLINE_DEBUG_LOG") || exit 1
+
+        mv "$tmp_state" "$JSONL_STATE" 2>>"$STATUSLINE_DEBUG_LOG" || exit 1
+        printf '%s' "$s"
+    ) || {
+        debug_log "Failed to refresh JSONL state from project logs; falling back to prior state if available"
         return 1
     }
 
     write_jsonl_cache "$now" "${summary:-0 0 0 0 0 0}"
+}
+
+# Fire a refresh in the background, disowned from the statusline process, so
+# the render path never waits on a full rescan. A lockdir prevents multiple
+# concurrent refreshes (a full rescan can take minutes on a large transcript
+# backlog — we only need one in flight). STATUSLINE_REFRESH_BLOCKING=1 forces
+# synchronous refresh for test determinism.
+refresh_jsonl_state_async() {
+    local now=$1
+
+    if [ "${STATUSLINE_REFRESH_BLOCKING:-0}" = "1" ]; then
+        refresh_jsonl_state "$now"
+        return $?
+    fi
+
+    local lock_dir="${CACHE_DIR}/.refresh.lock.d"
+
+    # Stale-lock cleanup: if a prior run was SIGKILL'd, its lockdir may linger.
+    # Consider >10 min old as dead and reclaim.
+    if [ -d "$lock_dir" ]; then
+        local stale
+        stale=$(find "$lock_dir" -maxdepth 0 -mmin +10 -print 2>/dev/null)
+        if [ -n "$stale" ]; then
+            debug_log "Removing stale refresh lock $lock_dir"
+            rmdir "$lock_dir" 2>/dev/null || true
+        fi
+    fi
+
+    # Atomic try-lock: mkdir fails cleanly if another refresh is running.
+    mkdir "$lock_dir" 2>/dev/null || {
+        debug_log "Background JSONL refresh already in progress; skipping"
+        return 0
+    }
+
+    (
+        # shellcheck disable=SC2064
+        trap "rmdir '$lock_dir' 2>/dev/null" EXIT INT TERM
+        refresh_jsonl_state "$now" >/dev/null 2>&1 || true
+    ) </dev/null >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+    return 0
 }
 
 get_jsonl_totals() {
@@ -187,7 +264,20 @@ get_jsonl_totals() {
         return
     fi
 
-    # If the transient cache file is gone but persistent state is fresh, rebuild from it.
+    local blocking=${STATUSLINE_REFRESH_BLOCKING:-0}
+
+    # Stale cache exists: in async mode, serve stale immediately so the
+    # statusline never blocks on a full rescan, then refresh in the
+    # background so the next render is fresh. In blocking mode (tests),
+    # refresh first so the caller observes the updated summary.
+    if [ -f "$JSONL_CACHE" ] && [ "$blocking" != "1" ]; then
+        emit_two_line_file "$JSONL_CACHE"
+        refresh_jsonl_state_async "$now"
+        return
+    fi
+
+    # No fresh transient cache, but persistent state exists: rebuild cache
+    # from state (cheap), then serve + async-refresh.
     if [ -f "$JSONL_STATE" ]; then
         local state_time
         read -r state_time < "$JSONL_STATE" 2>>"$STATUSLINE_DEBUG_LOG" || state_time=0
@@ -203,6 +293,13 @@ get_jsonl_totals() {
         return
     fi
 
+    if [ "$blocking" != "1" ] && [ -f "$JSONL_STATE" ] && restore_jsonl_cache_from_state "$now"; then
+        emit_two_line_file "$JSONL_CACHE"
+        refresh_jsonl_state_async "$now"
+        return
+    fi
+
+    # Blocking path (or truly first run): refresh synchronously.
     if refresh_jsonl_state "$now"; then
         emit_two_line_file "$JSONL_CACHE"
         return
