@@ -76,6 +76,40 @@ run_wow_file() {
     printf '%s\n' "$REPLY"
 }
 
+run_wow_with_window() {
+    local path=$1
+    local usage=$2
+    local now=$3
+    local window=$4
+    USAGE_HISTORY=$path
+    WEEK_OVER_WEEK_WINDOW=$window
+    get_week_over_week_indicator "$usage" "$now"
+    printf '%s\n' "$REPLY"
+}
+
+run_wow_missing_history() {
+    local usage=$1
+    local now=$2
+    USAGE_HISTORY="$tmpdir/does-not-exist-$RANDOM"
+    rm -f "$USAGE_HISTORY"
+    get_week_over_week_indicator "$usage" "$now"
+    printf '%s\n' "$REPLY"
+}
+
+# --- rate formatting -----------------------------------------------------
+
+formatted=""
+wow_format_rate_milli 149 formatted
+assert_eq "0.1%/h" "$formatted" "rate formatter rounds values below the half-tenth down"
+
+formatted=""
+wow_format_rate_milli 150 formatted
+assert_eq "0.2%/h" "$formatted" "rate formatter rounds half-tenths up"
+
+formatted=""
+wow_format_rate_milli 950 formatted
+assert_eq "1.0%/h" "$formatted" "rate formatter carries rounded tenths into the whole part"
+
 # --- sentinel / empty input ----------------------------------------------
 
 assert_eq "" "$(run_wow "" "_" "$NOW")" \
@@ -83,6 +117,9 @@ assert_eq "" "$(run_wow "" "_" "$NOW")" \
 
 assert_eq "" "$(run_wow "" "10" "$NOW")" \
     "empty history renders empty on delta frame"
+
+assert_eq "" "$(run_wow_missing_history "10" "$NOW")" \
+    "missing USAGE_HISTORY renders empty on delta frame"
 
 # --- delta frame (cycle 0..6) --------------------------------------------
 # NOW=2000000, (2000000/10)%10 = 0 → delta frame
@@ -98,6 +135,19 @@ make_history 6.4 8 10 12 "$hist"
 # current: (12-10)/2 = 1.0, prior: (8-6.4)/2 = 0.8, delta +0.2 → warm
 assert_eq "<warm>↗ +0.2%/h<reset>" "$(run_wow_file "$hist" 12 "$NOW")" \
     "warm delta (+0.2%/h) renders ↗"
+
+hist="$tmpdir/corrupt_rows"
+{
+    printf 'bad-row\n'
+    printf '%s,%s\n' "$((NOW - WEEK - W))" "6.4"
+    printf '%s,%s\n' "$((NOW - WEEK))" "8"
+    printf '%s,%s\n' "$((NOW - W))" "10"
+    printf '%s,%s\n' "$NOW" "12"
+    printf '%s,%s\n' "$((NOW - W + 1))" "not-a-number"
+    printf ',12\n'
+} > "$hist"
+assert_eq "<warm>↗ +0.2%/h<reset>" "$(run_wow_file "$hist" 12 "$NOW")" \
+    "corrupted rows are ignored when valid anchors exist"
 
 hist="$tmpdir/hot"
 make_history 5 6 10 13 "$hist"
@@ -123,7 +173,7 @@ assert_eq "<cold>↓ −1.0%/h<reset>" "$(run_wow_file "$hist" 6 "$NOW")" \
 hist="$tmpdir/warm_edge"
 make_history 0 0 0 0.30 "$hist"
 # current: (0.30-0)/2 = 0.15, prior: 0, delta +0.15
-assert_eq "<warm>↗ +0.1%/h<reset>" "$(run_wow_file "$hist" 0.30 "$NOW")" \
+assert_eq "<warm>↗ +0.2%/h<reset>" "$(run_wow_file "$hist" 0.30 "$NOW")" \
     "delta at warm boundary (+0.15) classifies as warm"
 
 # stable upper boundary: delta = +0.14 → stable
@@ -144,6 +194,9 @@ hist="$tmpdir/raw"
 # current: (10-8)/2 = 1.0 %/h
 assert_eq "<dim>1.0%/h<reset>" "$(run_wow_file "$hist" 10 "$NOW_RAW")" \
     "raw-rate frame shows current rate on cycle 7"
+
+assert_eq "" "$(run_wow_missing_history "10" "$NOW_RAW")" \
+    "missing USAGE_HISTORY renders empty on raw-rate frames"
 
 # --- reset straddle -------------------------------------------------------
 
@@ -181,6 +234,28 @@ hist="$tmpdir/tol_miss"
 assert_eq "" "$(run_wow_file "$hist" 10 "$NOW")" \
     "prior samples beyond tolerance render empty"
 
+# Recent-side sample beyond the raw-frame tolerance window → empty
+hist="$tmpdir/raw_tol_miss"
+{
+    printf '%s,%s\n' "$((NOW_RAW - W - 2000))" "8"
+    printf '%s,%s\n' "$NOW_RAW" "10"
+} > "$hist"
+assert_eq "" "$(run_wow_file "$hist" 10 "$NOW_RAW")" \
+    "raw frame renders empty when the recent anchor misses tolerance"
+
+# --- invalid window ------------------------------------------------------
+
+hist="$tmpdir/zero_window"
+make_history 6.4 8 10 12 "$hist"
+zero_window_err="$tmpdir/zero_window.err"
+assert_eq "" "$(run_wow_with_window "$hist" 12 "$NOW" 0 2>"$zero_window_err")" \
+    "zero week-over-week window renders empty instead of crashing"
+if [ -s "$zero_window_err" ]; then
+    printf 'FAIL: zero week-over-week window should not emit stderr\n' >&2
+    cat "$zero_window_err" >&2
+    exit 1
+fi
+
 # --- get_trend_arrow preserves pre-week samples --------------------------
 
 # Feed a history with a pre-week sample; after calling get_trend_arrow,
@@ -210,5 +285,16 @@ if ! grep -q "^${NOW},10$" "$hist"; then
     cat "$hist" >&2
     exit 1
 fi
+
+# --- get_week_over_week_indicator reuses get_trend_arrow cache -----------
+
+hist="$tmpdir/cached_anchors"
+make_history 6.4 8 10 12 "$hist"
+USAGE_HISTORY="$hist"
+get_trend_arrow "12" 0 "$NOW"
+rm -f "$hist"
+get_week_over_week_indicator "12" "$NOW"
+assert_eq "<warm>↗ +0.2%/h<reset>" "$REPLY" \
+    "week-over-week indicator reuses cached anchors from get_trend_arrow"
 
 printf 'ok\n'

@@ -11,6 +11,12 @@ TREND_HISTORY_MAX_AGE=${TREND_HISTORY_MAX_AGE:-$((8 * SECONDS_PER_DAY))}
 # matched rate one week ago. 2h is twitchy enough to react to a setup change
 # within ~1h while staying above idle-period noise.
 WEEK_OVER_WEEK_WINDOW=${WEEK_OVER_WEEK_WINDOW:-7200}
+# Extra slack (seconds) around the prior-week fine-anchor band so 10-minute
+# buckets still line up when renders drift or the sampling cadence slips.
+WEEK_OVER_WEEK_FINE_ANCHOR_MARGIN=${WEEK_OVER_WEEK_FINE_ANCHOR_MARGIN:-1800}
+WOW_DISTANCE_SENTINEL=${WOW_DISTANCE_SENTINEL:-2147483647}
+WOW_DELTA_WARM_MILLI=${WOW_DELTA_WARM_MILLI:-150}
+WOW_DELTA_HOT_MILLI=${WOW_DELTA_HOT_MILLI:-500}
 STATUSLINE_USAGE_DIR=$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 STATUSLINE_JSONL_PARSER=${STATUSLINE_JSONL_PARSER:-$STATUSLINE_USAGE_DIR/jsonl_parser.pl}
 STATUSLINE_STAT_MTIME_FLAG=${STATUSLINE_STAT_MTIME_FLAG:-}
@@ -579,6 +585,117 @@ trend_usage_to_milli_pct() {
     printf -v "$out_var" '%s' "$scaled_usage"
 }
 
+STATUSLINE_WOW_CACHE_KEY=""
+STATUSLINE_WOW_CACHE_TARGET_B=0
+STATUSLINE_WOW_CACHE_TARGET_C=0
+STATUSLINE_WOW_CACHE_TARGET_D=0
+STATUSLINE_WOW_CACHE_BEST_B=$WOW_DISTANCE_SENTINEL
+STATUSLINE_WOW_CACHE_BEST_C=$WOW_DISTANCE_SENTINEL
+STATUSLINE_WOW_CACHE_BEST_D=$WOW_DISTANCE_SENTINEL
+STATUSLINE_WOW_CACHE_U_B=""
+STATUSLINE_WOW_CACHE_U_C=""
+STATUSLINE_WOW_CACHE_U_D=""
+
+wow_init_anchor_cache() {
+    local history_path=$1
+    local now=$2
+    local wow_window=$3
+
+    STATUSLINE_WOW_CACHE_KEY="${history_path}|${now}|${wow_window}|${SECONDS_PER_WEEK}"
+    STATUSLINE_WOW_CACHE_TARGET_B=$((now - wow_window))
+    STATUSLINE_WOW_CACHE_TARGET_C=$((now - SECONDS_PER_WEEK))
+    STATUSLINE_WOW_CACHE_TARGET_D=$((now - SECONDS_PER_WEEK - wow_window))
+    STATUSLINE_WOW_CACHE_BEST_B=$WOW_DISTANCE_SENTINEL
+    STATUSLINE_WOW_CACHE_BEST_C=$WOW_DISTANCE_SENTINEL
+    STATUSLINE_WOW_CACHE_BEST_D=$WOW_DISTANCE_SENTINEL
+    STATUSLINE_WOW_CACHE_U_B=""
+    STATUSLINE_WOW_CACHE_U_C=""
+    STATUSLINE_WOW_CACHE_U_D=""
+}
+
+wow_anchor_cache_matches() {
+    local history_path=$1
+    local now=$2
+    local wow_window=$3
+
+    [ "${STATUSLINE_WOW_CACHE_KEY:-}" = "${history_path}|${now}|${wow_window}|${SECONDS_PER_WEEK}" ]
+}
+
+wow_update_best() {
+    local target=$1
+    local best_var=$2
+    local usage_var=$3
+    local sample_time=$4
+    local sample_milli=$5
+    local dist=0
+    local current_best=${!best_var}
+
+    if [ "$sample_time" -ge "$target" ]; then
+        dist=$((sample_time - target))
+    else
+        dist=$((target - sample_time))
+    fi
+
+    if [ "$dist" -lt "$current_best" ]; then
+        printf -v "$best_var" '%s' "$dist"
+        printf -v "$usage_var" '%s' "$sample_milli"
+    fi
+}
+
+wow_update_anchor_cache() {
+    local sample_time=$1
+    local sample_usage=$2
+    local sample_milli=""
+
+    [ -n "${STATUSLINE_WOW_CACHE_KEY:-}" ] || return 0
+    trend_usage_to_milli_pct "$sample_usage" sample_milli || return 0
+
+    wow_update_best "$STATUSLINE_WOW_CACHE_TARGET_B" STATUSLINE_WOW_CACHE_BEST_B STATUSLINE_WOW_CACHE_U_B "$sample_time" "$sample_milli"
+    wow_update_best "$STATUSLINE_WOW_CACHE_TARGET_C" STATUSLINE_WOW_CACHE_BEST_C STATUSLINE_WOW_CACHE_U_C "$sample_time" "$sample_milli"
+    wow_update_best "$STATUSLINE_WOW_CACHE_TARGET_D" STATUSLINE_WOW_CACHE_BEST_D STATUSLINE_WOW_CACHE_U_D "$sample_time" "$sample_milli"
+}
+
+wow_prime_anchor_cache_from_history() {
+    local history_path=$1
+    local now=$2
+    local wow_window=$3
+    local sample_time sample_usage
+
+    wow_init_anchor_cache "$history_path" "$now" "$wow_window"
+    if [ ! -f "$history_path" ]; then
+        return
+    fi
+
+    while IFS=, read -r sample_time sample_usage || [ -n "$sample_time" ]; do
+        [ -n "$sample_time" ] || continue
+        [[ "$sample_time" =~ ^[0-9]+$ ]] || continue
+        if [ "$sample_time" -gt "$now" ]; then
+            continue
+        fi
+        [ -n "${sample_usage:-}" ] || continue
+        [[ "$sample_usage" == .* ]] && sample_usage="0$sample_usage"
+        wow_update_anchor_cache "$sample_time" "$sample_usage"
+    done < "$history_path"
+}
+
+velocity_arrow_style() {
+    local arrow_code=$1
+    local char_var=$2
+    local color_var=$3
+    local selected_char="→"
+    local selected_color="$VEL_STABLE"
+
+    case "$arrow_code" in
+        hot)  selected_char="↑"; selected_color="$VEL_HOT" ;;
+        warm) selected_char="↗"; selected_color="$VEL_WARM" ;;
+        cold) selected_char="↓"; selected_color="$VEL_COLD" ;;
+        cool) selected_char="↘"; selected_color="$VEL_COOL" ;;
+    esac
+
+    printf -v "$char_var" '%s' "$selected_char"
+    printf -v "$color_var" '%s' "$selected_color"
+}
+
 get_trend_arrow() {
     local current_usage=$1  # Current usage percentage (0-100)
     local week_start=${2:-0}  # Epoch when current week started (optional)
@@ -592,7 +709,7 @@ get_trend_arrow() {
     local fine_anchor_interval=${TREND_FINE_ANCHOR_INTERVAL:-600}
     local wow_window=${WEEK_OVER_WEEK_WINDOW:-7200}
     local week_back=$((now - SECONDS_PER_WEEK))
-    local week_back_margin=$((wow_window + 1800))
+    local week_back_margin=$((wow_window + WEEK_OVER_WEEK_FINE_ANCHOR_MARGIN))
     local week_back_lo=$((week_back - week_back_margin))
     local week_back_hi=$((week_back + week_back_margin))
     local max_age=$((now - trend_history_max_age))
@@ -606,14 +723,19 @@ get_trend_arrow() {
     local kept_history=""
     local kept_sep=""
     local seen_blocks="|"
+    local history_tmp=""
     local sample_time sample_usage block bucket_size bucket_prefix
     local arrow_code="stable"
     [[ "$current_usage" == .* ]] && current_usage="0$current_usage"
 
+    wow_init_anchor_cache "${USAGE_HISTORY:-}" "$now" "$wow_window"
     if [ -f "$USAGE_HISTORY" ]; then
         while IFS=, read -r sample_time sample_usage || [ -n "$sample_time" ]; do
             [ -n "$sample_time" ] || continue
             [[ "$sample_time" =~ ^[0-9]+$ ]] || continue
+            if [ "$sample_time" -gt "$now" ]; then
+                continue
+            fi
             [ -n "${sample_usage:-}" ] || continue
             [[ "$sample_usage" == .* ]] && sample_usage="0$sample_usage"
             is_decimal_value "$sample_usage" || continue
@@ -639,6 +761,7 @@ get_trend_arrow() {
 
             printf -v kept_history '%s%s%s,%s' "$kept_history" "$kept_sep" "$sample_time" "$sample_usage"
             kept_sep=$'\n'
+            wow_update_anchor_cache "$sample_time" "$sample_usage"
 
             # Trend calculation uses only samples inside the current weekly
             # reset cycle, but we still retain older samples above so the
@@ -673,7 +796,10 @@ get_trend_arrow() {
         printf -v kept_history '%s%s%s,%s' "$kept_history" "$kept_sep" "$now" "$current_usage"
     fi
 
-    if ! printf '%s' "$kept_history" > "$USAGE_HISTORY" 2>>"$STATUSLINE_DEBUG_LOG"; then
+    history_tmp="${USAGE_HISTORY}.tmp.$$"
+    if ! printf '%s' "$kept_history" > "$history_tmp" 2>>"$STATUSLINE_DEBUG_LOG" \
+        || ! mv -f -- "$history_tmp" "$USAGE_HISTORY" 2>>"$STATUSLINE_DEBUG_LOG"; then
+        rm -f -- "$history_tmp" 2>>"$STATUSLINE_DEBUG_LOG" || true
         debug_log "Trend history update failed; keeping prior arrow history state"
     fi
 
@@ -700,14 +826,10 @@ get_trend_arrow() {
         fi
     fi
 
-    # Map code to colored arrow
-    case "$arrow_code" in
-        hot)    REPLY="${VEL_HOT}↑${RESET}" ;;
-        warm)   REPLY="${VEL_WARM}↗${RESET}" ;;
-        cold)   REPLY="${VEL_COLD}↓${RESET}" ;;
-        cool)   REPLY="${VEL_COOL}↘${RESET}" ;;
-        *)      REPLY="${VEL_STABLE}→${RESET}" ;;
-    esac
+    local arrow_char="→"
+    local color="$VEL_STABLE"
+    velocity_arrow_style "$arrow_code" arrow_char color
+    REPLY="${color}${arrow_char}${RESET}"
 }
 
 # Get smart pace indicator using dual-signal approach:
@@ -892,8 +1014,131 @@ wow_format_rate_milli() {
         abs=$((-milli))
     fi
     local whole=$((abs / 1000))
-    local frac=$(((abs % 1000) / 100))
+    local frac=$((((abs % 1000) + 50) / 100))
+    if [ "$frac" -ge 10 ]; then
+        whole=$((whole + 1))
+        frac=0
+    fi
     printf -v "$out_var" '%s%d.%d%%/h' "$sign" "$whole" "$frac"
+}
+
+STATUSLINE_WOW_COLLECT_BEST_A=0
+STATUSLINE_WOW_COLLECT_U_A=""
+STATUSLINE_WOW_COLLECT_BEST_B=$WOW_DISTANCE_SENTINEL
+STATUSLINE_WOW_COLLECT_U_B=""
+STATUSLINE_WOW_COLLECT_BEST_C=$WOW_DISTANCE_SENTINEL
+STATUSLINE_WOW_COLLECT_U_C=""
+STATUSLINE_WOW_COLLECT_BEST_D=$WOW_DISTANCE_SENTINEL
+STATUSLINE_WOW_COLLECT_U_D=""
+
+wow_collect_anchors() {
+    local current_usage_milli=$1
+    local now=$2
+    local wow_window=$3
+    local history_path=${USAGE_HISTORY:-}
+
+    STATUSLINE_WOW_COLLECT_BEST_A=0
+    STATUSLINE_WOW_COLLECT_U_A=$current_usage_milli
+    STATUSLINE_WOW_COLLECT_BEST_B=$WOW_DISTANCE_SENTINEL
+    STATUSLINE_WOW_COLLECT_U_B=""
+    STATUSLINE_WOW_COLLECT_BEST_C=$WOW_DISTANCE_SENTINEL
+    STATUSLINE_WOW_COLLECT_U_C=""
+    STATUSLINE_WOW_COLLECT_BEST_D=$WOW_DISTANCE_SENTINEL
+    STATUSLINE_WOW_COLLECT_U_D=""
+
+    if ! wow_anchor_cache_matches "$history_path" "$now" "$wow_window"; then
+        wow_prime_anchor_cache_from_history "$history_path" "$now" "$wow_window"
+    fi
+    if wow_anchor_cache_matches "$history_path" "$now" "$wow_window"; then
+        STATUSLINE_WOW_COLLECT_BEST_B=$STATUSLINE_WOW_CACHE_BEST_B
+        STATUSLINE_WOW_COLLECT_BEST_C=$STATUSLINE_WOW_CACHE_BEST_C
+        STATUSLINE_WOW_COLLECT_BEST_D=$STATUSLINE_WOW_CACHE_BEST_D
+        STATUSLINE_WOW_COLLECT_U_B=$STATUSLINE_WOW_CACHE_U_B
+        STATUSLINE_WOW_COLLECT_U_C=$STATUSLINE_WOW_CACHE_U_C
+        STATUSLINE_WOW_COLLECT_U_D=$STATUSLINE_WOW_CACHE_U_D
+    fi
+}
+
+wow_render_raw_frame() {
+    local u_a=$1
+    local u_b=$2
+    local best_a=$3
+    local best_b=$4
+    local tol_recent=$5
+    local wow_window=$6
+
+    if [ -n "$u_b" ] && [ "$best_a" -le "$tol_recent" ] && [ "$best_b" -le "$tol_recent" ]; then
+        local current_rate_milli=$(( (u_a - u_b) * 3600 / wow_window ))
+        if [ "$current_rate_milli" -ge 0 ]; then
+            local formatted=""
+            wow_format_rate_milli "$current_rate_milli" formatted
+            REPLY="${DIM}${formatted}${RESET}"
+            return
+        fi
+    fi
+
+    REPLY=""
+}
+
+wow_render_delta_frame() {
+    local u_a=$1
+    local u_b=$2
+    local u_c=$3
+    local u_d=$4
+    local best_a=$5
+    local best_b=$6
+    local best_c=$7
+    local best_d=$8
+    local tol_recent=$9
+    local tol_prior=${10}
+    local wow_window=${11}
+    local wow_delta_warm_milli=${12}
+    local wow_delta_hot_milli=${13}
+
+    if [ -z "$u_b" ] || [ -z "$u_c" ] || [ -z "$u_d" ] \
+        || [ "$best_a" -gt "$tol_recent" ] || [ "$best_b" -gt "$tol_recent" ] \
+        || [ "$best_c" -gt "$tol_prior" ] || [ "$best_d" -gt "$tol_prior" ]; then
+        REPLY=""
+        return
+    fi
+
+    local current_rate_milli=$(( (u_a - u_b) * 3600 / wow_window ))
+    local prior_rate_milli=$(( (u_c - u_d) * 3600 / wow_window ))
+    if [ "$current_rate_milli" -lt 0 ] || [ "$prior_rate_milli" -lt 0 ]; then
+        REPLY=""
+        return
+    fi
+
+    local delta_rate_milli=$((current_rate_milli - prior_rate_milli))
+
+    # Bucket thresholds in milli-percent per hour.
+    # Sustainable rate ≈ 595 milli%/h (100%/168h), so ±150 is ~25% swing and
+    # ±500 is ~85% swing — well above the noise floor for a 2h window.
+    local arrow_code="stable"
+    if [ "$delta_rate_milli" -ge "$wow_delta_hot_milli" ]; then
+        arrow_code="hot"
+    elif [ "$delta_rate_milli" -ge "$wow_delta_warm_milli" ]; then
+        arrow_code="warm"
+    elif [ "$delta_rate_milli" -le "$((-wow_delta_hot_milli))" ]; then
+        arrow_code="cold"
+    elif [ "$delta_rate_milli" -le "$((-wow_delta_warm_milli))" ]; then
+        arrow_code="cool"
+    fi
+
+    local delta_formatted=""
+    if [ "$delta_rate_milli" -ge 0 ]; then
+        local positive_formatted=""
+        wow_format_rate_milli "$delta_rate_milli" positive_formatted
+        delta_formatted="+$positive_formatted"
+    else
+        wow_format_rate_milli "$delta_rate_milli" delta_formatted
+    fi
+
+    local arrow_char="→"
+    local color="$VEL_STABLE"
+    velocity_arrow_style "$arrow_code" arrow_char color
+
+    REPLY="${color}${arrow_char} ${delta_formatted}${RESET}"
 }
 
 # Week-over-week burn-rate indicator.
@@ -919,6 +1164,11 @@ get_week_over_week_indicator() {
     local now=${2:-$(date +%s)}
     local wow_window=${WEEK_OVER_WEEK_WINDOW:-7200}
 
+    if ! [[ "$wow_window" =~ ^[0-9]+$ ]] || [ "$wow_window" -le 0 ]; then
+        REPLY=""
+        return
+    fi
+
     if is_sentinel_value "$current_usage"; then
         REPLY=""
         return
@@ -936,135 +1186,33 @@ get_week_over_week_indicator() {
     # the fine-anchor band, so 20min covers drift + margin.
     local tol_recent=${WEEK_OVER_WEEK_TOL_RECENT:-900}
     local tol_prior=${WEEK_OVER_WEEK_TOL_PRIOR:-1200}
+    local wow_delta_warm_milli=${WOW_DELTA_WARM_MILLI:-150}
+    local wow_delta_hot_milli=${WOW_DELTA_HOT_MILLI:-500}
+    local best_a=0 u_a=""
+    local best_b=$WOW_DISTANCE_SENTINEL u_b=""
+    local best_c=$WOW_DISTANCE_SENTINEL u_c=""
+    local best_d=$WOW_DISTANCE_SENTINEL u_d=""
 
-    local target_a=$now
-    local target_b=$((now - wow_window))
-    local target_c=$((now - SECONDS_PER_WEEK))
-    local target_d=$((now - SECONDS_PER_WEEK - wow_window))
-
-    # Seed the "now" anchor with the live current_usage at distance 0 so we
-    # don't need a freshly-written history row to render.
-    local best_a=0 u_a=$current_usage_milli
-    local best_b=2147483647 u_b=""
-    local best_c=2147483647 u_c=""
-    local best_d=2147483647 u_d=""
-
-    if [ -f "$USAGE_HISTORY" ]; then
-        local sample_time sample_usage sample_milli dist
-        while IFS=, read -r sample_time sample_usage || [ -n "$sample_time" ]; do
-            [ -n "$sample_time" ] || continue
-            [[ "$sample_time" =~ ^[0-9]+$ ]] || continue
-            [ -n "${sample_usage:-}" ] || continue
-            [[ "$sample_usage" == .* ]] && sample_usage="0$sample_usage"
-            trend_usage_to_milli_pct "$sample_usage" sample_milli || continue
-
-            if [ "$sample_time" -ge "$target_a" ]; then
-                dist=$((sample_time - target_a))
-            else
-                dist=$((target_a - sample_time))
-            fi
-            if [ "$dist" -lt "$best_a" ]; then
-                best_a=$dist
-                u_a=$sample_milli
-            fi
-
-            if [ "$sample_time" -ge "$target_b" ]; then
-                dist=$((sample_time - target_b))
-            else
-                dist=$((target_b - sample_time))
-            fi
-            if [ "$dist" -lt "$best_b" ]; then
-                best_b=$dist
-                u_b=$sample_milli
-            fi
-
-            if [ "$sample_time" -ge "$target_c" ]; then
-                dist=$((sample_time - target_c))
-            else
-                dist=$((target_c - sample_time))
-            fi
-            if [ "$dist" -lt "$best_c" ]; then
-                best_c=$dist
-                u_c=$sample_milli
-            fi
-
-            if [ "$sample_time" -ge "$target_d" ]; then
-                dist=$((sample_time - target_d))
-            else
-                dist=$((target_d - sample_time))
-            fi
-            if [ "$dist" -lt "$best_d" ]; then
-                best_d=$dist
-                u_d=$sample_milli
-            fi
-        done < "$USAGE_HISTORY"
-    fi
+    wow_collect_anchors "$current_usage_milli" "$now" "$wow_window"
+    best_a=$STATUSLINE_WOW_COLLECT_BEST_A
+    u_a=$STATUSLINE_WOW_COLLECT_U_A
+    best_b=$STATUSLINE_WOW_COLLECT_BEST_B
+    u_b=$STATUSLINE_WOW_COLLECT_U_B
+    best_c=$STATUSLINE_WOW_COLLECT_BEST_C
+    u_c=$STATUSLINE_WOW_COLLECT_U_C
+    best_d=$STATUSLINE_WOW_COLLECT_BEST_D
+    u_d=$STATUSLINE_WOW_COLLECT_U_D
 
     local cycle=$(( (now / 10) % 10 ))
 
     # Frames 7–9: raw current-window rate
     if [ "$cycle" -ge 7 ]; then
-        if [ -n "$u_b" ] && [ "$best_a" -le "$tol_recent" ] && [ "$best_b" -le "$tol_recent" ]; then
-            local current_rate_milli=$(( (u_a - u_b) * 3600 / wow_window ))
-            if [ "$current_rate_milli" -ge 0 ]; then
-                local formatted=""
-                wow_format_rate_milli "$current_rate_milli" formatted
-                REPLY="${DIM}${formatted}${RESET}"
-                return
-            fi
-        fi
-        REPLY=""
+        wow_render_raw_frame "$u_a" "$u_b" "$best_a" "$best_b" "$tol_recent" "$wow_window"
         return
     fi
 
-    # Frames 0–6: arrow + delta vs matched window 1 week ago
-    if [ -z "$u_b" ] || [ -z "$u_c" ] || [ -z "$u_d" ] \
-        || [ "$best_a" -gt "$tol_recent" ] || [ "$best_b" -gt "$tol_recent" ] \
-        || [ "$best_c" -gt "$tol_prior" ] || [ "$best_d" -gt "$tol_prior" ]; then
-        REPLY=""
-        return
-    fi
-
-    local current_rate_milli=$(( (u_a - u_b) * 3600 / wow_window ))
-    local prior_rate_milli=$(( (u_c - u_d) * 3600 / wow_window ))
-    if [ "$current_rate_milli" -lt 0 ] || [ "$prior_rate_milli" -lt 0 ]; then
-        REPLY=""
-        return
-    fi
-
-    local delta_rate_milli=$((current_rate_milli - prior_rate_milli))
-
-    # Bucket thresholds in milli-percent per hour.
-    # Sustainable rate ≈ 595 milli%/h (100%/168h), so ±150 is ~25% swing and
-    # ±500 is ~85% swing — well above the noise floor for a 2h window.
-    local arrow_code="stable"
-    if [ "$delta_rate_milli" -ge 500 ]; then
-        arrow_code="hot"
-    elif [ "$delta_rate_milli" -ge 150 ]; then
-        arrow_code="warm"
-    elif [ "$delta_rate_milli" -le -500 ]; then
-        arrow_code="cold"
-    elif [ "$delta_rate_milli" -le -150 ]; then
-        arrow_code="cool"
-    fi
-
-    local delta_formatted=""
-    if [ "$delta_rate_milli" -ge 0 ]; then
-        local positive_formatted=""
-        wow_format_rate_milli "$delta_rate_milli" positive_formatted
-        delta_formatted="+$positive_formatted"
-    else
-        wow_format_rate_milli "$delta_rate_milli" delta_formatted
-    fi
-
-    local arrow_char="→"
-    local color="$VEL_STABLE"
-    case "$arrow_code" in
-        hot)  arrow_char="↑"; color="$VEL_HOT" ;;
-        warm) arrow_char="↗"; color="$VEL_WARM" ;;
-        cold) arrow_char="↓"; color="$VEL_COLD" ;;
-        cool) arrow_char="↘"; color="$VEL_COOL" ;;
-    esac
-
-    REPLY="${color}${arrow_char} ${delta_formatted}${RESET}"
+    wow_render_delta_frame "$u_a" "$u_b" "$u_c" "$u_d" \
+        "$best_a" "$best_b" "$best_c" "$best_d" \
+        "$tol_recent" "$tol_prior" "$wow_window" \
+        "$wow_delta_warm_milli" "$wow_delta_hot_milli"
 }
