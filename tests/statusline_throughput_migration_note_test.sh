@@ -33,6 +33,6 @@ assert_contains "$readme" 'The segment key stays `throughput` for config compati
 
 assert_not_contains "$statusline" '_L2_THROUGHPUT' "statusline should not keep the stale throughput variable name"
 assert_not_contains "$statusline" '_L2_WEEK_OVER_WEEK' "statusline should not keep the interim week-over-week variable name"
-assert_contains "$statusline" '_L2_BURN_RATE' "statusline should name the line-2 slot after the progressive burn-rate indicator"
+assert_contains "$statusline" '_L1_BURN_RATE' "statusline should render the burn-rate indicator on line 1"
 
 printf 'ok\n'

@@ -634,13 +634,17 @@ _build_responsive_line() {
 _L1_CONTEXT=""; seg_on "$_SEG_CONTEXT" && _L1_CONTEXT="${CTX_ICON} ${PROGRESS_BAR}"
 _L1_GIT=""; seg_on "$_SEG_GIT" && _L1_GIT="$REPO_BRANCH"
 _L1_PACE=""; seg_on "$_SEG_PACE" && [ -n "$PACE_INDICATOR" ] && _L1_PACE="$PACE_INDICATOR"
-_L1_DURATION=""; seg_on "$_SEG_DURATION" && _L1_DURATION="$DURATION_INFO"
+_L1_BURN_RATE=""
+if seg_on "$_SEG_BURN_RATE" && [ -n "$WEEKLY_USAGE" ] && ! is_sentinel_value "$WEEKLY_USAGE"; then
+    get_burn_rate_indicator "$WEEKLY_USAGE" "$NOW"
+    _L1_BURN_RATE=$REPLY
+fi
 _L1_LINES=""; seg_on "$_SEG_LINES" && _L1_LINES="$LINES_INFO"
 _L1_BURST=""; seg_on "$_SEG_BURST" && [ -n "$BURST_INDICATOR" ] && _L1_BURST="$BURST_INDICATOR"
 _L1_CREDIT=""; seg_on "$_SEG_CREDIT" && [ -n "$CREDIT_INDICATOR" ] && _L1_CREDIT="$CREDIT_INDICATOR"
 
-# Priority order: context > git > pace > duration > lines > burst > credit
-printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L1_CONTEXT" "$_L1_GIT" "$_L1_PACE" "$_L1_DURATION" "$_L1_LINES" "$_L1_BURST" "$_L1_CREDIT")"
+# Priority order: context > git > pace > burn-rate > lines > burst > credit
+printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L1_CONTEXT" "$_L1_GIT" "$_L1_PACE" "$_L1_BURN_RATE" "$_L1_LINES" "$_L1_BURST" "$_L1_CREDIT")"
 
 # Prepare line 2 segments in priority order
 _L2_TOKENS=""
@@ -651,13 +655,9 @@ if seg_on "$_SEG_TOKENS"; then
     CTX_PADDED=$(printf "%13s" "$CTX_STATS")
     _L2_TOKENS="${DIM}${CTX_PADDED}${RESET}"
 fi
+_L2_DURATION=""; seg_on "$_SEG_DURATION" && _L2_DURATION="$DURATION_INFO"
 _L2_MODEL=""; seg_on "$_SEG_MODEL" && _L2_MODEL="${DIM}${MODEL}${RESET}"
-_L2_BURN_RATE=""
-if seg_on "$_SEG_BURN_RATE" && [ -n "$WEEKLY_USAGE" ] && ! is_sentinel_value "$WEEKLY_USAGE"; then
-    get_burn_rate_indicator "$WEEKLY_USAGE" "$NOW"
-    _L2_BURN_RATE=$REPLY
-fi
 _L2_METRIC=""; seg_on "$_SEG_METRIC" && _L2_METRIC="$METRIC_INFO"
 
-# Priority order: tokens > metric > model > burn-rate
-printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_METRIC" "$_L2_MODEL" "$_L2_BURN_RATE")"
+# Priority order: tokens > metric > duration > model
+printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_METRIC" "$_L2_DURATION" "$_L2_MODEL")"
