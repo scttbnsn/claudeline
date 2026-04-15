@@ -56,7 +56,7 @@ curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/insta
 
 Then restart Claude Code. That's it.
 
-> **Migration note:** the `throughput` segment now renders a week-over-week burn-rate delta instead of output tokens/second. The segment key stays `throughput` for config compatibility.
+> **Migration note:** the `throughput` segment now renders a progressive burn-rate indicator — a rotating series of frames showing your current %/h burn plus deltas vs. 1h / 1d / 1w / 2w ago. Horizons unlock automatically as history accumulates, so day-0 shows just the raw rate and by week 2 you see the full comparison set. The segment key stays `throughput` for config compatibility.
 
 <details>
 <summary>Optional: create a config file</summary>
@@ -404,8 +404,9 @@ The API call runs in a **non-blocking background subshell** so it never stalls t
 | Variable | Effect |
 |----------|--------|
 | `CLAUDELINE_THEME=nord` | Theme: `vibey` (default), `dark`, `light`, `nord`, `gruvbox` |
-| `CLAUDELINE_SEGMENTS=context,git,pace` | Show only listed segments (default: all). Available: `context`, `git`, `lines`, `pace`, `burst`, `duration`, `credit`, `tokens`, `metric`, `throughput`, `model`. `throughput` is the compatibility key for the week-over-week burn-rate delta segment. |
-| `WEEK_OVER_WEEK_WINDOW=7200` | Sliding window (seconds) for the `throughput` compatibility segment's current/prior burn rates. Shorter is twitchier (default: 2h) |
+| `CLAUDELINE_SEGMENTS=context,git,pace` | Show only listed segments (default: all). Available: `context`, `git`, `lines`, `pace`, `burst`, `duration`, `credit`, `tokens`, `metric`, `throughput`, `model`. `throughput` is the compatibility key for the progressive burn-rate indicator. |
+| `BURN_RATE_WINDOW=7200` | Sliding window (seconds) for the burn-rate slope measurement at each horizon. Shorter is twitchier (default: 2h) |
+| `BURN_RATE_ROTATION_SECONDS=5` | Seconds per frame when the burn-rate segment rotates through available horizons (raw / 1h / 1d / 1w / 2w) |
 | `NO_COLOR=1` | Disables all color output ([spec](https://no-color.org)) |
 | `CLAUDELINE_NO_NETWORK=1` | Disables all network access — the API call is skipped entirely |
 | `CLAUDELINE_DEBUG=1` | Enables debug logging to `$TMPDIR/claudeline-statusline-debug.log` |
@@ -413,7 +414,7 @@ The API call runs in a **non-blocking background subshell** so it never stalls t
 | `JSONL_CACHE_TTL=300` | JSONL cache lifetime in seconds (default: 300) |
 | `EXTRA_USAGE_TTL=600` | Extra usage / credit cache lifetime in seconds (default: 600) |
 | `TREND_WINDOW=900` | Trend arrow sample window in seconds (default: 900) |
-| `TREND_HISTORY_MAX_AGE=86400` | Max age for trend history entries in seconds (default: 86400) |
+| `TREND_HISTORY_MAX_AGE=1296000` | Max age for trend/burn-rate history entries in seconds (default: 15d, needed for the 2w comparison horizon) |
 
 **Local data stored** in `~/.claude-usage.d/` (created with `chmod 700`):
 

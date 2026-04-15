@@ -161,7 +161,7 @@ if [ -n "${CLAUDELINE_SEGMENTS:-}" ]; then
     _SEG_ALL=0
     _SEG_CONTEXT=0; _SEG_GIT=0; _SEG_LINES=0; _SEG_PACE=0
     _SEG_BURST=0; _SEG_DURATION=0; _SEG_CREDIT=0
-    _SEG_TOKENS=0; _SEG_METRIC=0; _SEG_WEEK_OVER_WEEK=0; _SEG_MODEL=0
+    _SEG_TOKENS=0; _SEG_METRIC=0; _SEG_BURN_RATE=0; _SEG_MODEL=0
     IFS=',' read -ra _segs <<< "$CLAUDELINE_SEGMENTS"
     for _s in "${_segs[@]}"; do
         case "${_s## }" in  # trim leading space
@@ -174,14 +174,14 @@ if [ -n "${CLAUDELINE_SEGMENTS:-}" ]; then
             credit)     _SEG_CREDIT=1 ;;
             tokens)     _SEG_TOKENS=1 ;;
             metric)     _SEG_METRIC=1 ;;
-            throughput) _SEG_WEEK_OVER_WEEK=1 ;;
+            throughput) _SEG_BURN_RATE=1 ;;
             model)      _SEG_MODEL=1 ;;
         esac
     done
 else
     _SEG_CONTEXT=1; _SEG_GIT=1; _SEG_LINES=1; _SEG_PACE=1
     _SEG_BURST=1; _SEG_DURATION=1; _SEG_CREDIT=1
-    _SEG_TOKENS=1; _SEG_METRIC=1; _SEG_WEEK_OVER_WEEK=1; _SEG_MODEL=1
+    _SEG_TOKENS=1; _SEG_METRIC=1; _SEG_BURN_RATE=1; _SEG_MODEL=1
 fi
 
 seg_on() { [ "${_SEG_ALL}" -eq 1 ] || [ "${1:-0}" -eq 1 ]; }
@@ -652,12 +652,12 @@ if seg_on "$_SEG_TOKENS"; then
     _L2_TOKENS="${DIM}${CTX_PADDED}${RESET}"
 fi
 _L2_MODEL=""; seg_on "$_SEG_MODEL" && _L2_MODEL="${DIM}${MODEL}${RESET}"
-_L2_WEEK_OVER_WEEK=""
-if seg_on "$_SEG_WEEK_OVER_WEEK" && [ -n "$WEEKLY_USAGE" ] && ! is_sentinel_value "$WEEKLY_USAGE"; then
-    get_week_over_week_indicator "$WEEKLY_USAGE" "$NOW"
-    _L2_WEEK_OVER_WEEK=$REPLY
+_L2_BURN_RATE=""
+if seg_on "$_SEG_BURN_RATE" && [ -n "$WEEKLY_USAGE" ] && ! is_sentinel_value "$WEEKLY_USAGE"; then
+    get_burn_rate_indicator "$WEEKLY_USAGE" "$NOW"
+    _L2_BURN_RATE=$REPLY
 fi
 _L2_METRIC=""; seg_on "$_SEG_METRIC" && _L2_METRIC="$METRIC_INFO"
 
-# Priority order: tokens > metric > model > week-over-week
-printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_METRIC" "$_L2_MODEL" "$_L2_WEEK_OVER_WEEK")"
+# Priority order: tokens > metric > model > burn-rate
+printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_METRIC" "$_L2_MODEL" "$_L2_BURN_RATE")"

@@ -28,10 +28,11 @@ assert_not_contains() {
 }
 
 assert_contains "$readme" 'Migration note:' "README should call out the throughput semantic change"
-assert_contains "$readme" '`throughput` segment now renders a week-over-week burn-rate delta instead of output tokens/second.' "README should describe the breaking throughput change"
+assert_contains "$readme" 'burn-rate' "README should describe the throughput → burn-rate migration"
 assert_contains "$readme" 'The segment key stays `throughput` for config compatibility.' "README should explain why the old segment key remains"
 
-assert_not_contains "$statusline" '_L2_THROUGHPUT' "statusline should not keep the stale throughput variable name for week-over-week output"
-assert_contains "$statusline" '_L2_WEEK_OVER_WEEK' "statusline should name the line-2 week-over-week segment after its current behavior"
+assert_not_contains "$statusline" '_L2_THROUGHPUT' "statusline should not keep the stale throughput variable name"
+assert_not_contains "$statusline" '_L2_WEEK_OVER_WEEK' "statusline should not keep the interim week-over-week variable name"
+assert_contains "$statusline" '_L2_BURN_RATE' "statusline should name the line-2 slot after the progressive burn-rate indicator"
 
 printf 'ok\n'

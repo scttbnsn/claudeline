@@ -3,20 +3,34 @@
 SECONDS_PER_DAY=${SECONDS_PER_DAY:-86400}
 SECONDS_PER_WEEK=${SECONDS_PER_WEEK:-$((7 * SECONDS_PER_DAY))}
 JSONL_CACHE_TTL=${JSONL_CACHE_TTL:-300}
-# Retain ~8 days of usage samples so week-over-week comparisons can reach back
-# past the current weekly reset. Old samples are sparsified via anchor_interval
+# Retain ~15 days of usage samples so the 2-week burn-rate horizon can reach
+# back past two full weekly resets. Old samples are sparsified via bucketing
 # inside get_trend_arrow so the on-disk file stays small.
-TREND_HISTORY_MAX_AGE=${TREND_HISTORY_MAX_AGE:-$((8 * SECONDS_PER_DAY))}
-# Sliding window (seconds) used to compute both the current burn rate and the
-# matched rate one week ago. 2h is twitchy enough to react to a setup change
-# within ~1h while staying above idle-period noise.
-WEEK_OVER_WEEK_WINDOW=${WEEK_OVER_WEEK_WINDOW:-7200}
+TREND_HISTORY_MAX_AGE=${TREND_HISTORY_MAX_AGE:-$((15 * SECONDS_PER_DAY))}
+# Sliding window (seconds) used to compute instantaneous burn rate — both the
+# current rate and the matched rate at each historical horizon. 2h balances
+# twitchy-enough reaction (~1h) against idle-period noise.
+BURN_RATE_WINDOW=${BURN_RATE_WINDOW:-7200}
+# Minimum actual time span required between two samples before we'll extrapolate
+# a rate from them. Anything shorter is noise.
+BURN_RATE_MIN_GAP=${BURN_RATE_MIN_GAP:-300}
+# How often (seconds) the rendered frame rotates between available comparison
+# horizons (raw / 1h / 1d / 1w / 2w). 5s lets you see each horizon clearly
+# without flicker.
+BURN_RATE_ROTATION_SECONDS=${BURN_RATE_ROTATION_SECONDS:-5}
 # Extra slack (seconds) around the prior-week fine-anchor band so 10-minute
 # buckets still line up when renders drift or the sampling cadence slips.
-WEEK_OVER_WEEK_FINE_ANCHOR_MARGIN=${WEEK_OVER_WEEK_FINE_ANCHOR_MARGIN:-1800}
-WOW_DISTANCE_SENTINEL=${WOW_DISTANCE_SENTINEL:-2147483647}
-WOW_DELTA_WARM_MILLI=${WOW_DELTA_WARM_MILLI:-150}
-WOW_DELTA_HOT_MILLI=${WOW_DELTA_HOT_MILLI:-500}
+BURN_RATE_FINE_ANCHOR_MARGIN=${BURN_RATE_FINE_ANCHOR_MARGIN:-1800}
+BURN_RATE_DISTANCE_SENTINEL=${BURN_RATE_DISTANCE_SENTINEL:-2147483647}
+BURN_RATE_DELTA_WARM_MILLI=${BURN_RATE_DELTA_WARM_MILLI:-150}
+BURN_RATE_DELTA_HOT_MILLI=${BURN_RATE_DELTA_HOT_MILLI:-500}
+# Per-horizon tolerances (seconds): max distance between a target timestamp and
+# the closest available sample for that anchor to be considered usable. Scale
+# with the horizon so bursty usage still lines up.
+BURN_RATE_TOL_HR=${BURN_RATE_TOL_HR:-1800}
+BURN_RATE_TOL_DAY=${BURN_RATE_TOL_DAY:-14400}
+BURN_RATE_TOL_WEEK=${BURN_RATE_TOL_WEEK:-21600}
+BURN_RATE_TOL_2WEEK=${BURN_RATE_TOL_2WEEK:-43200}
 STATUSLINE_USAGE_DIR=$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 STATUSLINE_JSONL_PARSER=${STATUSLINE_JSONL_PARSER:-$STATUSLINE_USAGE_DIR/jsonl_parser.pl}
 STATUSLINE_STAT_MTIME_FLAG=${STATUSLINE_STAT_MTIME_FLAG:-}
@@ -585,96 +599,203 @@ trend_usage_to_milli_pct() {
     printf -v "$out_var" '%s' "$scaled_usage"
 }
 
-STATUSLINE_WOW_CACHE_KEY=""
-STATUSLINE_WOW_CACHE_TARGET_B=0
-STATUSLINE_WOW_CACHE_TARGET_C=0
-STATUSLINE_WOW_CACHE_TARGET_D=0
-STATUSLINE_WOW_CACHE_BEST_B=$WOW_DISTANCE_SENTINEL
-STATUSLINE_WOW_CACHE_BEST_C=$WOW_DISTANCE_SENTINEL
-STATUSLINE_WOW_CACHE_BEST_D=$WOW_DISTANCE_SENTINEL
-STATUSLINE_WOW_CACHE_U_B=""
-STATUSLINE_WOW_CACHE_U_C=""
-STATUSLINE_WOW_CACHE_U_D=""
+# Burn-rate anchor cache. Populated in a single pass over $USAGE_HISTORY (via
+# either get_trend_arrow piggybacking on its own scan, or a dedicated prime
+# pass). get_burn_rate_indicator reads from these globals to render whatever
+# comparison horizons have data, so the segment degrades gracefully from
+# day 0 through 2+ weeks of history.
+BURN_RATE_CACHE_KEY=""
+BURN_RATE_CACHE_NOW=0
+BURN_RATE_CACHE_WINDOW=0
+BURN_RATE_TARGET_HR=0
+BURN_RATE_TARGET_HR_WIN=0
+BURN_RATE_TARGET_DAY=0
+BURN_RATE_TARGET_DAY_WIN=0
+BURN_RATE_TARGET_WK=0
+BURN_RATE_TARGET_WK_WIN=0
+BURN_RATE_TARGET_WK2=0
+BURN_RATE_TARGET_WK2_WIN=0
+BURN_RATE_DIST_HR=$BURN_RATE_DISTANCE_SENTINEL
+BURN_RATE_DIST_HR_WIN=$BURN_RATE_DISTANCE_SENTINEL
+BURN_RATE_DIST_DAY=$BURN_RATE_DISTANCE_SENTINEL
+BURN_RATE_DIST_DAY_WIN=$BURN_RATE_DISTANCE_SENTINEL
+BURN_RATE_DIST_WK=$BURN_RATE_DISTANCE_SENTINEL
+BURN_RATE_DIST_WK_WIN=$BURN_RATE_DISTANCE_SENTINEL
+BURN_RATE_DIST_WK2=$BURN_RATE_DISTANCE_SENTINEL
+BURN_RATE_DIST_WK2_WIN=$BURN_RATE_DISTANCE_SENTINEL
+BURN_RATE_U_HR=""
+BURN_RATE_T_HR=""
+BURN_RATE_U_HR_WIN=""
+BURN_RATE_T_HR_WIN=""
+BURN_RATE_U_DAY=""
+BURN_RATE_T_DAY=""
+BURN_RATE_U_DAY_WIN=""
+BURN_RATE_T_DAY_WIN=""
+BURN_RATE_U_WK=""
+BURN_RATE_T_WK=""
+BURN_RATE_U_WK_WIN=""
+BURN_RATE_T_WK_WIN=""
+BURN_RATE_U_WK2=""
+BURN_RATE_T_WK2=""
+BURN_RATE_U_WK2_WIN=""
+BURN_RATE_T_WK2_WIN=""
+# Oldest sample in [now-window, now-MIN_GAP] — drives the "now" side of the
+# current rate, so raw rate renders even when no sample lines up with
+# exactly (now - window).
+BURN_RATE_OIW_T=""
+BURN_RATE_OIW_U=""
+# Oldest sample anywhere in history (even older than window) — last-resort
+# fallback so a fresh install with just 2 samples spanning min_gap still
+# renders a rate.
+BURN_RATE_OLDEST_T=""
+BURN_RATE_OLDEST_U=""
+# Most recent sample whose usage exceeds current — i.e. the latest pre-reset
+# data point. Lets us render a rate immediately after a weekly reset by
+# using (0% at this time) → (current% now) as an implicit starting segment.
+BURN_RATE_NEWEST_PRE_RESET_T=""
 
-wow_init_anchor_cache() {
+BURN_RATE_CACHE_CURRENT_U=""
+
+burn_rate_init_cache() {
     local history_path=$1
     local now=$2
-    local wow_window=$3
+    local window=$3
+    local current_usage_milli=${4:-}
 
-    STATUSLINE_WOW_CACHE_KEY="${history_path}|${now}|${wow_window}|${SECONDS_PER_WEEK}"
-    STATUSLINE_WOW_CACHE_TARGET_B=$((now - wow_window))
-    STATUSLINE_WOW_CACHE_TARGET_C=$((now - SECONDS_PER_WEEK))
-    STATUSLINE_WOW_CACHE_TARGET_D=$((now - SECONDS_PER_WEEK - wow_window))
-    STATUSLINE_WOW_CACHE_BEST_B=$WOW_DISTANCE_SENTINEL
-    STATUSLINE_WOW_CACHE_BEST_C=$WOW_DISTANCE_SENTINEL
-    STATUSLINE_WOW_CACHE_BEST_D=$WOW_DISTANCE_SENTINEL
-    STATUSLINE_WOW_CACHE_U_B=""
-    STATUSLINE_WOW_CACHE_U_C=""
-    STATUSLINE_WOW_CACHE_U_D=""
+    BURN_RATE_CACHE_KEY="${history_path}|${now}|${window}|${current_usage_milli}"
+    BURN_RATE_CACHE_NOW=$now
+    BURN_RATE_CACHE_WINDOW=$window
+    BURN_RATE_CACHE_CURRENT_U=$current_usage_milli
+
+    BURN_RATE_TARGET_HR=$((now - 3600))
+    BURN_RATE_TARGET_HR_WIN=$((now - 3600 - window))
+    BURN_RATE_TARGET_DAY=$((now - SECONDS_PER_DAY))
+    BURN_RATE_TARGET_DAY_WIN=$((now - SECONDS_PER_DAY - window))
+    BURN_RATE_TARGET_WK=$((now - SECONDS_PER_WEEK))
+    BURN_RATE_TARGET_WK_WIN=$((now - SECONDS_PER_WEEK - window))
+    BURN_RATE_TARGET_WK2=$((now - 2 * SECONDS_PER_WEEK))
+    BURN_RATE_TARGET_WK2_WIN=$((now - 2 * SECONDS_PER_WEEK - window))
+
+    BURN_RATE_DIST_HR=$BURN_RATE_DISTANCE_SENTINEL
+    BURN_RATE_DIST_HR_WIN=$BURN_RATE_DISTANCE_SENTINEL
+    BURN_RATE_DIST_DAY=$BURN_RATE_DISTANCE_SENTINEL
+    BURN_RATE_DIST_DAY_WIN=$BURN_RATE_DISTANCE_SENTINEL
+    BURN_RATE_DIST_WK=$BURN_RATE_DISTANCE_SENTINEL
+    BURN_RATE_DIST_WK_WIN=$BURN_RATE_DISTANCE_SENTINEL
+    BURN_RATE_DIST_WK2=$BURN_RATE_DISTANCE_SENTINEL
+    BURN_RATE_DIST_WK2_WIN=$BURN_RATE_DISTANCE_SENTINEL
+
+    BURN_RATE_U_HR=""; BURN_RATE_T_HR=""
+    BURN_RATE_U_HR_WIN=""; BURN_RATE_T_HR_WIN=""
+    BURN_RATE_U_DAY=""; BURN_RATE_T_DAY=""
+    BURN_RATE_U_DAY_WIN=""; BURN_RATE_T_DAY_WIN=""
+    BURN_RATE_U_WK=""; BURN_RATE_T_WK=""
+    BURN_RATE_U_WK_WIN=""; BURN_RATE_T_WK_WIN=""
+    BURN_RATE_U_WK2=""; BURN_RATE_T_WK2=""
+    BURN_RATE_U_WK2_WIN=""; BURN_RATE_T_WK2_WIN=""
+    BURN_RATE_OIW_T=""; BURN_RATE_OIW_U=""
+    BURN_RATE_OLDEST_T=""; BURN_RATE_OLDEST_U=""
+    BURN_RATE_NEWEST_PRE_RESET_T=""
 }
 
-wow_anchor_cache_matches() {
+burn_rate_cache_matches() {
     local history_path=$1
     local now=$2
-    local wow_window=$3
+    local window=$3
+    local current_usage_milli=${4:-}
 
-    [ "${STATUSLINE_WOW_CACHE_KEY:-}" = "${history_path}|${now}|${wow_window}|${SECONDS_PER_WEEK}" ]
+    [ "${BURN_RATE_CACHE_KEY:-}" = "${history_path}|${now}|${window}|${current_usage_milli}" ]
 }
 
-wow_update_best() {
-    local target=$1
-    local best_var=$2
-    local usage_var=$3
-    local sample_time=$4
-    local sample_milli=$5
-    local dist=0
-    local current_best=${!best_var}
+burn_rate_try_anchor() {
+    local sample_time=$1
+    local sample_milli=$2
+    local target=$3
+    local tol=$4
+    local dist_var=$5
+    local u_var=$6
+    local t_var=$7
+    local dist
 
     if [ "$sample_time" -ge "$target" ]; then
         dist=$((sample_time - target))
     else
         dist=$((target - sample_time))
     fi
+    [ "$dist" -le "$tol" ] || return 0
+    [ "$dist" -lt "${!dist_var}" ] || return 0
 
-    if [ "$dist" -lt "$current_best" ]; then
-        printf -v "$best_var" '%s' "$dist"
-        printf -v "$usage_var" '%s' "$sample_milli"
-    fi
+    printf -v "$dist_var" '%s' "$dist"
+    printf -v "$u_var" '%s' "$sample_milli"
+    printf -v "$t_var" '%s' "$sample_time"
 }
 
-wow_update_anchor_cache() {
+burn_rate_update_cache() {
     local sample_time=$1
     local sample_usage=$2
     local sample_milli=""
+    local age
 
-    [ -n "${STATUSLINE_WOW_CACHE_KEY:-}" ] || return 0
+    [ -n "${BURN_RATE_CACHE_KEY:-}" ] || return 0
     trend_usage_to_milli_pct "$sample_usage" sample_milli || return 0
 
-    wow_update_best "$STATUSLINE_WOW_CACHE_TARGET_B" STATUSLINE_WOW_CACHE_BEST_B STATUSLINE_WOW_CACHE_U_B "$sample_time" "$sample_milli"
-    wow_update_best "$STATUSLINE_WOW_CACHE_TARGET_C" STATUSLINE_WOW_CACHE_BEST_C STATUSLINE_WOW_CACHE_U_C "$sample_time" "$sample_milli"
-    wow_update_best "$STATUSLINE_WOW_CACHE_TARGET_D" STATUSLINE_WOW_CACHE_BEST_D STATUSLINE_WOW_CACHE_U_D "$sample_time" "$sample_milli"
+    age=$((BURN_RATE_CACHE_NOW - sample_time))
+    if [ "$age" -ge "$BURN_RATE_MIN_GAP" ]; then
+        # Filter: only samples at-or-below current usage count toward the
+        # "now" rate — any sample higher than current is pre-reset and would
+        # produce a negative rate across the weekly reset boundary.
+        local post_reset=1
+        if [ -n "$BURN_RATE_CACHE_CURRENT_U" ] \
+            && [ "$sample_milli" -gt "$BURN_RATE_CACHE_CURRENT_U" ]; then
+            post_reset=0
+            if [ -z "$BURN_RATE_NEWEST_PRE_RESET_T" ] \
+                || [ "$sample_time" -gt "$BURN_RATE_NEWEST_PRE_RESET_T" ]; then
+                BURN_RATE_NEWEST_PRE_RESET_T=$sample_time
+            fi
+        fi
+        if [ "$post_reset" -eq 1 ]; then
+            if [ "$age" -le "$BURN_RATE_CACHE_WINDOW" ]; then
+                if [ -z "$BURN_RATE_OIW_T" ] || [ "$sample_time" -lt "$BURN_RATE_OIW_T" ]; then
+                    BURN_RATE_OIW_T=$sample_time
+                    BURN_RATE_OIW_U=$sample_milli
+                fi
+            fi
+            if [ -z "$BURN_RATE_OLDEST_T" ] || [ "$sample_time" -lt "$BURN_RATE_OLDEST_T" ]; then
+                BURN_RATE_OLDEST_T=$sample_time
+                BURN_RATE_OLDEST_U=$sample_milli
+            fi
+        fi
+    fi
+
+    burn_rate_try_anchor "$sample_time" "$sample_milli" "$BURN_RATE_TARGET_HR"      "$BURN_RATE_TOL_HR"    BURN_RATE_DIST_HR      BURN_RATE_U_HR      BURN_RATE_T_HR
+    burn_rate_try_anchor "$sample_time" "$sample_milli" "$BURN_RATE_TARGET_HR_WIN"  "$BURN_RATE_TOL_HR"    BURN_RATE_DIST_HR_WIN  BURN_RATE_U_HR_WIN  BURN_RATE_T_HR_WIN
+    burn_rate_try_anchor "$sample_time" "$sample_milli" "$BURN_RATE_TARGET_DAY"     "$BURN_RATE_TOL_DAY"   BURN_RATE_DIST_DAY     BURN_RATE_U_DAY     BURN_RATE_T_DAY
+    burn_rate_try_anchor "$sample_time" "$sample_milli" "$BURN_RATE_TARGET_DAY_WIN" "$BURN_RATE_TOL_DAY"   BURN_RATE_DIST_DAY_WIN BURN_RATE_U_DAY_WIN BURN_RATE_T_DAY_WIN
+    burn_rate_try_anchor "$sample_time" "$sample_milli" "$BURN_RATE_TARGET_WK"      "$BURN_RATE_TOL_WEEK"  BURN_RATE_DIST_WK      BURN_RATE_U_WK      BURN_RATE_T_WK
+    burn_rate_try_anchor "$sample_time" "$sample_milli" "$BURN_RATE_TARGET_WK_WIN"  "$BURN_RATE_TOL_WEEK"  BURN_RATE_DIST_WK_WIN  BURN_RATE_U_WK_WIN  BURN_RATE_T_WK_WIN
+    burn_rate_try_anchor "$sample_time" "$sample_milli" "$BURN_RATE_TARGET_WK2"     "$BURN_RATE_TOL_2WEEK" BURN_RATE_DIST_WK2     BURN_RATE_U_WK2     BURN_RATE_T_WK2
+    burn_rate_try_anchor "$sample_time" "$sample_milli" "$BURN_RATE_TARGET_WK2_WIN" "$BURN_RATE_TOL_2WEEK" BURN_RATE_DIST_WK2_WIN BURN_RATE_U_WK2_WIN BURN_RATE_T_WK2_WIN
 }
 
-wow_prime_anchor_cache_from_history() {
+burn_rate_prime_cache_from_history() {
     local history_path=$1
     local now=$2
-    local wow_window=$3
+    local window=$3
+    local current_usage_milli=${4:-}
     local sample_time sample_usage
 
-    wow_init_anchor_cache "$history_path" "$now" "$wow_window"
+    burn_rate_init_cache "$history_path" "$now" "$window" "$current_usage_milli"
     if [ ! -f "$history_path" ]; then
-        return
+        return 0
     fi
 
     while IFS=, read -r sample_time sample_usage || [ -n "$sample_time" ]; do
         [ -n "$sample_time" ] || continue
         [[ "$sample_time" =~ ^[0-9]+$ ]] || continue
-        if [ "$sample_time" -gt "$now" ]; then
-            continue
-        fi
+        [ "$sample_time" -gt "$now" ] && continue
         [ -n "${sample_usage:-}" ] || continue
         [[ "$sample_usage" == .* ]] && sample_usage="0$sample_usage"
-        wow_update_anchor_cache "$sample_time" "$sample_usage"
+        burn_rate_update_cache "$sample_time" "$sample_usage"
     done < "$history_path"
 }
 
@@ -707,9 +828,9 @@ get_trend_arrow() {
     # Fine-grained anchor band around `now - 1 week` so the week-over-week
     # helper can look up prior-week samples without up-to-4h drift.
     local fine_anchor_interval=${TREND_FINE_ANCHOR_INTERVAL:-600}
-    local wow_window=${WEEK_OVER_WEEK_WINDOW:-7200}
+    local burn_rate_window=${BURN_RATE_WINDOW:-7200}
     local week_back=$((now - SECONDS_PER_WEEK))
-    local week_back_margin=$((wow_window + WEEK_OVER_WEEK_FINE_ANCHOR_MARGIN))
+    local week_back_margin=$((burn_rate_window + BURN_RATE_FINE_ANCHOR_MARGIN))
     local week_back_lo=$((week_back - week_back_margin))
     local week_back_hi=$((week_back + week_back_margin))
     local max_age=$((now - trend_history_max_age))
@@ -728,7 +849,10 @@ get_trend_arrow() {
     local arrow_code="stable"
     [[ "$current_usage" == .* ]] && current_usage="0$current_usage"
 
-    wow_init_anchor_cache "${USAGE_HISTORY:-}" "$now" "$wow_window"
+    local recent_fine_age=$((burn_rate_window * 2))
+    local current_usage_milli_for_cache=""
+    trend_usage_to_milli_pct "$current_usage" current_usage_milli_for_cache 2>/dev/null || current_usage_milli_for_cache=""
+    burn_rate_init_cache "${USAGE_HISTORY:-}" "$now" "$burn_rate_window" "$current_usage_milli_for_cache"
     if [ -f "$USAGE_HISTORY" ]; then
         while IFS=, read -r sample_time sample_usage || [ -n "$sample_time" ]; do
             [ -n "$sample_time" ] || continue
@@ -747,10 +871,16 @@ get_trend_arrow() {
             if [ "$sample_time" -lt "$cutoff" ]; then
                 bucket_size=$anchor_interval
                 bucket_prefix="c"
-                if [ "$sample_time" -ge "$week_back_lo" ] \
+                if [ $((now - sample_time)) -le "$recent_fine_age" ]; then
+                    # Fine 10-min buckets for the last few hours so the 1h
+                    # burn-rate horizon has enough resolution to land inside
+                    # its tolerance band.
+                    bucket_size=$fine_anchor_interval
+                    bucket_prefix="fr"
+                elif [ "$sample_time" -ge "$week_back_lo" ] \
                     && [ "$sample_time" -le "$week_back_hi" ]; then
                     bucket_size=$fine_anchor_interval
-                    bucket_prefix="f"
+                    bucket_prefix="fw"
                 fi
                 block="${bucket_prefix}$(((now - sample_time) / bucket_size))"
                 case "$seen_blocks" in
@@ -761,7 +891,7 @@ get_trend_arrow() {
 
             printf -v kept_history '%s%s%s,%s' "$kept_history" "$kept_sep" "$sample_time" "$sample_usage"
             kept_sep=$'\n'
-            wow_update_anchor_cache "$sample_time" "$sample_usage"
+            burn_rate_update_cache "$sample_time" "$sample_usage"
 
             # Trend calculation uses only samples inside the current weekly
             # reset cycle, but we still retain older samples above so the
@@ -1001,10 +1131,9 @@ get_smart_pace_indicator() {
 }
 
 # Format a milli-percent-per-hour rate as "X.Y%/h" (writes through out_var).
-# Used by get_week_over_week_indicator for both the delta frame and the
-# raw-rate frame. Negative values get a Unicode minus prefix; the caller is
-# responsible for prepending "+" on non-negative deltas when desired.
-wow_format_rate_milli() {
+# Negative values get a Unicode minus prefix; callers prepend "+" on positive
+# deltas when desired. Tenths are rounded (0.149 → 0.1, 0.150 → 0.2).
+burn_rate_format_milli() {
     local milli=$1
     local out_var=$2
     local sign=""
@@ -1022,197 +1151,184 @@ wow_format_rate_milli() {
     printf -v "$out_var" '%s%d.%d%%/h' "$sign" "$whole" "$frac"
 }
 
-STATUSLINE_WOW_COLLECT_BEST_A=0
-STATUSLINE_WOW_COLLECT_U_A=""
-STATUSLINE_WOW_COLLECT_BEST_B=$WOW_DISTANCE_SENTINEL
-STATUSLINE_WOW_COLLECT_U_B=""
-STATUSLINE_WOW_COLLECT_BEST_C=$WOW_DISTANCE_SENTINEL
-STATUSLINE_WOW_COLLECT_U_C=""
-STATUSLINE_WOW_COLLECT_BEST_D=$WOW_DISTANCE_SENTINEL
-STATUSLINE_WOW_COLLECT_U_D=""
+# Compute a rate pair (u_later - u_earlier) / (t_later - t_earlier) in
+# milli-percent per hour. Returns non-zero if dt < min_gap or either side
+# is empty. Writes the rate through out_var.
+burn_rate_compute_rate() {
+    local u_later=$1
+    local t_later=$2
+    local u_earlier=$3
+    local t_earlier=$4
+    local min_gap=$5
+    local out_var=$6
 
-wow_collect_anchors() {
-    local current_usage_milli=$1
-    local now=$2
-    local wow_window=$3
-    local history_path=${USAGE_HISTORY:-}
+    [ -n "$u_later" ] || return 1
+    [ -n "$u_earlier" ] || return 1
+    [ -n "$t_later" ] || return 1
+    [ -n "$t_earlier" ] || return 1
 
-    STATUSLINE_WOW_COLLECT_BEST_A=0
-    STATUSLINE_WOW_COLLECT_U_A=$current_usage_milli
-    STATUSLINE_WOW_COLLECT_BEST_B=$WOW_DISTANCE_SENTINEL
-    STATUSLINE_WOW_COLLECT_U_B=""
-    STATUSLINE_WOW_COLLECT_BEST_C=$WOW_DISTANCE_SENTINEL
-    STATUSLINE_WOW_COLLECT_U_C=""
-    STATUSLINE_WOW_COLLECT_BEST_D=$WOW_DISTANCE_SENTINEL
-    STATUSLINE_WOW_COLLECT_U_D=""
+    local dt=$((t_later - t_earlier))
+    [ "$dt" -ge "$min_gap" ] || return 1
+    local du=$((u_later - u_earlier))
+    [ "$du" -ge 0 ] || return 1
 
-    if ! wow_anchor_cache_matches "$history_path" "$now" "$wow_window"; then
-        wow_prime_anchor_cache_from_history "$history_path" "$now" "$wow_window"
-    fi
-    if wow_anchor_cache_matches "$history_path" "$now" "$wow_window"; then
-        STATUSLINE_WOW_COLLECT_BEST_B=$STATUSLINE_WOW_CACHE_BEST_B
-        STATUSLINE_WOW_COLLECT_BEST_C=$STATUSLINE_WOW_CACHE_BEST_C
-        STATUSLINE_WOW_COLLECT_BEST_D=$STATUSLINE_WOW_CACHE_BEST_D
-        STATUSLINE_WOW_COLLECT_U_B=$STATUSLINE_WOW_CACHE_U_B
-        STATUSLINE_WOW_COLLECT_U_C=$STATUSLINE_WOW_CACHE_U_C
-        STATUSLINE_WOW_COLLECT_U_D=$STATUSLINE_WOW_CACHE_U_D
-    fi
+    printf -v "$out_var" '%s' "$((du * 3600 / dt))"
 }
 
-wow_render_raw_frame() {
-    local u_a=$1
-    local u_b=$2
-    local best_a=$3
-    local best_b=$4
-    local tol_recent=$5
-    local wow_window=$6
+# Render a single burn-rate frame (kind is "raw" or "delta") into REPLY.
+burn_rate_render_frame() {
+    local kind=$1
+    local label=$2
+    local value=$3
+    local warm=${BURN_RATE_DELTA_WARM_MILLI:-150}
+    local hot=${BURN_RATE_DELTA_HOT_MILLI:-500}
 
-    if [ -n "$u_b" ] && [ "$best_a" -le "$tol_recent" ] && [ "$best_b" -le "$tol_recent" ]; then
-        local current_rate_milli=$(( (u_a - u_b) * 3600 / wow_window ))
-        if [ "$current_rate_milli" -ge 0 ]; then
-            local formatted=""
-            wow_format_rate_milli "$current_rate_milli" formatted
-            REPLY="${DIM}${formatted}${RESET}"
-            return
-        fi
-    fi
-
-    REPLY=""
-}
-
-wow_render_delta_frame() {
-    local u_a=$1
-    local u_b=$2
-    local u_c=$3
-    local u_d=$4
-    local best_a=$5
-    local best_b=$6
-    local best_c=$7
-    local best_d=$8
-    local tol_recent=$9
-    local tol_prior=${10}
-    local wow_window=${11}
-    local wow_delta_warm_milli=${12}
-    local wow_delta_hot_milli=${13}
-
-    if [ -z "$u_b" ] || [ -z "$u_c" ] || [ -z "$u_d" ] \
-        || [ "$best_a" -gt "$tol_recent" ] || [ "$best_b" -gt "$tol_recent" ] \
-        || [ "$best_c" -gt "$tol_prior" ] || [ "$best_d" -gt "$tol_prior" ]; then
-        REPLY=""
+    if [ "$kind" = "raw" ]; then
+        local formatted=""
+        burn_rate_format_milli "$value" formatted
+        REPLY="${DIM}${formatted}${RESET}"
         return
     fi
 
-    local current_rate_milli=$(( (u_a - u_b) * 3600 / wow_window ))
-    local prior_rate_milli=$(( (u_c - u_d) * 3600 / wow_window ))
-    if [ "$current_rate_milli" -lt 0 ] || [ "$prior_rate_milli" -lt 0 ]; then
-        REPLY=""
-        return
-    fi
-
-    local delta_rate_milli=$((current_rate_milli - prior_rate_milli))
-
-    # Bucket thresholds in milli-percent per hour.
     # Sustainable rate ≈ 595 milli%/h (100%/168h), so ±150 is ~25% swing and
     # ±500 is ~85% swing — well above the noise floor for a 2h window.
     local arrow_code="stable"
-    if [ "$delta_rate_milli" -ge "$wow_delta_hot_milli" ]; then
+    if [ "$value" -ge "$hot" ]; then
         arrow_code="hot"
-    elif [ "$delta_rate_milli" -ge "$wow_delta_warm_milli" ]; then
+    elif [ "$value" -ge "$warm" ]; then
         arrow_code="warm"
-    elif [ "$delta_rate_milli" -le "$((-wow_delta_hot_milli))" ]; then
+    elif [ "$value" -le "$((-hot))" ]; then
         arrow_code="cold"
-    elif [ "$delta_rate_milli" -le "$((-wow_delta_warm_milli))" ]; then
+    elif [ "$value" -le "$((-warm))" ]; then
         arrow_code="cool"
     fi
 
     local delta_formatted=""
-    if [ "$delta_rate_milli" -ge 0 ]; then
-        local positive_formatted=""
-        wow_format_rate_milli "$delta_rate_milli" positive_formatted
-        delta_formatted="+$positive_formatted"
+    if [ "$value" -ge 0 ]; then
+        local positive=""
+        burn_rate_format_milli "$value" positive
+        delta_formatted="+$positive"
     else
-        wow_format_rate_milli "$delta_rate_milli" delta_formatted
+        burn_rate_format_milli "$value" delta_formatted
     fi
 
     local arrow_char="→"
     local color="$VEL_STABLE"
     velocity_arrow_style "$arrow_code" arrow_char color
-
-    REPLY="${color}${arrow_char} ${delta_formatted}${RESET}"
+    REPLY="${color}${arrow_char} ${label} ${delta_formatted}${RESET}"
 }
 
-# Week-over-week burn-rate indicator.
+# Progressive burn-rate indicator.
 #
-# Compares the weekly-usage burn rate over a short sliding window (default 2h)
-# to the rate over the matching window exactly 1 week ago. Both windows are
-# sourced from the same $USAGE_HISTORY file that powers the pace trend arrow,
-# which means parallel statusline renders all share one account-wide history.
+# Renders a short segment in the Line 2 throughput slot that answers
+# "am I burning through my weekly limit faster than I was before?".
 #
-# Returns (via REPLY) a short segment:
-#   Frames 0–6 (70% of the time): arrow + delta rate, e.g. "↗ +0.4%/h"
-#   Frames 7–9 (30% of the time): raw current rate,   e.g. "1.0%/h"
+# The segment is designed to **always show something** given any usable
+# history, and to **get more informative** as data accumulates:
+#
+#   Day 0 (install or post-reset): raw current rate, e.g. "1.2%/h".
+#   Adds a "↘ 1h −0.3%/h" frame as soon as ~1h of history exists.
+#   Adds "↘ 1d ...", "↘ 1w ...", "↘ 2w ..." frames as their horizons unlock.
+#
+# At steady state (≥2 weeks of history) it rotates through raw + 1h + 1d +
+# 1w + 2w frames every BURN_RATE_ROTATION_SECONDS seconds so you can glance
+# at any horizon. Renders empty only when there is literally no usable pair
+# of samples in history and no reset-tolerant "now" rate to fall back on.
 #
 # Semantic coloring reuses the VEL_* palette (↑ hot / ↗ warm / → stable /
 # ↘ cool / ↓ cold) so the visual language matches the pace trend arrow.
-#
-# Renders empty when:
-#   - usage is sentinel
-#   - the history file lacks samples near any of the 4 required anchors
-#   - either computed rate is negative (window straddles a weekly reset)
-get_week_over_week_indicator() {
+get_burn_rate_indicator() {
     local current_usage=$1
     local now=${2:-$(date +%s)}
-    local wow_window=${WEEK_OVER_WEEK_WINDOW:-7200}
+    local window=${BURN_RATE_WINDOW:-7200}
+    local rotation=${BURN_RATE_ROTATION_SECONDS:-5}
+    local min_gap=${BURN_RATE_MIN_GAP:-300}
 
-    if ! [[ "$wow_window" =~ ^[0-9]+$ ]] || [ "$wow_window" -le 0 ]; then
+    if ! [[ "$window" =~ ^[0-9]+$ ]] || [ "$window" -le 0 ]; then
         REPLY=""
         return
     fi
-
+    if ! [[ "$rotation" =~ ^[0-9]+$ ]] || [ "$rotation" -le 0 ]; then
+        rotation=5
+    fi
     if is_sentinel_value "$current_usage"; then
         REPLY=""
         return
     fi
 
+    [[ "$current_usage" == .* ]] && current_usage="0$current_usage"
     local current_usage_milli=""
     if ! trend_usage_to_milli_pct "$current_usage" current_usage_milli; then
         REPLY=""
         return
     fi
 
-    # Tolerance for matching samples to the 4 anchor times. Recent-side
-    # samples are logged at least every 30s by get_trend_arrow, so 15min
-    # is plenty. Prior-week samples are sparsified to 10min buckets inside
-    # the fine-anchor band, so 20min covers drift + margin.
-    local tol_recent=${WEEK_OVER_WEEK_TOL_RECENT:-900}
-    local tol_prior=${WEEK_OVER_WEEK_TOL_PRIOR:-1200}
-    local wow_delta_warm_milli=${WOW_DELTA_WARM_MILLI:-150}
-    local wow_delta_hot_milli=${WOW_DELTA_HOT_MILLI:-500}
-    local best_a=0 u_a=""
-    local best_b=$WOW_DISTANCE_SENTINEL u_b=""
-    local best_c=$WOW_DISTANCE_SENTINEL u_c=""
-    local best_d=$WOW_DISTANCE_SENTINEL u_d=""
+    local history_path=${USAGE_HISTORY:-}
+    if ! burn_rate_cache_matches "$history_path" "$now" "$window" "$current_usage_milli"; then
+        burn_rate_prime_cache_from_history "$history_path" "$now" "$window" "$current_usage_milli"
+    fi
 
-    wow_collect_anchors "$current_usage_milli" "$now" "$wow_window"
-    best_a=$STATUSLINE_WOW_COLLECT_BEST_A
-    u_a=$STATUSLINE_WOW_COLLECT_U_A
-    best_b=$STATUSLINE_WOW_COLLECT_BEST_B
-    u_b=$STATUSLINE_WOW_COLLECT_U_B
-    best_c=$STATUSLINE_WOW_COLLECT_BEST_C
-    u_c=$STATUSLINE_WOW_COLLECT_U_C
-    best_d=$STATUSLINE_WOW_COLLECT_BEST_D
-    u_d=$STATUSLINE_WOW_COLLECT_U_D
+    # "Now" side of the rate: prefer the oldest post-reset sample inside the
+    # rate window; then the oldest post-reset sample anywhere; then — if the
+    # weekly limit reset so recently that there are no post-reset history
+    # samples yet — treat the most recent pre-reset timestamp as "usage was
+    # 0% here" so the raw rate still renders immediately after a reset. The
+    # reset filter inside burn_rate_update_cache keeps OIW/OLDEST from ever
+    # straddling a weekly reset boundary.
+    local rate_now_milli=""
+    local rate_now_is_fallback=0
+    if burn_rate_compute_rate "$current_usage_milli" "$now" \
+        "$BURN_RATE_OIW_U" "$BURN_RATE_OIW_T" "$min_gap" rate_now_milli; then
+        :
+    elif burn_rate_compute_rate "$current_usage_milli" "$now" \
+        "$BURN_RATE_OLDEST_U" "$BURN_RATE_OLDEST_T" "$min_gap" rate_now_milli; then
+        :
+    elif [ -n "$BURN_RATE_NEWEST_PRE_RESET_T" ] \
+        && burn_rate_compute_rate "$current_usage_milli" "$now" \
+        "0" "$BURN_RATE_NEWEST_PRE_RESET_T" "$min_gap" rate_now_milli; then
+        rate_now_is_fallback=1
+    else
+        rate_now_milli=""
+    fi
 
-    local cycle=$(( (now / 10) % 10 ))
+    local frames=()
+    if [ -n "$rate_now_milli" ]; then
+        frames+=("raw:now:$rate_now_milli")
+    fi
 
-    # Frames 7–9: raw current-window rate
-    if [ "$cycle" -ge 7 ]; then
-        wow_render_raw_frame "$u_a" "$u_b" "$best_a" "$best_b" "$tol_recent" "$wow_window"
+    # Delta horizons are only meaningful when rate_now comes from real
+    # post-reset data — the reset-fallback "rate" is an extrapolation from a
+    # single point and would swamp any comparison.
+    if [ "$rate_now_is_fallback" -eq 0 ] && [ -n "$rate_now_milli" ]; then
+        local horizon_rate=""
+        if burn_rate_compute_rate "$BURN_RATE_U_HR" "$BURN_RATE_T_HR" \
+            "$BURN_RATE_U_HR_WIN" "$BURN_RATE_T_HR_WIN" "$min_gap" horizon_rate; then
+            frames+=("delta:1h:$((rate_now_milli - horizon_rate))")
+        fi
+        if burn_rate_compute_rate "$BURN_RATE_U_DAY" "$BURN_RATE_T_DAY" \
+            "$BURN_RATE_U_DAY_WIN" "$BURN_RATE_T_DAY_WIN" "$min_gap" horizon_rate; then
+            frames+=("delta:1d:$((rate_now_milli - horizon_rate))")
+        fi
+        if burn_rate_compute_rate "$BURN_RATE_U_WK" "$BURN_RATE_T_WK" \
+            "$BURN_RATE_U_WK_WIN" "$BURN_RATE_T_WK_WIN" "$min_gap" horizon_rate; then
+            frames+=("delta:1w:$((rate_now_milli - horizon_rate))")
+        fi
+        if burn_rate_compute_rate "$BURN_RATE_U_WK2" "$BURN_RATE_T_WK2" \
+            "$BURN_RATE_U_WK2_WIN" "$BURN_RATE_T_WK2_WIN" "$min_gap" horizon_rate; then
+            frames+=("delta:2w:$((rate_now_milli - horizon_rate))")
+        fi
+    fi
+
+    if [ ${#frames[@]} -eq 0 ]; then
+        REPLY=""
         return
     fi
 
-    wow_render_delta_frame "$u_a" "$u_b" "$u_c" "$u_d" \
-        "$best_a" "$best_b" "$best_c" "$best_d" \
-        "$tol_recent" "$tol_prior" "$wow_window" \
-        "$wow_delta_warm_milli" "$wow_delta_hot_milli"
+    local idx=$(( (now / rotation) % ${#frames[@]} ))
+    local frame=${frames[$idx]}
+    local kind=${frame%%:*}
+    local rest=${frame#*:}
+    local label=${rest%%:*}
+    local value=${rest##*:}
+    burn_rate_render_frame "$kind" "$label" "$value"
 }
