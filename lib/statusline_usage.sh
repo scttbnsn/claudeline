@@ -3,7 +3,14 @@
 SECONDS_PER_DAY=${SECONDS_PER_DAY:-86400}
 SECONDS_PER_WEEK=${SECONDS_PER_WEEK:-$((7 * SECONDS_PER_DAY))}
 JSONL_CACHE_TTL=${JSONL_CACHE_TTL:-300}
-TREND_HISTORY_MAX_AGE=${TREND_HISTORY_MAX_AGE:-$SECONDS_PER_DAY}
+# Retain ~8 days of usage samples so week-over-week comparisons can reach back
+# past the current weekly reset. Old samples are sparsified via anchor_interval
+# inside get_trend_arrow so the on-disk file stays small.
+TREND_HISTORY_MAX_AGE=${TREND_HISTORY_MAX_AGE:-$((8 * SECONDS_PER_DAY))}
+# Sliding window (seconds) used to compute both the current burn rate and the
+# matched rate one week ago. 2h is twitchy enough to react to a setup change
+# within ~1h while staying above idle-period noise.
+WEEK_OVER_WEEK_WINDOW=${WEEK_OVER_WEEK_WINDOW:-7200}
 STATUSLINE_USAGE_DIR=$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 STATUSLINE_JSONL_PARSER=${STATUSLINE_JSONL_PARSER:-$STATUSLINE_USAGE_DIR/jsonl_parser.pl}
 STATUSLINE_STAT_MTIME_FLAG=${STATUSLINE_STAT_MTIME_FLAG:-}
@@ -580,6 +587,14 @@ get_trend_arrow() {
     local trend_history_max_age=${TREND_HISTORY_MAX_AGE}
     local min_interval=30
     local anchor_interval=14400
+    # Fine-grained anchor band around `now - 1 week` so the week-over-week
+    # helper can look up prior-week samples without up-to-4h drift.
+    local fine_anchor_interval=${TREND_FINE_ANCHOR_INTERVAL:-600}
+    local wow_window=${WEEK_OVER_WEEK_WINDOW:-7200}
+    local week_back=$((now - SECONDS_PER_WEEK))
+    local week_back_margin=$((wow_window + 1800))
+    local week_back_lo=$((week_back - week_back_margin))
+    local week_back_hi=$((week_back + week_back_margin))
     local max_age=$((now - trend_history_max_age))
     local cutoff=$((now - trend_window))
     local first_time=0
@@ -591,7 +606,7 @@ get_trend_arrow() {
     local kept_history=""
     local kept_sep=""
     local seen_blocks="|"
-    local sample_time sample_usage block
+    local sample_time sample_usage block bucket_size bucket_prefix
     local arrow_code="stable"
     [[ "$current_usage" == .* ]] && current_usage="0$current_usage"
 
@@ -603,19 +618,33 @@ get_trend_arrow() {
             [[ "$sample_usage" == .* ]] && sample_usage="0$sample_usage"
             is_decimal_value "$sample_usage" || continue
 
-            if [ "$week_start" -gt 0 ] && [ "$sample_time" -lt "$week_start" ]; then
-                continue
-            fi
             if [ "$sample_time" -lt "$max_age" ]; then
                 continue
             fi
 
             if [ "$sample_time" -lt "$cutoff" ]; then
-                block=$(((now - sample_time) / anchor_interval))
+                bucket_size=$anchor_interval
+                bucket_prefix="c"
+                if [ "$sample_time" -ge "$week_back_lo" ] \
+                    && [ "$sample_time" -le "$week_back_hi" ]; then
+                    bucket_size=$fine_anchor_interval
+                    bucket_prefix="f"
+                fi
+                block="${bucket_prefix}$(((now - sample_time) / bucket_size))"
                 case "$seen_blocks" in
                     *"|$block|"*) continue ;;
                 esac
                 seen_blocks="${seen_blocks}${block}|"
+            fi
+
+            printf -v kept_history '%s%s%s,%s' "$kept_history" "$kept_sep" "$sample_time" "$sample_usage"
+            kept_sep=$'\n'
+
+            # Trend calculation uses only samples inside the current weekly
+            # reset cycle, but we still retain older samples above so the
+            # week-over-week helper can reach them.
+            if [ "$week_start" -gt 0 ] && [ "$sample_time" -lt "$week_start" ]; then
+                continue
             fi
 
             if [ "$first_time" -eq 0 ] || [ "$sample_time" -lt "$first_time" ]; then
@@ -630,8 +659,6 @@ get_trend_arrow() {
                 most_recent_time=$sample_time
             fi
             count=$((count + 1))
-            printf -v kept_history '%s%s%s,%s' "$kept_history" "$kept_sep" "$sample_time" "$sample_usage"
-            kept_sep=$'\n'
         done < "$USAGE_HISTORY"
     fi
 
@@ -849,4 +876,195 @@ get_smart_pace_indicator() {
     pace_emoji_for_rate "$effective_rate_x10k" emoji
 
     REPLY="${emoji}${arrow}"
+}
+
+# Format a milli-percent-per-hour rate as "X.Y%/h" (writes through out_var).
+# Used by get_week_over_week_indicator for both the delta frame and the
+# raw-rate frame. Negative values get a Unicode minus prefix; the caller is
+# responsible for prepending "+" on non-negative deltas when desired.
+wow_format_rate_milli() {
+    local milli=$1
+    local out_var=$2
+    local sign=""
+    local abs=$milli
+    if [ "$milli" -lt 0 ]; then
+        sign="−"
+        abs=$((-milli))
+    fi
+    local whole=$((abs / 1000))
+    local frac=$(((abs % 1000) / 100))
+    printf -v "$out_var" '%s%d.%d%%/h' "$sign" "$whole" "$frac"
+}
+
+# Week-over-week burn-rate indicator.
+#
+# Compares the weekly-usage burn rate over a short sliding window (default 2h)
+# to the rate over the matching window exactly 1 week ago. Both windows are
+# sourced from the same $USAGE_HISTORY file that powers the pace trend arrow,
+# which means parallel statusline renders all share one account-wide history.
+#
+# Returns (via REPLY) a short segment:
+#   Frames 0–6 (70% of the time): arrow + delta rate, e.g. "↗ +0.4%/h"
+#   Frames 7–9 (30% of the time): raw current rate,   e.g. "1.0%/h"
+#
+# Semantic coloring reuses the VEL_* palette (↑ hot / ↗ warm / → stable /
+# ↘ cool / ↓ cold) so the visual language matches the pace trend arrow.
+#
+# Renders empty when:
+#   - usage is sentinel
+#   - the history file lacks samples near any of the 4 required anchors
+#   - either computed rate is negative (window straddles a weekly reset)
+get_week_over_week_indicator() {
+    local current_usage=$1
+    local now=${2:-$(date +%s)}
+    local wow_window=${WEEK_OVER_WEEK_WINDOW:-7200}
+
+    if is_sentinel_value "$current_usage"; then
+        REPLY=""
+        return
+    fi
+
+    local current_usage_milli=""
+    if ! trend_usage_to_milli_pct "$current_usage" current_usage_milli; then
+        REPLY=""
+        return
+    fi
+
+    # Tolerance for matching samples to the 4 anchor times. Recent-side
+    # samples are logged at least every 30s by get_trend_arrow, so 15min
+    # is plenty. Prior-week samples are sparsified to 10min buckets inside
+    # the fine-anchor band, so 20min covers drift + margin.
+    local tol_recent=${WEEK_OVER_WEEK_TOL_RECENT:-900}
+    local tol_prior=${WEEK_OVER_WEEK_TOL_PRIOR:-1200}
+
+    local target_a=$now
+    local target_b=$((now - wow_window))
+    local target_c=$((now - SECONDS_PER_WEEK))
+    local target_d=$((now - SECONDS_PER_WEEK - wow_window))
+
+    # Seed the "now" anchor with the live current_usage at distance 0 so we
+    # don't need a freshly-written history row to render.
+    local best_a=0 u_a=$current_usage_milli
+    local best_b=2147483647 u_b=""
+    local best_c=2147483647 u_c=""
+    local best_d=2147483647 u_d=""
+
+    if [ -f "$USAGE_HISTORY" ]; then
+        local sample_time sample_usage sample_milli dist
+        while IFS=, read -r sample_time sample_usage || [ -n "$sample_time" ]; do
+            [ -n "$sample_time" ] || continue
+            [[ "$sample_time" =~ ^[0-9]+$ ]] || continue
+            [ -n "${sample_usage:-}" ] || continue
+            [[ "$sample_usage" == .* ]] && sample_usage="0$sample_usage"
+            trend_usage_to_milli_pct "$sample_usage" sample_milli || continue
+
+            if [ "$sample_time" -ge "$target_a" ]; then
+                dist=$((sample_time - target_a))
+            else
+                dist=$((target_a - sample_time))
+            fi
+            if [ "$dist" -lt "$best_a" ]; then
+                best_a=$dist
+                u_a=$sample_milli
+            fi
+
+            if [ "$sample_time" -ge "$target_b" ]; then
+                dist=$((sample_time - target_b))
+            else
+                dist=$((target_b - sample_time))
+            fi
+            if [ "$dist" -lt "$best_b" ]; then
+                best_b=$dist
+                u_b=$sample_milli
+            fi
+
+            if [ "$sample_time" -ge "$target_c" ]; then
+                dist=$((sample_time - target_c))
+            else
+                dist=$((target_c - sample_time))
+            fi
+            if [ "$dist" -lt "$best_c" ]; then
+                best_c=$dist
+                u_c=$sample_milli
+            fi
+
+            if [ "$sample_time" -ge "$target_d" ]; then
+                dist=$((sample_time - target_d))
+            else
+                dist=$((target_d - sample_time))
+            fi
+            if [ "$dist" -lt "$best_d" ]; then
+                best_d=$dist
+                u_d=$sample_milli
+            fi
+        done < "$USAGE_HISTORY"
+    fi
+
+    local cycle=$(( (now / 10) % 10 ))
+
+    # Frames 7–9: raw current-window rate
+    if [ "$cycle" -ge 7 ]; then
+        if [ -n "$u_b" ] && [ "$best_a" -le "$tol_recent" ] && [ "$best_b" -le "$tol_recent" ]; then
+            local current_rate_milli=$(( (u_a - u_b) * 3600 / wow_window ))
+            if [ "$current_rate_milli" -ge 0 ]; then
+                local formatted=""
+                wow_format_rate_milli "$current_rate_milli" formatted
+                REPLY="${DIM}${formatted}${RESET}"
+                return
+            fi
+        fi
+        REPLY=""
+        return
+    fi
+
+    # Frames 0–6: arrow + delta vs matched window 1 week ago
+    if [ -z "$u_b" ] || [ -z "$u_c" ] || [ -z "$u_d" ] \
+        || [ "$best_a" -gt "$tol_recent" ] || [ "$best_b" -gt "$tol_recent" ] \
+        || [ "$best_c" -gt "$tol_prior" ] || [ "$best_d" -gt "$tol_prior" ]; then
+        REPLY=""
+        return
+    fi
+
+    local current_rate_milli=$(( (u_a - u_b) * 3600 / wow_window ))
+    local prior_rate_milli=$(( (u_c - u_d) * 3600 / wow_window ))
+    if [ "$current_rate_milli" -lt 0 ] || [ "$prior_rate_milli" -lt 0 ]; then
+        REPLY=""
+        return
+    fi
+
+    local delta_rate_milli=$((current_rate_milli - prior_rate_milli))
+
+    # Bucket thresholds in milli-percent per hour.
+    # Sustainable rate ≈ 595 milli%/h (100%/168h), so ±150 is ~25% swing and
+    # ±500 is ~85% swing — well above the noise floor for a 2h window.
+    local arrow_code="stable"
+    if [ "$delta_rate_milli" -ge 500 ]; then
+        arrow_code="hot"
+    elif [ "$delta_rate_milli" -ge 150 ]; then
+        arrow_code="warm"
+    elif [ "$delta_rate_milli" -le -500 ]; then
+        arrow_code="cold"
+    elif [ "$delta_rate_milli" -le -150 ]; then
+        arrow_code="cool"
+    fi
+
+    local delta_formatted=""
+    if [ "$delta_rate_milli" -ge 0 ]; then
+        local positive_formatted=""
+        wow_format_rate_milli "$delta_rate_milli" positive_formatted
+        delta_formatted="+$positive_formatted"
+    else
+        wow_format_rate_milli "$delta_rate_milli" delta_formatted
+    fi
+
+    local arrow_char="→"
+    local color="$VEL_STABLE"
+    case "$arrow_code" in
+        hot)  arrow_char="↑"; color="$VEL_HOT" ;;
+        warm) arrow_char="↗"; color="$VEL_WARM" ;;
+        cold) arrow_char="↓"; color="$VEL_COLD" ;;
+        cool) arrow_char="↘"; color="$VEL_COOL" ;;
+    esac
+
+    REPLY="${color}${arrow_char} ${delta_formatted}${RESET}"
 }

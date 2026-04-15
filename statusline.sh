@@ -653,9 +653,9 @@ if seg_on "$_SEG_TOKENS"; then
 fi
 _L2_MODEL=""; seg_on "$_SEG_MODEL" && _L2_MODEL="${DIM}${MODEL}${RESET}"
 _L2_THROUGHPUT=""
-if seg_on "$_SEG_THROUGHPUT" && [ "$API_DURATION_MS" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG" && [ "$TOTAL_OUTPUT" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
-    THROUGHPUT=$((TOTAL_OUTPUT * 1000 / API_DURATION_MS))
-    _L2_THROUGHPUT="${DIM}${THROUGHPUT} 🪙/s${RESET}"
+if seg_on "$_SEG_THROUGHPUT" && [ -n "$WEEKLY_USAGE" ] && ! is_sentinel_value "$WEEKLY_USAGE"; then
+    get_week_over_week_indicator "$WEEKLY_USAGE" "$NOW"
+    _L2_THROUGHPUT=$REPLY
 fi
 _L2_METRIC=""; seg_on "$_SEG_METRIC" && _L2_METRIC="$METRIC_INFO"
 
