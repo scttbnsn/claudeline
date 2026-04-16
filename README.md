@@ -11,16 +11,16 @@
 </div>
 
 ```
-✨ ████░░░░░░  ·  myrepo/main*  ·  +50/-20  ·  👌→  ·  💥▃  ·  💳25%  ·  ⏱️ 45m
-│  └────┬────┘     └─────┬─────┘   └───┬──┘   └─┬──┘  └─┬┘   └─┬──┘    └──┬───┘
-│    context          repo/branch     lines    pace  burst  credit    duration
-│    bar              + git status    changed  trend
+✨ ████░░░░░░  ·  myrepo/main*  ·  👌→  ·  ↗ 1h +0.2%/h  ·  +50/-20  ·  💥▃  ·  💳25%
+│  └────┬────┘     └─────┬─────┘    └┬┘       └────┬────┘    └───┬──┘    └┬┘    └─┬─┘
+│    context          repo/branch   pace        burn-rate       lines   burst  credit
+│    bar              + git status  trend       indicator       changed
 └─ context icon (✨🌱💭🧠⚡🔥🌡️🫠💀💾)
 
-    73.5K/168K  ·  🍕 3 joe's®  ·  Opus 4.6  ·  ↗ +0.2%/h
-    └────┬────┘    └─────┬─────┘   └───┬───┘    └────┬────┘
-      context         rotating       model      week-over-week
-      tokens          metric                    burn-rate delta
+    73.5K/168K  ·  🍕 3 joe's®  ·  ⏱️ 45m  ·  Opus 4.6
+    └────┬────┘    └─────┬─────┘    └──┬──┘    └───┬───┘
+       context        rotating      session       model
+       tokens         metric        duration
 ```
 
 <div align="center">
@@ -34,6 +34,7 @@
 - [🚀 Quick Start](#quick-start)
 - [✨ Features](#features)
 - [📊 Smart Pace Indicator](#smart-pace-indicator)
+- [📈 Progressive Burn-Rate](#progressive-burn-rate)
 - [💥 Burst & Credit Indicators](#burst--credit-indicators)
 - [🌍 Environmental Impact](#environmental-impact)
 - [🏆 All-Time Tracking](#all-time-tracking)
@@ -121,8 +122,8 @@ Adapts to auto-compact setting — scales to 168K (ON) or 200K (OFF) with color 
 Dual-signal weekly pace (burn rate + pressure) with 8-tier emoji scale and velocity-based trend arrows
 </td>
 <td align="center" width="33%">
-<h3>Burst & Credit</h3>
-8-level colored bar for 5-hour rate limit with reset countdown, plus overage credit tracking
+<h3>Progressive Burn-Rate</h3>
+Current %/h plus rotating deltas vs. 1h / 1d / 1w / 2w ago — horizons unlock as history accumulates so it never goes blank
 </td>
 </tr>
 <tr>
@@ -141,16 +142,16 @@ Cumulative usage across all sessions from JSONL files, shown with 🏆 trophy on
 </tr>
 <tr>
 <td align="center" width="33%">
+<h3>Burst & Credit</h3>
+8-level colored bar for 5-hour rate limit with reset countdown, plus overage credit tracking
+</td>
+<td align="center" width="33%">
 <h3>Git Integration</h3>
 Repo/branch with status indicators — unstaged, staged, ahead/behind, stash count
 </td>
 <td align="center" width="33%">
-<h3>5 Built-in Themes</h3>
-Vibey (default), Dark, Light, Nord, and Gruvbox — plus NO_COLOR support
-</td>
-<td align="center" width="33%">
-<h3>1M Context Support</h3>
-Detects extended context windows and scales the bar accordingly
+<h3>5 Built-in Themes + 1M Context</h3>
+Vibey (default), Dark, Light, Nord, Gruvbox, NO_COLOR support, auto-detect extended 1M context windows
 </td>
 </tr>
 </table>
@@ -200,9 +201,47 @@ Tracks **usage% velocity** — how fast you're burning tokens compared to the su
 | 0.1-0.5x sustainable | ↘ | Cooling down |
 | < 0.1x sustainable | ↓ | Cooling fast |
 
-**History retention:** Last 15 min dense (every ~30s), 15min–24h sparse anchors (1 per 4h), older pruned.
+**History retention:** Last 15 min dense (every ~30s), 15 min–4 h fine 10-min buckets (so the 1h burn-rate horizon has resolution), 4 h–15 d coarse 4-h buckets with a fine-bucketed band around 1 week ago, older than 15 d pruned. Same `.usage-history` file powers both the pace trend arrow and the progressive burn-rate indicator.
 
 </details>
+
+<hr>
+
+<h2 align="center" id="progressive-burn-rate">📈 Progressive Burn-Rate</h2>
+
+Answers *"am I burning through my weekly limit faster than I was before?"* in a single glance. The segment is designed to **always render something** given any usable history, and to **get more informative as data accumulates**.
+
+**What it shows:** the current weekly-% per hour burn rate, plus deltas comparing that rate to what it was 1 hour / 1 day / 1 week / 2 weeks ago. At steady state the segment rotates through every 5 seconds:
+
+```
+1.2%/h   →   ↗ 1h +0.3%/h   →   ↘ 1d −0.2%/h   →   → 1w +0.0%/h   →   ↑ 2w +0.8%/h
+```
+
+**Horizons unlock as history accumulates** — no blank days on day zero:
+
+| Elapsed since install | Segment shows |
+|-----------------------|---------------|
+| minute 1 | raw `1.2%/h` only |
+| hour 2 | raw + `↘ 1h ±...` |
+| day 2 | raw + 1h + `↘ 1d ±...` |
+| day 8 | raw + 1h + 1d + `↘ 1w ±...` |
+| day 15 | raw + 1h + 1d + 1w + `↘ 2w ±...` |
+
+**Arrow colors** reuse the pace-trend palette so visual language is consistent:
+
+| Delta (milli%/h) | Arrow | Meaning |
+|---|---|---|
+| ≥ +500 | `↑` hot | burning ~85% faster than the comparison window |
+| ≥ +150 | `↗` warm | ~25% faster |
+| ±150 | `→` stable | within sustainable-rate noise |
+| ≤ −150 | `↘` cool | ~25% slower |
+| ≤ −500 | `↓` cold | ~85% slower |
+
+*(Sustainable rate ≈ 595 milli%/h, i.e. 100% per 7-day window.)*
+
+**Reset-aware:** if all history samples are above the current weekly %, the segment treats the most recent pre-reset sample as the weekly reset point and extrapolates the raw rate forward — so within seconds of a weekly reset you see something like `33%/h` instead of a blank slot. Delta frames are suppressed during that fallback window since they'd compare an extrapolation to a real measurement.
+
+Configurable via `BURN_RATE_WINDOW` (slope window, default 2h), `BURN_RATE_ROTATION_SECONDS` (frame rotation, default 5s), and per-horizon tolerances (`BURN_RATE_TOL_HR`, `BURN_RATE_TOL_DAY`, `BURN_RATE_TOL_WEEK`, `BURN_RATE_TOL_2WEEK`).
 
 <hr>
 
