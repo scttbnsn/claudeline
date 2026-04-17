@@ -70,6 +70,67 @@ assert_eq "1.0%/h" "$formatted" "formatter carries rounded tenths into the whole
 burn_rate_format_milli -250 formatted
 assert_eq "−0.3%/h" "$formatted" "formatter handles negative values with Unicode minus"
 
+# --- per-horizon delta thresholds ---------------------------------------
+# Baseline = 2%/h (2000 milli%/h) ≈ 40h work-week burning ~80% of budget.
+# Warm = ±25% of baseline (500 milli); hot = ±75% (1500 milli). Longer
+# horizons widen the bands because their anchor tolerance is larger.
+
+threshold_warm=""
+threshold_hot=""
+
+burn_rate_thresholds_for_label "1h" threshold_warm threshold_hot
+assert_eq "500" "$threshold_warm" "1h horizon uses the baseline warm threshold"
+assert_eq "1500" "$threshold_hot" "1h horizon uses the baseline hot threshold"
+
+burn_rate_thresholds_for_label "1d" threshold_warm threshold_hot
+assert_eq "600" "$threshold_warm" "1d horizon widens warm to 1.2× baseline"
+assert_eq "1800" "$threshold_hot" "1d horizon widens hot to 1.2× baseline"
+
+burn_rate_thresholds_for_label "1w" threshold_warm threshold_hot
+assert_eq "750" "$threshold_warm" "1w horizon widens warm to 1.5× baseline"
+assert_eq "2250" "$threshold_hot" "1w horizon widens hot to 1.5× baseline"
+
+burn_rate_thresholds_for_label "2w" threshold_warm threshold_hot
+assert_eq "900" "$threshold_warm" "2w horizon widens warm to 1.8× baseline"
+assert_eq "2700" "$threshold_hot" "2w horizon widens hot to 1.8× baseline"
+
+# Unknown labels fall back to the baseline.
+burn_rate_thresholds_for_label "unknown" threshold_warm threshold_hot
+assert_eq "500" "$threshold_warm" "unknown horizon falls back to the baseline warm threshold"
+assert_eq "1500" "$threshold_hot" "unknown horizon falls back to the baseline hot threshold"
+
+# A delta that WOULD be warm on the 1h horizon (e.g. 550 milli) must render
+# stable under the wider 2w band (warm=900).
+REPLY=""
+burn_rate_render_frame "delta" "2w" 550
+case "$REPLY" in
+    *"<stable>"*) ;;
+    *) printf 'FAIL: 550 milli on 2w horizon should be stable, got: %q\n' "$REPLY" >&2; exit 1 ;;
+esac
+
+# The same 550 milli on the 1h horizon warms the arrow.
+REPLY=""
+burn_rate_render_frame "delta" "1h" 550
+case "$REPLY" in
+    *"<warm>"*) ;;
+    *) printf 'FAIL: 550 milli on 1h horizon should be warm, got: %q\n' "$REPLY" >&2; exit 1 ;;
+esac
+
+# A delta near baseline swing (1600 milli ≈ 80% of 2%/h) is hot on 1h (≥1500)
+# but only warm on 1w (≥750 warm, <2250 hot).
+REPLY=""
+burn_rate_render_frame "delta" "1h" 1600
+case "$REPLY" in
+    *"<hot>"*) ;;
+    *) printf 'FAIL: 1600 milli on 1h horizon should be hot, got: %q\n' "$REPLY" >&2; exit 1 ;;
+esac
+REPLY=""
+burn_rate_render_frame "delta" "1w" 1600
+case "$REPLY" in
+    *"<warm>"*) ;;
+    *) printf 'FAIL: 1600 milli on 1w horizon should be warm, got: %q\n' "$REPLY" >&2; exit 1 ;;
+esac
+
 # --- sentinel / empty input ----------------------------------------------
 
 assert_eq "" "$(run_indicator "" "_" 1000000)" \
@@ -107,12 +168,16 @@ assert_eq "<dim>1.0%/h<reset>" "$reply" \
 
 # --- post-reset fallback (newest pre-reset sample) ----------------------
 
-body=$(printf '%s,%s\n%s,%s\n' "$((NOW - 3600))" "90" "$((NOW - 1800))" "92")
-reply=$(run_indicator "$body" "2" "$NOW")
+body=$(printf '%s,%s\n%s,%s\n' "$((NOW - 3600))" "90" "$((NOW - 1801))" "92")
+USAGE_HISTORY="$tmpdir/h-post-reset"
+printf '%s' "$body" > "$USAGE_HISTORY"
+BURN_RATE_CACHE_KEY=""
+get_burn_rate_indicator "2" "$NOW" "$((NOW - 1800))"
+reply=$REPLY
 # All history samples are above current (2) → reset detected.
-# NEWEST_PRE_RESET_T = NOW-1800. rate = 2*3600/1800 = 4000 milli = 4.0%/h
+# Explicit week boundary = NOW-1800. rate = 2*3600/1800 = 4000 milli = 4.0%/h
 assert_eq "<dim>4.0%/h<reset>" "$reply" \
-    "post-reset fallback renders raw rate from implicit 0% at newest pre-reset sample"
+    "post-reset fallback renders raw rate from the explicit week boundary"
 
 # --- post-reset fallback does NOT produce delta frames ------------------
 
@@ -121,9 +186,13 @@ assert_eq "<dim>4.0%/h<reset>" "$reply" \
 body=$(printf '%s,%s\n%s,%s\n%s,%s\n%s,%s\n' \
     "$((NOW - 10800))" "88" \
     "$((NOW - 3600))" "90" \
-    "$((NOW - 1800))" "92" \
-    "$((NOW - 600))" "93")
-reply=$(run_indicator "$body" "2" "$NOW")
+    "$((NOW - 2400))" "92" \
+    "$((NOW - 2100))" "93")
+USAGE_HISTORY="$tmpdir/h-post-reset-delta"
+printf '%s' "$body" > "$USAGE_HISTORY"
+BURN_RATE_CACHE_KEY=""
+get_burn_rate_indicator "2" "$NOW" "$((NOW - 1800))"
+reply=$REPLY
 # Fallback raw only; no delta frames → reply starts with <dim>
 case "$reply" in
     "<dim>"*) ;;
@@ -131,6 +200,28 @@ case "$reply" in
         printf 'FAIL: post-reset fallback should only render raw frame, got: %q\n' "$reply" >&2
         exit 1 ;;
 esac
+
+# --- rolling-window dips are not weekly resets -------------------------
+
+# In a rolling 7-day window the current usage can dip slightly as old usage
+# ages out. That must not trigger the implicit "reset to 0%" fallback.
+body=$(printf '%s,%s\n%s,%s\n' \
+    "$((NOW - 1200))" "9.9" \
+    "$((NOW - 600))" "10.1")
+reply=$(run_indicator "$body" "10.0" "$NOW")
+assert_eq "<dim>0.3%/h<reset>" "$reply" \
+    "small rolling-window decreases do not masquerade as full weekly resets"
+
+# A lone slightly-higher sample from the current week is not enough evidence
+# of a real weekly reset. Without an older <= current anchor, the indicator
+# should stay empty instead of fabricating a huge post-reset spike.
+body=$(printf '%s,%s\n' "$((NOW - 600))" "10.1")
+USAGE_HISTORY="$tmpdir/h-current-week-dip"
+printf '%s' "$body" > "$USAGE_HISTORY"
+BURN_RATE_CACHE_KEY=""
+get_burn_rate_indicator "10.0" "$NOW" "$((NOW - 3600))"
+assert_eq "" "$REPLY" \
+    "a recent in-window dip does not trigger the reset fallback"
 
 # --- progressive horizons: 1h unlocks with ~3h of history ---------------
 
@@ -142,7 +233,7 @@ body=$(printf '%s,%s\n%s,%s\n%s,%s\n%s,%s\n' \
     "$((NOW - 300))" "6")
 # rate_now = (6-3)*3600/6900 ≈ 1565 milli (OIW = NOW-7200, u=3)
 # rate_1h  = (4-2)*3600/7200 = 1000 milli
-# delta_1h ≈ 565 milli → hot
+# delta_1h ≈ 565 milli → warm (≥500 warm threshold, <1500 hot threshold)
 # Frames at this point: raw, 1h (1d/1w/2w anchors missing)
 # rotation=1, now=1000000 → idx = 1000000 % 2 = 0 → raw
 reply=$(run_indicator_file "$tmpdir/h-1h-raw" "6" "$NOW")

@@ -22,8 +22,24 @@ BURN_RATE_ROTATION_SECONDS=${BURN_RATE_ROTATION_SECONDS:-5}
 # buckets still line up when renders drift or the sampling cadence slips.
 BURN_RATE_FINE_ANCHOR_MARGIN=${BURN_RATE_FINE_ANCHOR_MARGIN:-1800}
 BURN_RATE_DISTANCE_SENTINEL=${BURN_RATE_DISTANCE_SENTINEL:-2147483647}
-BURN_RATE_DELTA_WARM_MILLI=${BURN_RATE_DELTA_WARM_MILLI:-150}
-BURN_RATE_DELTA_HOT_MILLI=${BURN_RATE_DELTA_HOT_MILLI:-500}
+# Semantic-coloring baseline = 2000 milli%/h (2%/h). A 40h work-week at 2%/h
+# burns ~80% of the weekly budget, so 2%/h is roughly what a heavy user sees
+# as their steady-state average. Warm ≈ ±25% swing from baseline (±500),
+# hot ≈ ±75% swing (±1500) — calibrated so arrows only fire on moves that
+# would meaningfully change a work-week trajectory, not on routine bursts.
+BURN_RATE_DELTA_WARM_MILLI=${BURN_RATE_DELTA_WARM_MILLI:-500}
+BURN_RATE_DELTA_HOT_MILLI=${BURN_RATE_DELTA_HOT_MILLI:-1500}
+# Per-horizon warm/hot thresholds. Longer horizons pair samples whose anchor
+# tolerance is wider (TOL_DAY=4h, TOL_WEEK=6h, TOL_2WEEK=12h) while the rate
+# window stays at 2h — the derived rates are noisier, so the thresholds scale
+# up to avoid firing on single-anchor drift. Multipliers: 1h 1.0×, 1d 1.2×,
+# 1w 1.5×, 2w 1.8× relative to the baseline warm/hot pair.
+BURN_RATE_DELTA_WARM_MILLI_DAY=${BURN_RATE_DELTA_WARM_MILLI_DAY:-600}
+BURN_RATE_DELTA_HOT_MILLI_DAY=${BURN_RATE_DELTA_HOT_MILLI_DAY:-1800}
+BURN_RATE_DELTA_WARM_MILLI_WEEK=${BURN_RATE_DELTA_WARM_MILLI_WEEK:-750}
+BURN_RATE_DELTA_HOT_MILLI_WEEK=${BURN_RATE_DELTA_HOT_MILLI_WEEK:-2250}
+BURN_RATE_DELTA_WARM_MILLI_2WEEK=${BURN_RATE_DELTA_WARM_MILLI_2WEEK:-900}
+BURN_RATE_DELTA_HOT_MILLI_2WEEK=${BURN_RATE_DELTA_HOT_MILLI_2WEEK:-2700}
 # Per-horizon tolerances (seconds): max distance between a target timestamp and
 # the closest available sample for that anchor to be considered usable. Scale
 # with the horizon so bursty usage still lines up.
@@ -607,6 +623,7 @@ trend_usage_to_milli_pct() {
 BURN_RATE_CACHE_KEY=""
 BURN_RATE_CACHE_NOW=0
 BURN_RATE_CACHE_WINDOW=0
+BURN_RATE_WEEK_START=0
 BURN_RATE_TARGET_HR=0
 BURN_RATE_TARGET_HR_WIN=0
 BURN_RATE_TARGET_DAY=0
@@ -649,23 +666,22 @@ BURN_RATE_OIW_U=""
 # renders a rate.
 BURN_RATE_OLDEST_T=""
 BURN_RATE_OLDEST_U=""
-# Most recent sample whose usage exceeds current — i.e. the latest pre-reset
-# data point. Lets us render a rate immediately after a weekly reset by
-# using (0% at this time) → (current% now) as an implicit starting segment.
-BURN_RATE_NEWEST_PRE_RESET_T=""
-
 BURN_RATE_CACHE_CURRENT_U=""
+
+USAGE_HISTORY_SYNC_KEY=""
 
 burn_rate_init_cache() {
     local history_path=$1
     local now=$2
     local window=$3
     local current_usage_milli=${4:-}
+    local week_start=${5:-0}
 
-    BURN_RATE_CACHE_KEY="${history_path}|${now}|${window}|${current_usage_milli}"
+    BURN_RATE_CACHE_KEY="${history_path}|${now}|${window}|${current_usage_milli}|${week_start}"
     BURN_RATE_CACHE_NOW=$now
     BURN_RATE_CACHE_WINDOW=$window
     BURN_RATE_CACHE_CURRENT_U=$current_usage_milli
+    BURN_RATE_WEEK_START=$week_start
 
     BURN_RATE_TARGET_HR=$((now - 3600))
     BURN_RATE_TARGET_HR_WIN=$((now - 3600 - window))
@@ -695,7 +711,6 @@ burn_rate_init_cache() {
     BURN_RATE_U_WK2_WIN=""; BURN_RATE_T_WK2_WIN=""
     BURN_RATE_OIW_T=""; BURN_RATE_OIW_U=""
     BURN_RATE_OLDEST_T=""; BURN_RATE_OLDEST_U=""
-    BURN_RATE_NEWEST_PRE_RESET_T=""
 }
 
 burn_rate_cache_matches() {
@@ -703,8 +718,9 @@ burn_rate_cache_matches() {
     local now=$2
     local window=$3
     local current_usage_milli=${4:-}
+    local week_start=${5:-0}
 
-    [ "${BURN_RATE_CACHE_KEY:-}" = "${history_path}|${now}|${window}|${current_usage_milli}" ]
+    [ "${BURN_RATE_CACHE_KEY:-}" = "${history_path}|${now}|${window}|${current_usage_milli}|${week_start}" ]
 }
 
 burn_rate_try_anchor() {
@@ -735,25 +751,19 @@ burn_rate_update_cache() {
     local sample_usage=$2
     local sample_milli=""
     local age
+    local pre_reset=0
 
     [ -n "${BURN_RATE_CACHE_KEY:-}" ] || return 0
     trend_usage_to_milli_pct "$sample_usage" sample_milli || return 0
 
     age=$((BURN_RATE_CACHE_NOW - sample_time))
     if [ "$age" -ge "$BURN_RATE_MIN_GAP" ]; then
-        # Filter: only samples at-or-below current usage count toward the
-        # "now" rate — any sample higher than current is pre-reset and would
-        # produce a negative rate across the weekly reset boundary.
-        local post_reset=1
-        if [ -n "$BURN_RATE_CACHE_CURRENT_U" ] \
-            && [ "$sample_milli" -gt "$BURN_RATE_CACHE_CURRENT_U" ]; then
-            post_reset=0
-            if [ -z "$BURN_RATE_NEWEST_PRE_RESET_T" ] \
-                || [ "$sample_time" -gt "$BURN_RATE_NEWEST_PRE_RESET_T" ]; then
-                BURN_RATE_NEWEST_PRE_RESET_T=$sample_time
-            fi
+        # Reset handling must use an explicit week boundary. In a rolling
+        # weekly window, usage can decrease without any reset at all.
+        if [ "${BURN_RATE_WEEK_START:-0}" -gt 0 ] && [ "$sample_time" -lt "$BURN_RATE_WEEK_START" ]; then
+            pre_reset=1
         fi
-        if [ "$post_reset" -eq 1 ]; then
+        if [ "$pre_reset" -eq 0 ]; then
             if [ "$age" -le "$BURN_RATE_CACHE_WINDOW" ]; then
                 if [ -z "$BURN_RATE_OIW_T" ] || [ "$sample_time" -lt "$BURN_RATE_OIW_T" ]; then
                     BURN_RATE_OIW_T=$sample_time
@@ -782,9 +792,10 @@ burn_rate_prime_cache_from_history() {
     local now=$2
     local window=$3
     local current_usage_milli=${4:-}
+    local week_start=${5:-0}
     local sample_time sample_usage
 
-    burn_rate_init_cache "$history_path" "$now" "$window" "$current_usage_milli"
+    burn_rate_init_cache "$history_path" "$now" "$window" "$current_usage_milli" "$week_start"
     if [ ! -f "$history_path" ]; then
         return 0
     fi
@@ -797,6 +808,99 @@ burn_rate_prime_cache_from_history() {
         [[ "$sample_usage" == .* ]] && sample_usage="0$sample_usage"
         burn_rate_update_cache "$sample_time" "$sample_usage"
     done < "$history_path"
+}
+
+sync_usage_history() {
+    local current_usage=$1
+    local now=${2:-$(date +%s)}
+    local week_start=${3:-0}
+    local trend_window=${TREND_WINDOW:-900}
+    local trend_history_max_age=${TREND_HISTORY_MAX_AGE}
+    local min_interval=30
+    local anchor_interval=14400
+    local fine_anchor_interval=${TREND_FINE_ANCHOR_INTERVAL:-600}
+    local burn_rate_window=${BURN_RATE_WINDOW:-7200}
+    local week_back=$((now - SECONDS_PER_WEEK))
+    local week_back_margin=$((burn_rate_window + BURN_RATE_FINE_ANCHOR_MARGIN))
+    local week_back_lo=$((week_back - week_back_margin))
+    local week_back_hi=$((week_back + week_back_margin))
+    local max_age=$((now - trend_history_max_age))
+    local cutoff=$((now - trend_window))
+    local recent_fine_age=$((burn_rate_window * 2))
+    local kept_history=""
+    local kept_sep=""
+    local seen_blocks="|"
+    local history_tmp=""
+    local sample_time sample_usage block bucket_size bucket_prefix
+    local most_recent_time=0
+    local current_usage_milli_for_cache=""
+    local sync_key=""
+
+    [[ "$current_usage" == .* ]] && current_usage="0$current_usage"
+    is_decimal_value "$current_usage" || return 0
+
+    sync_key="${USAGE_HISTORY:-}|${current_usage}|${now}|${trend_window}|${trend_history_max_age}|${burn_rate_window}|${week_start}"
+    if [ "${USAGE_HISTORY_SYNC_KEY:-}" = "$sync_key" ]; then
+        return 0
+    fi
+    USAGE_HISTORY_SYNC_KEY=$sync_key
+
+    trend_usage_to_milli_pct "$current_usage" current_usage_milli_for_cache 2>/dev/null || current_usage_milli_for_cache=""
+    burn_rate_init_cache "${USAGE_HISTORY:-}" "$now" "$burn_rate_window" "$current_usage_milli_for_cache" "$week_start"
+
+    if [ -f "$USAGE_HISTORY" ]; then
+        while IFS=, read -r sample_time sample_usage || [ -n "$sample_time" ]; do
+            [ -n "$sample_time" ] || continue
+            [[ "$sample_time" =~ ^[0-9]+$ ]] || continue
+            if [ "$sample_time" -gt "$now" ]; then
+                continue
+            fi
+            [ -n "${sample_usage:-}" ] || continue
+            [[ "$sample_usage" == .* ]] && sample_usage="0$sample_usage"
+            is_decimal_value "$sample_usage" || continue
+
+            if [ "$sample_time" -lt "$max_age" ]; then
+                continue
+            fi
+
+            if [ "$sample_time" -lt "$cutoff" ]; then
+                bucket_size=$anchor_interval
+                bucket_prefix="c"
+                if [ $((now - sample_time)) -le "$recent_fine_age" ]; then
+                    bucket_size=$fine_anchor_interval
+                    bucket_prefix="fr"
+                elif [ "$sample_time" -ge "$week_back_lo" ] \
+                    && [ "$sample_time" -le "$week_back_hi" ]; then
+                    bucket_size=$fine_anchor_interval
+                    bucket_prefix="fw"
+                fi
+                block="${bucket_prefix}$(((now - sample_time) / bucket_size))"
+                case "$seen_blocks" in
+                    *"|$block|"*) continue ;;
+                esac
+                seen_blocks="${seen_blocks}${block}|"
+            fi
+
+            printf -v kept_history '%s%s%s,%s' "$kept_history" "$kept_sep" "$sample_time" "$sample_usage"
+            kept_sep=$'\n'
+            burn_rate_update_cache "$sample_time" "$sample_usage"
+
+            if [ "$sample_time" -gt "$most_recent_time" ]; then
+                most_recent_time=$sample_time
+            fi
+        done < "$USAGE_HISTORY"
+    fi
+
+    if [ $((now - most_recent_time)) -ge "$min_interval" ]; then
+        printf -v kept_history '%s%s%s,%s' "$kept_history" "$kept_sep" "$now" "$current_usage"
+    fi
+
+    history_tmp="${USAGE_HISTORY}.tmp.$$"
+    if ! printf '%s' "$kept_history" > "$history_tmp" 2>>"$STATUSLINE_DEBUG_LOG" \
+        || ! mv -f -- "$history_tmp" "$USAGE_HISTORY" 2>>"$STATUSLINE_DEBUG_LOG"; then
+        rm -f -- "$history_tmp" 2>>"$STATUSLINE_DEBUG_LOG" || true
+        debug_log "Trend history update failed; keeping prior arrow history state"
+    fi
 }
 
 velocity_arrow_style() {
@@ -821,81 +925,28 @@ get_trend_arrow() {
     local current_usage=$1  # Current usage percentage (0-100)
     local week_start=${2:-0}  # Epoch when current week started (optional)
     local now=${3:-$(date +%s)}  # Epoch timestamp (passed from caller)
-    local trend_window=${TREND_WINDOW:-900}
     local trend_history_max_age=${TREND_HISTORY_MAX_AGE}
-    local min_interval=30
-    local anchor_interval=14400
-    # Fine-grained anchor band around `now - 1 week` so the week-over-week
-    # helper can look up prior-week samples without up-to-4h drift.
-    local fine_anchor_interval=${TREND_FINE_ANCHOR_INTERVAL:-600}
-    local burn_rate_window=${BURN_RATE_WINDOW:-7200}
-    local week_back=$((now - SECONDS_PER_WEEK))
-    local week_back_margin=$((burn_rate_window + BURN_RATE_FINE_ANCHOR_MARGIN))
-    local week_back_lo=$((week_back - week_back_margin))
-    local week_back_hi=$((week_back + week_back_margin))
     local max_age=$((now - trend_history_max_age))
-    local cutoff=$((now - trend_window))
     local first_time=0
     local first_usage=""
     local last_time=0
     local last_usage=""
-    local most_recent_time=0
     local count=0
-    local kept_history=""
-    local kept_sep=""
-    local seen_blocks="|"
-    local history_tmp=""
-    local sample_time sample_usage block bucket_size bucket_prefix
+    local sample_time sample_usage
     local arrow_code="stable"
     [[ "$current_usage" == .* ]] && current_usage="0$current_usage"
 
-    local recent_fine_age=$((burn_rate_window * 2))
-    local current_usage_milli_for_cache=""
-    trend_usage_to_milli_pct "$current_usage" current_usage_milli_for_cache 2>/dev/null || current_usage_milli_for_cache=""
-    burn_rate_init_cache "${USAGE_HISTORY:-}" "$now" "$burn_rate_window" "$current_usage_milli_for_cache"
+    sync_usage_history "$current_usage" "$now" "$week_start"
+
     if [ -f "$USAGE_HISTORY" ]; then
         while IFS=, read -r sample_time sample_usage || [ -n "$sample_time" ]; do
             [ -n "$sample_time" ] || continue
             [[ "$sample_time" =~ ^[0-9]+$ ]] || continue
-            if [ "$sample_time" -gt "$now" ]; then
-                continue
-            fi
+            [ "$sample_time" -gt "$now" ] && continue
             [ -n "${sample_usage:-}" ] || continue
             [[ "$sample_usage" == .* ]] && sample_usage="0$sample_usage"
             is_decimal_value "$sample_usage" || continue
-
-            if [ "$sample_time" -lt "$max_age" ]; then
-                continue
-            fi
-
-            if [ "$sample_time" -lt "$cutoff" ]; then
-                bucket_size=$anchor_interval
-                bucket_prefix="c"
-                if [ $((now - sample_time)) -le "$recent_fine_age" ]; then
-                    # Fine 10-min buckets for the last few hours so the 1h
-                    # burn-rate horizon has enough resolution to land inside
-                    # its tolerance band.
-                    bucket_size=$fine_anchor_interval
-                    bucket_prefix="fr"
-                elif [ "$sample_time" -ge "$week_back_lo" ] \
-                    && [ "$sample_time" -le "$week_back_hi" ]; then
-                    bucket_size=$fine_anchor_interval
-                    bucket_prefix="fw"
-                fi
-                block="${bucket_prefix}$(((now - sample_time) / bucket_size))"
-                case "$seen_blocks" in
-                    *"|$block|"*) continue ;;
-                esac
-                seen_blocks="${seen_blocks}${block}|"
-            fi
-
-            printf -v kept_history '%s%s%s,%s' "$kept_history" "$kept_sep" "$sample_time" "$sample_usage"
-            kept_sep=$'\n'
-            burn_rate_update_cache "$sample_time" "$sample_usage"
-
-            # Trend calculation uses only samples inside the current weekly
-            # reset cycle, but we still retain older samples above so the
-            # week-over-week helper can reach them.
+            [ "$sample_time" -lt "$max_age" ] && continue
             if [ "$week_start" -gt 0 ] && [ "$sample_time" -lt "$week_start" ]; then
                 continue
             fi
@@ -908,29 +959,8 @@ get_trend_arrow() {
                 last_time=$sample_time
                 last_usage=$sample_usage
             fi
-            if [ "$sample_time" -gt "$most_recent_time" ]; then
-                most_recent_time=$sample_time
-            fi
             count=$((count + 1))
         done < "$USAGE_HISTORY"
-    fi
-
-    if [ $((now - most_recent_time)) -ge "$min_interval" ]; then
-        if [ "$first_time" -eq 0 ]; then
-            first_time=$now
-            first_usage=$current_usage
-        fi
-        last_time=$now
-        last_usage=$current_usage
-        count=$((count + 1))
-        printf -v kept_history '%s%s%s,%s' "$kept_history" "$kept_sep" "$now" "$current_usage"
-    fi
-
-    history_tmp="${USAGE_HISTORY}.tmp.$$"
-    if ! printf '%s' "$kept_history" > "$history_tmp" 2>>"$STATUSLINE_DEBUG_LOG" \
-        || ! mv -f -- "$history_tmp" "$USAGE_HISTORY" 2>>"$STATUSLINE_DEBUG_LOG"; then
-        rm -f -- "$history_tmp" 2>>"$STATUSLINE_DEBUG_LOG" || true
-        debug_log "Trend history update failed; keeping prior arrow history state"
     fi
 
     if [ "$count" -ge 2 ]; then
@@ -963,11 +993,14 @@ get_trend_arrow() {
 }
 
 # Get smart pace indicator using dual-signal approach:
-#   burn_rate = velocity: how fast you're going (1.0 = on pace for reset)
-#   pressure  = position: remaining time / remaining budget-days
-#   effective = max(burn_rate, pressure) — take the worse signal
-# Both agree on over/under (burn_rate > 1.0 ↔ pressure > 1.0), but pressure
-# amplifies urgency when budget is thin (e.g., 9% left for 2.7 days → pressure 4.29)
+#   velocity = how fast you're going (1.0 = on pace for reset)
+#   pressure = position: remaining time / remaining budget-days
+#   effective = max(velocity, pressure) — take the worse signal
+# Both agree on over/under (velocity > 1.0 ↔ pressure > 1.0), but pressure
+# amplifies urgency when budget is thin (e.g., 9% left for 2.7 days → pressure 4.29).
+# Named "velocity" here to avoid collision with the BURN_RATE_* globals driving
+# the %/h burn-rate indicator — that one is in milli-%/h, this one is unitless
+# (1.0 = on-pace for the weekly reset).
 # Uses 8-tier emoji scale: ❄️ → 🧊 → 🙂 → 👌 → ♨️ → 🥵 → 🔥 → 🚨
 # Trend arrows: ↑ (heating fast), ↗ (warming), → (stable), ↘ (cooling), ↓ (cooling fast)
 # If at limit (>=100%), shows time until reset: 🚨 -1.2d
@@ -1013,12 +1046,12 @@ calculate_pace_signals() {
     local resets_at=$2
     local now=$3
     local week_start_var=$4
-    local burn_rate_var=$5
+    local velocity_var=$5
     local pressure_var=$6
     local reset_suffix_var=$7
 
     local calc_week_start=0
-    local calc_burn_rate_x10k=10000
+    local calc_velocity_x10k=10000
     local calc_pressure_x10k=10000
     local calc_reset_suffix=""
 
@@ -1036,11 +1069,11 @@ calculate_pace_signals() {
             days_elapsed_x10k=$(( 70000 - days_until_x10k ))
 
             if [ "$days_elapsed_x10k" -gt 100 ]; then
-                calc_burn_rate_x10k=$(( pct * 7000000 / days_elapsed_x10k ))
+                calc_velocity_x10k=$(( pct * 7000000 / days_elapsed_x10k ))
             elif [ "$pct" -gt 0 ]; then
-                calc_burn_rate_x10k=100000
+                calc_velocity_x10k=100000
             else
-                calc_burn_rate_x10k=0
+                calc_velocity_x10k=0
             fi
 
             remaining=$((100 - pct))
@@ -1053,7 +1086,7 @@ calculate_pace_signals() {
     fi
 
     printf -v "$week_start_var" '%s' "$calc_week_start"
-    printf -v "$burn_rate_var" '%s' "$calc_burn_rate_x10k"
+    printf -v "$velocity_var" '%s' "$calc_velocity_x10k"
     printf -v "$pressure_var" '%s' "$calc_pressure_x10k"
     printf -v "$reset_suffix_var" '%s' "$calc_reset_suffix"
 }
@@ -1096,8 +1129,8 @@ get_smart_pace_indicator() {
     fi
     pct=${pct:-0}
 
-    local reset_suffix="" week_start=0 burn_rate_x10k=10000 pressure_x10k=10000
-    calculate_pace_signals "$pct" "$resets_at" "$now" week_start burn_rate_x10k pressure_x10k reset_suffix
+    local reset_suffix="" week_start=0 velocity_x10k=10000 pressure_x10k=10000
+    calculate_pace_signals "$pct" "$resets_at" "$now" week_start velocity_x10k pressure_x10k reset_suffix
 
     # Alternate display: emoji+arrow 7 times, then raw % 3 times (every 10 sec update)
     # Check cycle FIRST so raw % always shows on its cycles, regardless of alarm state
@@ -1118,10 +1151,11 @@ get_smart_pace_indicator() {
     get_trend_arrow "$usage" "$week_start" "$now"
     arrow=$REPLY
 
-    # Effective rate = max(burn_rate, pressure)
-    # Burn rate captures velocity, pressure captures remaining runway
+    # Effective rate = max(velocity, pressure) — take the worse signal.
+    # Velocity captures how fast budget is being spent; pressure amplifies
+    # urgency when remaining runway thins out.
     local emoji=""
-    local effective_rate_x10k=${burn_rate_x10k:-10000}
+    local effective_rate_x10k=${velocity_x10k:-10000}
     if [ "${pressure_x10k:-10000}" -gt "$effective_rate_x10k" ]; then
         effective_rate_x10k=$pressure_x10k
     fi
@@ -1175,13 +1209,38 @@ burn_rate_compute_rate() {
     printf -v "$out_var" '%s' "$((du * 3600 / dt))"
 }
 
+# Resolve per-horizon warm/hot thresholds for a delta frame label. Writes the
+# pair through $2/$3. Baseline = 2000 milli%/h (2%/h) — the rate at which a
+# 40h work-week burns ~80% of the weekly budget. Warm = ±25% of baseline,
+# hot = ±75%. Longer horizons widen the band (1.2× / 1.5× / 1.8×) because
+# their anchor tolerance is larger while the rate window stays fixed at 2h.
+burn_rate_thresholds_for_label() {
+    local label=$1
+    local warm_var=$2
+    local hot_var=$3
+    # Use distinct local names so `printf -v "$warm_var"` with a caller
+    # passing "warm" writes through to the caller's variable instead of
+    # rebinding our own local (bash dynamic scoping).
+    local _brt_warm=${BURN_RATE_DELTA_WARM_MILLI:-500}
+    local _brt_hot=${BURN_RATE_DELTA_HOT_MILLI:-1500}
+
+    case "$label" in
+        1d) _brt_warm=${BURN_RATE_DELTA_WARM_MILLI_DAY:-600};   _brt_hot=${BURN_RATE_DELTA_HOT_MILLI_DAY:-1800} ;;
+        1w) _brt_warm=${BURN_RATE_DELTA_WARM_MILLI_WEEK:-750};  _brt_hot=${BURN_RATE_DELTA_HOT_MILLI_WEEK:-2250} ;;
+        2w) _brt_warm=${BURN_RATE_DELTA_WARM_MILLI_2WEEK:-900}; _brt_hot=${BURN_RATE_DELTA_HOT_MILLI_2WEEK:-2700} ;;
+    esac
+
+    printf -v "$warm_var" '%s' "$_brt_warm"
+    printf -v "$hot_var" '%s' "$_brt_hot"
+}
+
 # Render a single burn-rate frame (kind is "raw" or "delta") into REPLY.
 burn_rate_render_frame() {
     local kind=$1
     local label=$2
     local value=$3
-    local warm=${BURN_RATE_DELTA_WARM_MILLI:-150}
-    local hot=${BURN_RATE_DELTA_HOT_MILLI:-500}
+    local warm=""
+    local hot=""
 
     if [ "$kind" = "raw" ]; then
         local formatted=""
@@ -1190,8 +1249,7 @@ burn_rate_render_frame() {
         return
     fi
 
-    # Sustainable rate ≈ 595 milli%/h (100%/168h), so ±150 is ~25% swing and
-    # ±500 is ~85% swing — well above the noise floor for a 2h window.
+    burn_rate_thresholds_for_label "$label" warm hot
     local arrow_code="stable"
     if [ "$value" -ge "$hot" ]; then
         arrow_code="hot"
@@ -1240,6 +1298,7 @@ burn_rate_render_frame() {
 get_burn_rate_indicator() {
     local current_usage=$1
     local now=${2:-$(date +%s)}
+    local week_start=${3:-0}
     local window=${BURN_RATE_WINDOW:-7200}
     local rotation=${BURN_RATE_ROTATION_SECONDS:-5}
     local min_gap=${BURN_RATE_MIN_GAP:-300}
@@ -1264,17 +1323,14 @@ get_burn_rate_indicator() {
     fi
 
     local history_path=${USAGE_HISTORY:-}
-    if ! burn_rate_cache_matches "$history_path" "$now" "$window" "$current_usage_milli"; then
-        burn_rate_prime_cache_from_history "$history_path" "$now" "$window" "$current_usage_milli"
+    if ! burn_rate_cache_matches "$history_path" "$now" "$window" "$current_usage_milli" "$week_start"; then
+        burn_rate_prime_cache_from_history "$history_path" "$now" "$window" "$current_usage_milli" "$week_start"
     fi
 
     # "Now" side of the rate: prefer the oldest post-reset sample inside the
-    # rate window; then the oldest post-reset sample anywhere; then — if the
-    # weekly limit reset so recently that there are no post-reset history
-    # samples yet — treat the most recent pre-reset timestamp as "usage was
-    # 0% here" so the raw rate still renders immediately after a reset. The
-    # reset filter inside burn_rate_update_cache keeps OIW/OLDEST from ever
-    # straddling a weekly reset boundary.
+    # rate window; then the oldest post-reset sample anywhere; then — if an
+    # explicit weekly boundary is available and there are no post-reset
+    # history samples yet — use the boundary itself as the implicit 0% anchor.
     local rate_now_milli=""
     local rate_now_is_fallback=0
     if burn_rate_compute_rate "$current_usage_milli" "$now" \
@@ -1283,9 +1339,10 @@ get_burn_rate_indicator() {
     elif burn_rate_compute_rate "$current_usage_milli" "$now" \
         "$BURN_RATE_OLDEST_U" "$BURN_RATE_OLDEST_T" "$min_gap" rate_now_milli; then
         :
-    elif [ -n "$BURN_RATE_NEWEST_PRE_RESET_T" ] \
+    elif [ "$week_start" -gt 0 ] \
+        && [ -z "$BURN_RATE_OLDEST_T" ] \
         && burn_rate_compute_rate "$current_usage_milli" "$now" \
-        "0" "$BURN_RATE_NEWEST_PRE_RESET_T" "$min_gap" rate_now_milli; then
+        "0" "$week_start" "$min_gap" rate_now_milli; then
         rate_now_is_fallback=1
     else
         rate_now_milli=""

@@ -567,6 +567,14 @@ if seg_on "$_SEG_CREDIT" && ! is_sentinel_value "$EXTRA_UTIL"; then
     fi
 fi
 
+BURN_RATE_WEEK_START=0
+if ! is_sentinel_value "$RESETS_AT" && [ "$RESETS_AT" -gt "$NOW" ] 2>>"$STATUSLINE_DEBUG_LOG"; then
+    BURN_RATE_WEEK_START=$((RESETS_AT - SECONDS_PER_WEEK))
+fi
+if seg_on "$_SEG_BURN_RATE" && [ -n "$WEEKLY_USAGE" ] && ! is_sentinel_value "$WEEKLY_USAGE"; then
+    sync_usage_history "$WEEKLY_USAGE" "$NOW" "$BURN_RATE_WEEK_START"
+fi
+
 # Terminal width for responsive layout (drop low-priority segments to prevent wrapping)
 TERM_WIDTH="${COLUMNS:-120}"
 
@@ -636,7 +644,7 @@ _L1_GIT=""; seg_on "$_SEG_GIT" && _L1_GIT="$REPO_BRANCH"
 _L1_PACE=""; seg_on "$_SEG_PACE" && [ -n "$PACE_INDICATOR" ] && _L1_PACE="$PACE_INDICATOR"
 _L1_BURN_RATE=""
 if seg_on "$_SEG_BURN_RATE" && [ -n "$WEEKLY_USAGE" ] && ! is_sentinel_value "$WEEKLY_USAGE"; then
-    get_burn_rate_indicator "$WEEKLY_USAGE" "$NOW"
+    get_burn_rate_indicator "$WEEKLY_USAGE" "$NOW" "$BURN_RATE_WEEK_START"
     _L1_BURN_RATE=$REPLY
 fi
 _L1_LINES=""; seg_on "$_SEG_LINES" && _L1_LINES="$LINES_INFO"
