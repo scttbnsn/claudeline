@@ -27,7 +27,7 @@ assert_not_contains() {
     fi
 }
 
-assert_contains "$statusline" 'AUTO_COMPACT_THRESHOLD_PCT=84' "statusline should name the auto-compact threshold percentage"
+assert_contains "$statusline" 'AUTO_COMPACT_THRESHOLD_PCT=${CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:-84}' "statusline should honor CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, defaulting to 84"
 assert_contains "$statusline" 'ALLTIME_NORMAL_FIXED_ITEMS=(' "statusline should define the fixed all-time normal items in one place"
 assert_contains "$statusline" 'ALLTIME_COST_ITEMS' "statusline should reference the all-time cost items from the display module"
 assert_contains "$statusline" 'ALLTIME_NORMAL_CATALOG_ITEM_COUNT=${#ALLTIME_COST_ITEMS[@]}' "statusline should derive the all-time catalog item count from the cost items array"

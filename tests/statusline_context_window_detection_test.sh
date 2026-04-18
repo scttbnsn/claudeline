@@ -63,7 +63,7 @@ render_second_line() {
     local context_window_size=$2
     local output_file=$3
 
-    cat <<EOF | PATH="$shim_dir:$PATH" HOME="$home_dir" NOW=1000000 bash "$repo_root/statusline.sh" | perl -pe 's/\e\[[0-9;]*m//g' > "$output_file"
+    cat <<EOF | env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW -u CLAUDE_AUTOCOMPACT_PCT_OVERRIDE PATH="$shim_dir:$PATH" HOME="$home_dir" NOW=1000000 bash "$repo_root/statusline.sh" | perl -pe 's/\e\[[0-9;]*m//g' > "$output_file"
 {
   "model": {"display_name": "$model"},
   "workspace": {"current_dir": "/tmp/demo"},
