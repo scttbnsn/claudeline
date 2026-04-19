@@ -11,16 +11,16 @@
 </div>
 
 ```
-✨ ████░░░░░░  ·  myrepo/main*  ·  +50/-20  ·  👌→  ·  💥▃  ·  💳25%  ·  ⏱️ 45m
-│  └────┬────┘     └─────┬─────┘   └───┬──┘   └─┬──┘  └─┬┘   └─┬──┘    └──┬───┘
-│    context          repo/branch     lines    pace  burst  credit    duration
-│    bar              + git status    changed  trend
+✨ ████░░░░░░  ·  myrepo/main*  ·  👌→  ·  42¢/m ↗  ·  💥▃  ·  💳25%
+│  └────┬────┘     └─────┬─────┘   └─┬──┘   └───┬───┘   └─┬┘   └─┬──┘
+│    context          repo/branch    pace   cost rate   burst  credit
+│    bar              + git status   trend  + arrow
 └─ context icon (✨🌱💭🧠⚡🔥🌡️🫠💀💾)
 
-    73.5K/168K  ·  🍕 3 joe's®  ·  Opus 4.6  ·  42¢/m ↗
-    └────┬────┘    └─────┬─────┘   └───┬───┘    └───┬───┘
-      context         rotating       model      cost rate
-      tokens          metric                    + trend arrow
+    73.5K/168K  ·  🍕 3 joe's®  ·  Opus 4.6  ·  +50/-20  ·  ⏱️ 45m
+    └────┬────┘    └─────┬─────┘   └───┬───┘    └───┬──┘   └──┬──┘
+      context         rotating       model      lines     duration
+      tokens          metric                    changed
 ```
 
 <div align="center">
@@ -148,7 +148,7 @@ Vibey (default), Dark, Light, Nord, and Gruvbox — plus NO_COLOR support
 </td>
 <td align="center" width="33%">
 <h3>Cost-Rate Indicator</h3>
-Per-session cents/min (API-active time), rolling 5-min window so config changes (Opus ↔ Sonnet, max-thinking on/off) show up in the number fast — plus a semantically colored arrow vs session average
+Per-session cents/min (API-active time) on a fast ~30-s window so you can see tool calls and config flips live — plus a red/dim/green arrow showing whether you're spending above, at, or below your session baseline
 </td>
 </tr>
 </table>
@@ -411,11 +411,9 @@ The API call runs in a **non-blocking background subshell** so it never stalls t
 | `EXTRA_USAGE_TTL=600` | Extra usage / credit cache lifetime in seconds (default: 600) |
 | `TREND_WINDOW=900` | Trend arrow sample window in seconds (default: 900) |
 | `TREND_HISTORY_MAX_AGE=86400` | Max age for trend history entries in seconds (default: 86400) |
-| `COST_RATE_WINDOW=300` | Display window for the cost-rate number, in wall-clock seconds (default: 300 = 5 min). Larger = smoother, slower to settle. |
-| `COST_RATE_ARROW_WINDOW=60` | Arrow window, in wall-clock seconds (default: 60). Smaller = snappier direction, more flicker. |
+| `COST_RATE_WINDOW=30` | Cost-rate sampling window, in wall-clock seconds (default: 30). The displayed number is the cost-rate over this window; the arrow compares it against the session-to-date baseline. Smaller = snappier and more jittery. |
+| `COST_RATE_MIN_API_DELTA_MS=2000` | Minimum API-active delta inside the window before the short-window rate replaces the session rate on the display (default: 2000 = 2 s) |
 | `COST_RATE_HISTORY_MAX_AGE=5400` | How long rows in `.cost-rate-history` are retained before pruning, in seconds (default: 5400 = 90 min) |
-| `COST_RATE_MIN_API_DELTA_MS=30000` | Minimum API-active delta before the display number switches from session average to the rolling window (default: 30000 = 30 s) |
-| `COST_RATE_ARROW_MIN_API_DELTA_MS=10000` | Minimum API-active delta before the arrow renders at all (default: 10000 = 10 s) |
 | `COST_RATE_TREND_HOT_X100=150` | Hot threshold: short-window rate ≥1.50× session average (default: 150) |
 | `COST_RATE_TREND_WARM_X100=115` | Warm threshold: short-window rate ≥1.15× session average (default: 115) |
 | `COST_RATE_TREND_COOL_X100=85` | Cool threshold: short-window rate ≤0.85× session average (default: 85) |

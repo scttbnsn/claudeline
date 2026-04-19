@@ -4,11 +4,9 @@ SECONDS_PER_DAY=${SECONDS_PER_DAY:-86400}
 SECONDS_PER_WEEK=${SECONDS_PER_WEEK:-$((7 * SECONDS_PER_DAY))}
 JSONL_CACHE_TTL=${JSONL_CACHE_TTL:-300}
 TREND_HISTORY_MAX_AGE=${TREND_HISTORY_MAX_AGE:-$SECONDS_PER_DAY}
-COST_RATE_WINDOW=${COST_RATE_WINDOW:-300}
+COST_RATE_WINDOW=${COST_RATE_WINDOW:-30}
+COST_RATE_MIN_API_DELTA_MS=${COST_RATE_MIN_API_DELTA_MS:-2000}
 COST_RATE_HISTORY_MAX_AGE=${COST_RATE_HISTORY_MAX_AGE:-5400}
-COST_RATE_MIN_API_DELTA_MS=${COST_RATE_MIN_API_DELTA_MS:-30000}
-COST_RATE_ARROW_WINDOW=${COST_RATE_ARROW_WINDOW:-60}
-COST_RATE_ARROW_MIN_API_DELTA_MS=${COST_RATE_ARROW_MIN_API_DELTA_MS:-10000}
 COST_RATE_TREND_HOT_X100=${COST_RATE_TREND_HOT_X100:-150}
 COST_RATE_TREND_WARM_X100=${COST_RATE_TREND_WARM_X100:-115}
 COST_RATE_TREND_COOL_X100=${COST_RATE_TREND_COOL_X100:-85}
@@ -693,13 +691,12 @@ get_trend_arrow() {
 }
 
 # Per-session cost-rate indicator (cents per minute of API-active time).
-# The displayed number is the COST_RATE_WINDOW-second rolling rate (5 min by
-# default), divided by API-active time in that window. The arrow uses a
-# separate, shorter window (COST_RATE_ARROW_WINDOW, 60 s by default) so
-# direction responds to config changes within ~1 minute even while the
-# number smooths over 5 minutes. When the short arrow window has too little
-# API-active data yet, falls back to comparing the display window against
-# the session-to-date rate.
+# The displayed number is the COST_RATE_WINDOW-second rolling rate (30 s by
+# default), so it changes fast and reflects what's actually being spent
+# right now — during tool calls, during max-effort bursts, etc. The
+# background baseline is the session-to-date average (stabilizes on its
+# own as the session runs), and the arrow compares the short-window rate
+# against that baseline: up = spending faster than baseline, down = slower.
 #
 # History lives in $COST_RATE_HISTORY as CSV rows:
 #     session_id,wall_epoch,total_cost_cents,api_duration_ms
@@ -711,11 +708,9 @@ get_cost_rate_indicator() {
     local api_duration_ms=$3
     local now=${4:-$(date +%s)}
     local history_file=${COST_RATE_HISTORY:-}
-    local display_window=${COST_RATE_WINDOW}
-    local arrow_window=${COST_RATE_ARROW_WINDOW}
+    local window=${COST_RATE_WINDOW}
     local max_age=${COST_RATE_HISTORY_MAX_AGE}
-    local display_min_api_delta=${COST_RATE_MIN_API_DELTA_MS}
-    local arrow_min_api_delta=${COST_RATE_ARROW_MIN_API_DELTA_MS}
+    local min_api_delta=${COST_RATE_MIN_API_DELTA_MS}
     local hot_x100=${COST_RATE_TREND_HOT_X100}
     local warm_x100=${COST_RATE_TREND_WARM_X100}
     local cool_x100=${COST_RATE_TREND_COOL_X100}
@@ -732,10 +727,8 @@ get_cost_rate_indicator() {
     [ "$session_rate_milli" -gt 0 ] || return 0
 
     local prune_cutoff=$((now - max_age))
-    local display_cutoff=$((now - display_window))
-    local arrow_cutoff=$((now - arrow_window))
-    local display_anchor_time=0 display_anchor_cost=0 display_anchor_api_ms=0
-    local arrow_anchor_time=0 arrow_anchor_cost=0 arrow_anchor_api_ms=0
+    local window_cutoff=$((now - window))
+    local anchor_time=0 anchor_cost=0 anchor_api_ms=0
     local kept_history=""
     local kept_sep=""
     local r_session r_time r_cost r_api
@@ -752,20 +745,11 @@ get_cost_rate_indicator() {
                 "$kept_history" "$kept_sep" "$r_session" "$r_time" "$r_cost" "$r_api"
             kept_sep=$'\n'
 
-            if [ "$r_session" = "$session_id" ]; then
-                if [ "$r_time" -ge "$display_cutoff" ]; then
-                    if [ "$display_anchor_time" -eq 0 ] || [ "$r_time" -lt "$display_anchor_time" ]; then
-                        display_anchor_time=$r_time
-                        display_anchor_cost=$r_cost
-                        display_anchor_api_ms=$r_api
-                    fi
-                fi
-                if [ "$r_time" -ge "$arrow_cutoff" ]; then
-                    if [ "$arrow_anchor_time" -eq 0 ] || [ "$r_time" -lt "$arrow_anchor_time" ]; then
-                        arrow_anchor_time=$r_time
-                        arrow_anchor_cost=$r_cost
-                        arrow_anchor_api_ms=$r_api
-                    fi
+            if [ "$r_session" = "$session_id" ] && [ "$r_time" -ge "$window_cutoff" ]; then
+                if [ "$anchor_time" -eq 0 ] || [ "$r_time" -lt "$anchor_time" ]; then
+                    anchor_time=$r_time
+                    anchor_cost=$r_cost
+                    anchor_api_ms=$r_api
                 fi
             fi
         done < "$history_file"
@@ -779,25 +763,19 @@ get_cost_rate_indicator() {
         fi
     fi
 
+    # Default: show the session-to-date rate (arrow falls back to dim stable
+    # via the always-arrow rule below). As soon as we have a short-window
+    # sample with enough API-active time, swap to the short-window rate for
+    # the number and classify direction against the session baseline.
     local display_rate_milli=$session_rate_milli
-    if [ "$display_anchor_time" -gt 0 ]; then
-        local display_api_delta=$(( api_duration_ms - display_anchor_api_ms ))
-        if [ "$display_api_delta" -ge "$display_min_api_delta" ]; then
-            local display_cost_delta=$(( total_cost_cents - display_anchor_cost ))
-            if [ "$display_cost_delta" -ge 0 ]; then
-                display_rate_milli=$(( display_cost_delta * 60 * 1000 * 1000 / display_api_delta ))
-            fi
-        fi
-    fi
-
     local arrow_code=""
-    if [ "$arrow_anchor_time" -gt 0 ]; then
-        local arrow_api_delta=$(( api_duration_ms - arrow_anchor_api_ms ))
-        if [ "$arrow_api_delta" -ge "$arrow_min_api_delta" ]; then
-            local arrow_cost_delta=$(( total_cost_cents - arrow_anchor_cost ))
-            if [ "$arrow_cost_delta" -ge 0 ] && [ "$display_rate_milli" -gt 0 ]; then
-                local arrow_rate_milli=$(( arrow_cost_delta * 60 * 1000 * 1000 / arrow_api_delta ))
-                local ratio_x100=$(( arrow_rate_milli * 100 / display_rate_milli ))
+    if [ "$anchor_time" -gt 0 ]; then
+        local api_delta=$(( api_duration_ms - anchor_api_ms ))
+        if [ "$api_delta" -ge "$min_api_delta" ]; then
+            local cost_delta=$(( total_cost_cents - anchor_cost ))
+            if [ "$cost_delta" -ge 0 ]; then
+                display_rate_milli=$(( cost_delta * 60 * 1000 * 1000 / api_delta ))
+                local ratio_x100=$(( display_rate_milli * 100 / session_rate_milli ))
                 arrow_code="stable"
                 if [ "$ratio_x100" -ge "$hot_x100" ]; then
                     arrow_code="hot"
@@ -824,14 +802,18 @@ get_cost_rate_indicator() {
 
     # Cost-rate semantics: spending faster = bad (red gradient), slower = good
     # (green gradient), stable = dim. Two shades on each side so the severity
-    # of the change is visible: hot/cold are vivid, warm/cool are muted.
+    # of the change is visible: hot/cold are vivid, warm/cool are muted. The
+    # arrow always renders — when we don't have enough history or api-delta
+    # to classify direction, default to a dim stable arrow so the slot keeps
+    # a consistent shape.
+    [ -z "$arrow_code" ] && arrow_code="stable"
     local arrow=""
     case "$arrow_code" in
         hot)    arrow=" ${VEL_HOT}↑${RESET}" ;;
         warm)   arrow=" ${VEL_WARM}↗${RESET}" ;;
         cold)   arrow=" ${GREEN}↓${RESET}" ;;
         cool)   arrow=" ${VEL_COOL}↘${RESET}" ;;
-        stable) arrow=" ${DIM}→${RESET}" ;;
+        *)      arrow=" ${DIM}→${RESET}" ;;
     esac
 
     REPLY="${DIM}${display_number}${RESET}${arrow}"

@@ -55,102 +55,86 @@ REPLY=""
 get_cost_rate_indicator "sess" 100 0 1000000
 assert_eq "" "$REPLY" "zero api duration renders empty"
 
-# --- first render: session-only, no arrow -----------------------------
+# --- first render: session rate + dim-stable arrow fallback -----------
 
-# Session: 120 cents over 120s API → 60¢/m.
+# Session: 120 cents over 120 s API → 60 ¢/m. No prior history, so no
+# short-window anchor yet — the displayed number falls back to the
+# session-to-date rate and the arrow falls back to dim stable so the slot
+# keeps a consistent shape from the very first render.
 REPLY=""
 COST_RATE_HISTORY="$tmpdir/h-fresh"
 rm -f "$COST_RATE_HISTORY"
 get_cost_rate_indicator "sess-fresh" 120 120000 1000000
-assert_eq "<dim>60¢/m<reset>" "$REPLY" \
-    "first render shows session rate without arrow"
+assert_eq "<dim>60¢/m<reset> <dim>→<reset>" "$REPLY" \
+    "first render shows session rate + dim stable arrow"
 
-# --- stable arrow uses DIM (no green, no teal) ------------------------
+# --- stable arrow when short-window matches session baseline ----------
 
-# Layout the history so BOTH display-anchor (300s window) AND arrow-anchor
-# (60 s window) compute the same rate as the session: all 60¢/m.
-#
-# Display anchor: 240s ago, 60c/60000ms api. Display_api_delta = 120000 ms.
-# Display_cost_delta = 120 → display_rate = 120 * 60 / 120 = 60¢/m. ✓
-# Arrow anchor: 40s ago, 140c/140000ms api. Arrow_api_delta = 40000 ms.
-# Arrow_cost_delta = 40 → arrow_rate = 40 * 60 / 40 = 60¢/m. Ratio 100 → stable.
-body=$(
-    printf '%s,%s,%s,%s\n' "sess-stable" 999760 60 60000
-    printf '%s,%s,%s,%s'   "sess-stable" 999960 140 140000
-)
+# Session: 180 c / 180 000 ms api = 60 ¢/m baseline.
+# Short anchor 20 s ago: 140 c / 140 000 ms api.
+# Window delta: 40 c / 40 000 ms → rate = 60 ¢/m. Ratio 100 → stable → dim →.
+body=$(printf '%s,%s,%s,%s' "sess-stable" 999980 140 140000)
 got=$(run_indicator "$body" "sess-stable" 180 180000 1000000)
 assert_eq "<dim>60¢/m<reset> <dim>→<reset>" "$got" \
-    "equal arrow and display rates render a dim stable arrow"
+    "short-window rate matching session baseline renders dim stable arrow"
 
-# --- arrow reacts inside the 60s window even while display is smooth --
+# --- cold (severe drop) renders bright green ↓ ------------------------
 
-# Display window: same 5-min anchor → display_rate = 60¢/m (smooth).
-# Arrow anchor 40s ago: 175c / 170000ms api.
-# Arrow_api_delta = 10000 ms. Arrow_cost_delta = 5c → arrow_rate = 5*60*1000/10000 = 30¢/m.
-# Ratio: 30*100/60 = 50 → cold → green ↓.
-body=$(
-    printf '%s,%s,%s,%s\n' "sess-fast" 999760 60 60000
-    printf '%s,%s,%s,%s'   "sess-fast" 999960 175 170000
-)
-got=$(run_indicator "$body" "sess-fast" 180 180000 1000000)
-assert_eq "<dim>60¢/m<reset> <green>↓<reset>" "$got" \
-    "sharp drop (≤0.5× display avg) renders bright-green cold arrow"
+# Session: 180 c / 180 000 ms api = 60 ¢/m baseline.
+# Short anchor 20 s ago: 175 c / 170 000 ms api.
+# Window delta: 5 c / 10 000 ms → rate = 30 ¢/m (0.5× baseline).
+body=$(printf '%s,%s,%s,%s' "sess-drop" 999980 175 170000)
+got=$(run_indicator "$body" "sess-drop" 180 180000 1000000)
+assert_eq "<dim>30¢/m<reset> <green>↓<reset>" "$got" \
+    "short-window rate ≤ 0.5× session renders bright-green cold arrow"
 
-# --- cool (less severe drop) uses VEL_COOL, not GREEN -----------------
+# --- cool (moderate drop) uses VEL_COOL shade -------------------------
 
-# Display_rate = 60¢/m. Arrow rate target 42¢/m (0.7× → cool).
-# arrow_api_delta = 15000 ms → cost_delta = 42*15000/60000 = 10.5 ≈ 11c.
-# anchor_cost = 180-11 = 169, anchor_api = 180000-15000 = 165000, 40s ago.
-body=$(
-    printf '%s,%s,%s,%s\n' "sess-cooling" 999760 60 60000
-    printf '%s,%s,%s,%s'   "sess-cooling" 999960 169 165000
-)
+# Baseline 60 ¢/m. Window rate 42 ¢/m (0.7× → cool).
+# api_delta 15 000 ms → cost_delta = 42 * 15 000 / 60 000 = 10.5 ≈ 11 c.
+# anchor_cost = 180 - 11 = 169, anchor_api = 180 000 - 15 000 = 165 000.
+body=$(printf '%s,%s,%s,%s' "sess-cooling" 999985 169 165000)
 got=$(run_indicator "$body" "sess-cooling" 180 180000 1000000)
-assert_eq "<dim>60¢/m<reset> <cool>↘<reset>" "$got" \
-    "moderate drop (≤0.85× display avg) renders cool arrow (distinct shade)"
+assert_eq "<dim>44¢/m<reset> <cool>↘<reset>" "$got" \
+    "short-window rate in the 0.5×–0.85× band renders cool arrow"
 
-# --- arrow warms (up) when recent activity outpaces display average ---
+# --- hot (severe burst) renders bright red ↑ --------------------------
 
-# Display_rate = 60¢/m (same setup).
-# Arrow anchor 40s ago: 170c / 165000ms api.
-# Arrow_api_delta = 15000 ms. Arrow_cost_delta = 10c → 10*60*1000/15000 = 40¢/m.
-# That's a drop, not an up. Let me flip: arrow anchor cost much lower.
-# Target arrow_rate = 90¢/m (1.5× of 60 = hot). arrow_api_delta=15000, so cost_delta = 90*15000/60000 = 22.5 ≈ 23.
-# anchor_cost = 180-23 = 157. Set arrow anchor 40s ago: 157c / 165000ms api.
-body=$(
-    printf '%s,%s,%s,%s\n' "sess-hot" 999760 60 60000
-    printf '%s,%s,%s,%s'   "sess-hot" 999960 157 165000
-)
-got=$(run_indicator "$body" "sess-hot" 180 180000 1000000)
-case "$got" in
-    "<dim>"*"¢/m<reset> <hot>↑<reset>"|"<dim>"*"¢/m<reset> <warm>↗<reset>") ;;
-    *) printf 'FAIL: expected hot/warm (red) arrow on recent burst, got: %q\n' "$got" >&2; exit 1 ;;
-esac
+# Baseline 60 ¢/m. Want window rate ~120 ¢/m (2.0× → hot).
+# api_delta 15 000 ms, cost_delta = 120 * 15 000 / 60 000 = 30 c.
+# anchor_cost = 180 - 30 = 150, anchor_api = 180 000 - 15 000 = 165 000.
+body=$(printf '%s,%s,%s,%s' "sess-burst" 999985 150 165000)
+got=$(run_indicator "$body" "sess-burst" 180 180000 1000000)
+assert_eq "<dim>120¢/m<reset> <hot>↑<reset>" "$got" \
+    "short-window rate ≥ 1.5× session renders bright-red hot arrow"
 
-# --- arrow window needs COST_RATE_ARROW_MIN_API_DELTA_MS of api time --
+# --- warm (moderate rise) uses VEL_WARM shade -------------------------
 
-# Arrow anchor exists but has less than 10 s of api-delta → no arrow.
-# Display anchor still valid → number is short-window rate.
-body=$(
-    printf '%s,%s,%s,%s\n' "sess-tiny" 999760 60 60000
-    printf '%s,%s,%s,%s'   "sess-tiny" 999995 170 175000
-)
+# Baseline 60 ¢/m. Want window rate 72 ¢/m (1.2× → warm).
+# api_delta 20 000 ms, cost_delta = 72 * 20 000 / 60 000 = 24 c.
+# anchor_cost = 180 - 24 = 156, anchor_api = 180 000 - 20 000 = 160 000.
+body=$(printf '%s,%s,%s,%s' "sess-rising" 999985 156 160000)
+got=$(run_indicator "$body" "sess-rising" 180 180000 1000000)
+assert_eq "<dim>72¢/m<reset> <warm>↗<reset>" "$got" \
+    "short-window rate in the 1.15×–1.5× band renders warm arrow"
+
+# --- sub-floor api-delta falls back to session rate + dim stable ------
+
+# Anchor in window but only 500 ms api-delta (below the 2 s floor) → fall
+# back to session-to-date rate and the dim stable arrow.
+body=$(printf '%s,%s,%s,%s' "sess-tiny" 999985 179 179500)
 got=$(run_indicator "$body" "sess-tiny" 180 180000 1000000)
-case "$got" in
-    "<dim>"*"¢/m<reset>") ;;
-    *) printf 'FAIL: sub-floor arrow delta should not render an arrow, got: %q\n' "$got" >&2; exit 1 ;;
-esac
+assert_eq "<dim>60¢/m<reset> <dim>→<reset>" "$got" \
+    "sub-floor window api-delta falls back to session rate + dim stable arrow"
 
 # --- other-session history does not contaminate ------------------------
 
-body=$(printf '%s,%s,%s,%s' "sess-other" 999760 9999 59999)
+body=$(printf '%s,%s,%s,%s' "sess-other" 999985 9999 59999)
 got=$(run_indicator "$body" "sess-alone" 180 180000 1000000)
-case "$got" in
-    "<dim>60¢/m<reset>") ;;
-    *) printf 'FAIL: cross-session contamination, got: %q\n' "$got" >&2; exit 1 ;;
-esac
+assert_eq "<dim>60¢/m<reset> <dim>→<reset>" "$got" \
+    "other-session history does not provide an anchor"
 
-# --- rows older than COST_RATE_HISTORY_MAX_AGE get pruned --------------
+# --- rows older than COST_RATE_HISTORY_MAX_AGE get pruned -------------
 
 ancient=$((1000000 - 10 * 3600))
 body=$(printf '%s,%s,%s,%s' "sess-prune" "$ancient" 9999 99999)
@@ -175,8 +159,8 @@ COST_RATE_HISTORY="$tmpdir/h-dollars"
 rm -f "$COST_RATE_HISTORY"
 get_cost_rate_indicator "sess-dollars" 120000 60000 1000000
 case "$REPLY" in
-    "<dim>\$"*"/m<reset>") ;;
-    *) printf 'FAIL: rate ≥ $10/m should render in dollar format, got: %q\n' "$REPLY" >&2; exit 1 ;;
+    "<dim>\$"*"/m<reset> <dim>→<reset>") ;;
+    *) printf 'FAIL: rate ≥ $10/m should render in dollar format with fallback arrow, got: %q\n' "$REPLY" >&2; exit 1 ;;
 esac
 
 printf 'ok\n'
