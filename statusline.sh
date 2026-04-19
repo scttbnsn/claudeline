@@ -194,6 +194,7 @@ EXTRA_USAGE_CACHE="$CACHE_DIR/.extra-usage-cache"
 EXTRA_USAGE_LOCK="$CACHE_DIR/.extra-usage-fetch.lock"
 EXTRA_USAGE_TTL=${EXTRA_USAGE_TTL:-600}
 USAGE_HISTORY="$CACHE_DIR/.usage-history"
+THROUGHPUT_HISTORY="$CACHE_DIR/.throughput-history"
 TREND_WINDOW=${TREND_WINDOW:-900}   # 15 minutes in seconds
 AUTO_COMPACT_THRESHOLD_PCT=${CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:-84}
 [[ "$AUTO_COMPACT_THRESHOLD_PCT" =~ ^[0-9]+$ ]] && [ "$AUTO_COMPACT_THRESHOLD_PCT" -ge 1 ] && [ "$AUTO_COMPACT_THRESHOLD_PCT" -le 100 ] || AUTO_COMPACT_THRESHOLD_PCT=84
@@ -230,15 +231,16 @@ if ! INPUT_FIELDS=$(printf '%s\n' "$input" | jq -r '[
         (.rate_limits.seven_day.used_percentage // "_"),
         (.rate_limits.seven_day.resets_at // "_"),
         (.rate_limits.five_hour.used_percentage // "_"),
-        (.rate_limits.five_hour.resets_at // "_")
+        (.rate_limits.five_hour.resets_at // "_"),
+        (.session_id // "")
     ] | @tsv' 2>>"$STATUSLINE_DEBUG_LOG"); then
     debug_log "Failed to parse statusline input; using defaults"
-    INPUT_FIELDS=$'Claude\t\t0\t0\t0\t0\t0\t0\t0\t0\t200000\t_\t_\t_\t_'
+    INPUT_FIELDS=$'Claude\t\t0\t0\t0\t0\t0\t0\t0\t0\t200000\t_\t_\t_\t_\t'
 fi
 
 IFS=$'\t' read -r MODEL CURRENT_DIR LINES_ADDED LINES_REMOVED \
     TOTAL_INPUT TOTAL_OUTPUT DURATION_MS API_DURATION_MS TOTAL_COST CURRENT_TOKENS CONTEXT_WINDOW_SIZE \
-    WEEKLY_USAGE RESETS_AT BURST_USAGE BURST_RESETS <<< "$INPUT_FIELDS"
+    WEEKLY_USAGE RESETS_AT BURST_USAGE BURST_RESETS SESSION_ID <<< "$INPUT_FIELDS"
 
 normalize_scalar_var LINES_ADDED int 0 "lines added"
 normalize_scalar_var LINES_REMOVED int 0 "lines removed"
@@ -665,7 +667,13 @@ _L2_MODEL=""; seg_on "$_SEG_MODEL" && _L2_MODEL="${DIM}${MODEL}${RESET}"
 _L2_THROUGHPUT=""
 if seg_on "$_SEG_THROUGHPUT" && [ "$API_DURATION_MS" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG" && [ "$TOTAL_OUTPUT" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
     THROUGHPUT=$((TOTAL_OUTPUT * 1000 / API_DURATION_MS))
-    _L2_THROUGHPUT="${DIM}${THROUGHPUT} 🪙/s${RESET}"
+    THROUGHPUT_ARROW=""
+    if [ -n "$SESSION_ID" ]; then
+        REPLY=""
+        get_throughput_trend_arrow "$SESSION_ID" "$TOTAL_OUTPUT" "$API_DURATION_MS" "$NOW"
+        [ -n "$REPLY" ] && THROUGHPUT_ARROW=" $REPLY"
+    fi
+    _L2_THROUGHPUT="${DIM}${THROUGHPUT} 🪙/s${RESET}${THROUGHPUT_ARROW}"
 fi
 _L2_METRIC=""; seg_on "$_SEG_METRIC" && _L2_METRIC="$METRIC_INFO"
 

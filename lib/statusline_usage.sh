@@ -4,6 +4,13 @@ SECONDS_PER_DAY=${SECONDS_PER_DAY:-86400}
 SECONDS_PER_WEEK=${SECONDS_PER_WEEK:-$((7 * SECONDS_PER_DAY))}
 JSONL_CACHE_TTL=${JSONL_CACHE_TTL:-300}
 TREND_HISTORY_MAX_AGE=${TREND_HISTORY_MAX_AGE:-$SECONDS_PER_DAY}
+THROUGHPUT_TREND_WINDOW=${THROUGHPUT_TREND_WINDOW:-900}
+THROUGHPUT_HISTORY_MAX_AGE=${THROUGHPUT_HISTORY_MAX_AGE:-5400}
+THROUGHPUT_TREND_MIN_API_DELTA_MS=${THROUGHPUT_TREND_MIN_API_DELTA_MS:-60000}
+THROUGHPUT_TREND_HOT_X100=${THROUGHPUT_TREND_HOT_X100:-150}
+THROUGHPUT_TREND_WARM_X100=${THROUGHPUT_TREND_WARM_X100:-115}
+THROUGHPUT_TREND_COOL_X100=${THROUGHPUT_TREND_COOL_X100:-85}
+THROUGHPUT_TREND_COLD_X100=${THROUGHPUT_TREND_COLD_X100:-50}
 STATUSLINE_USAGE_DIR=$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 STATUSLINE_JSONL_PARSER=${STATUSLINE_JSONL_PARSER:-$STATUSLINE_USAGE_DIR/jsonl_parser.pl}
 STATUSLINE_STAT_MTIME_FLAG=${STATUSLINE_STAT_MTIME_FLAG:-}
@@ -674,6 +681,107 @@ get_trend_arrow() {
     fi
 
     # Map code to colored arrow
+    case "$arrow_code" in
+        hot)    REPLY="${VEL_HOT}↑${RESET}" ;;
+        warm)   REPLY="${VEL_WARM}↗${RESET}" ;;
+        cold)   REPLY="${VEL_COLD}↓${RESET}" ;;
+        cool)   REPLY="${VEL_COOL}↘${RESET}" ;;
+        *)      REPLY="${VEL_STABLE}→${RESET}" ;;
+    esac
+}
+
+# Per-session throughput trend arrow.
+# Compares the short-window active rate (tokens per API-active second over the
+# last THROUGHPUT_TREND_WINDOW wall-clock seconds) against the session-to-date
+# active rate, and renders a colored arrow in REPLY. Empty when we don't yet
+# have enough history for this session to support a meaningful comparison.
+#
+# History lives in $THROUGHPUT_HISTORY as CSV rows:
+#     session_id,wall_epoch,total_output,api_duration_ms
+# Rows older than THROUGHPUT_HISTORY_MAX_AGE are pruned on each call so the
+# file stays bounded regardless of how many sessions pass through.
+get_throughput_trend_arrow() {
+    local session_id=$1
+    local total_output=$2
+    local api_duration_ms=$3
+    local now=${4:-$(date +%s)}
+    local history_file=${THROUGHPUT_HISTORY:-}
+    local short_window=${THROUGHPUT_TREND_WINDOW}
+    local max_age=${THROUGHPUT_HISTORY_MAX_AGE}
+    local min_api_delta=${THROUGHPUT_TREND_MIN_API_DELTA_MS}
+    local hot_x100=${THROUGHPUT_TREND_HOT_X100}
+    local warm_x100=${THROUGHPUT_TREND_WARM_X100}
+    local cool_x100=${THROUGHPUT_TREND_COOL_X100}
+    local cold_x100=${THROUGHPUT_TREND_COLD_X100}
+
+    REPLY=""
+
+    [ -n "$session_id" ] || return 0
+    [ -n "$history_file" ] || return 0
+    [[ "$total_output" =~ ^[0-9]+$ ]] || return 0
+    [[ "$api_duration_ms" =~ ^[0-9]+$ ]] || return 0
+    [ "$api_duration_ms" -gt 0 ] || return 0
+
+    local session_rate_milli=$(( total_output * 1000000 / api_duration_ms ))
+    [ "$session_rate_milli" -gt 0 ] || return 0
+
+    local prune_cutoff=$((now - max_age))
+    local short_cutoff=$((now - short_window))
+    local anchor_time=0
+    local anchor_output=0
+    local anchor_api_ms=0
+    local kept_history=""
+    local kept_sep=""
+    local r_session r_time r_output r_api
+
+    if [ -f "$history_file" ]; then
+        while IFS=, read -r r_session r_time r_output r_api || [ -n "$r_session" ]; do
+            [ -n "$r_session" ] || continue
+            [[ "$r_time" =~ ^[0-9]+$ ]] || continue
+            [[ "$r_output" =~ ^[0-9]+$ ]] || continue
+            [[ "$r_api" =~ ^[0-9]+$ ]] || continue
+            [ "$r_time" -ge "$prune_cutoff" ] || continue
+
+            printf -v kept_history '%s%s%s,%s,%s,%s' \
+                "$kept_history" "$kept_sep" "$r_session" "$r_time" "$r_output" "$r_api"
+            kept_sep=$'\n'
+
+            if [ "$r_session" = "$session_id" ] && [ "$r_time" -ge "$short_cutoff" ]; then
+                if [ "$anchor_time" -eq 0 ] || [ "$r_time" -lt "$anchor_time" ]; then
+                    anchor_time=$r_time
+                    anchor_output=$r_output
+                    anchor_api_ms=$r_api
+                fi
+            fi
+        done < "$history_file"
+    fi
+
+    printf -v kept_history '%s%s%s,%s,%s,%s' \
+        "$kept_history" "$kept_sep" "$session_id" "$now" "$total_output" "$api_duration_ms"
+
+    if ! printf '%s' "$kept_history" > "$history_file" 2>>"$STATUSLINE_DEBUG_LOG"; then
+        debug_log "Throughput history update failed"
+    fi
+
+    [ "$anchor_time" -gt 0 ] || return 0
+    local api_delta=$(( api_duration_ms - anchor_api_ms ))
+    [ "$api_delta" -ge "$min_api_delta" ] || return 0
+    local out_delta=$(( total_output - anchor_output ))
+    [ "$out_delta" -ge 0 ] || return 0
+
+    local short_rate_milli=$(( out_delta * 1000000 / api_delta ))
+    local ratio_x100=$(( short_rate_milli * 100 / session_rate_milli ))
+    local arrow_code="stable"
+    if [ "$ratio_x100" -ge "$hot_x100" ]; then
+        arrow_code="hot"
+    elif [ "$ratio_x100" -ge "$warm_x100" ]; then
+        arrow_code="warm"
+    elif [ "$ratio_x100" -le "$cold_x100" ]; then
+        arrow_code="cold"
+    elif [ "$ratio_x100" -le "$cool_x100" ]; then
+        arrow_code="cool"
+    fi
+
     case "$arrow_code" in
         hot)    REPLY="${VEL_HOT}↑${RESET}" ;;
         warm)   REPLY="${VEL_WARM}↗${RESET}" ;;
