@@ -219,7 +219,7 @@ Tracks **usage% velocity** — how fast you're burning tokens compared to the su
 | 75-87% | ▇ -135m | magenta + countdown |
 | 88%+ | █ -90m | bright magenta + countdown |
 
-At 75%+, a dimmed countdown shows minutes until the 5-hour window resets.
+A dimmed countdown shows minutes until the 5-hour window resets whenever usage is 75%+ *or* the reset is under an hour away.
 
 **💳 Credit** (overage balance) — only shown when weekly or burst usage hits 100% with active credit spend.
 
