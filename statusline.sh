@@ -652,11 +652,12 @@ if seg_on "$_SEG_THROUGHPUT" && [ "$API_DURATION_MS" -gt 0 ] 2>>"$STATUSLINE_DEB
     get_cost_rate_indicator "$SESSION_ID" "$TOTAL_COST_CENTS" "$API_DURATION_MS" "$NOW"
     _L1_THROUGHPUT="$REPLY"
 fi
+_L1_LINES=""; seg_on "$_SEG_LINES" && _L1_LINES="$LINES_INFO"
 _L1_BURST=""; seg_on "$_SEG_BURST" && [ -n "$BURST_INDICATOR" ] && _L1_BURST="$BURST_INDICATOR"
 _L1_CREDIT=""; seg_on "$_SEG_CREDIT" && [ -n "$CREDIT_INDICATOR" ] && _L1_CREDIT="$CREDIT_INDICATOR"
 
-# Priority order: context > git > pace > cost-rate > burst > credit
-printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L1_CONTEXT" "$_L1_GIT" "$_L1_PACE" "$_L1_THROUGHPUT" "$_L1_BURST" "$_L1_CREDIT")"
+# Priority order: context > git > pace > cost-rate > lines > burst > credit
+printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L1_CONTEXT" "$_L1_GIT" "$_L1_PACE" "$_L1_THROUGHPUT" "$_L1_LINES" "$_L1_BURST" "$_L1_CREDIT")"
 
 # Prepare line 2 segments in priority order
 _L2_TOKENS=""
@@ -668,9 +669,8 @@ if seg_on "$_SEG_TOKENS"; then
     _L2_TOKENS="${DIM}${CTX_PADDED}${RESET}"
 fi
 _L2_MODEL=""; seg_on "$_SEG_MODEL" && _L2_MODEL="${DIM}${MODEL}${RESET}"
-_L2_LINES=""; seg_on "$_SEG_LINES" && _L2_LINES="$LINES_INFO"
 _L2_DURATION=""; seg_on "$_SEG_DURATION" && _L2_DURATION="$DURATION_INFO"
 _L2_METRIC=""; seg_on "$_SEG_METRIC" && _L2_METRIC="$METRIC_INFO"
 
-# Priority order: tokens > metric > model > lines > duration
-printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_METRIC" "$_L2_MODEL" "$_L2_LINES" "$_L2_DURATION")"
+# Priority order: tokens > metric > model > duration
+printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_METRIC" "$_L2_MODEL" "$_L2_DURATION")"
