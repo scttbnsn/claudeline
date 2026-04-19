@@ -802,17 +802,29 @@ get_cost_rate_indicator() {
 
     # Cost-rate semantics: spending faster = bad (red gradient), slower = good
     # (green gradient), stable = dim. Two shades on each side so the severity
-    # of the change is visible: hot/cold are vivid, warm/cool are muted. The
-    # arrow always renders — when we don't have enough history or api-delta
+    # of the change is visible: hot/cold are vivid, warm/cool are muted. When
+    # direction is classified we also append the raw multiplier (e.g. "3.2×")
+    # so the magnitude reads at a glance even when two sessions both show ↑.
+    # The arrow always renders — when we don't have enough history or api-delta
     # to classify direction, default to a dim stable arrow so the slot keeps
     # a consistent shape.
     [ -z "$arrow_code" ] && arrow_code="stable"
     local arrow=""
+    local mult_suffix=""
+    if [ "$arrow_code" != "stable" ] && [ "${ratio_x100:-0}" -gt 0 ]; then
+        local mult_whole=$((ratio_x100 / 100))
+        local mult_tenths=$(( (ratio_x100 % 100 + 5) / 10 ))
+        if [ "$mult_tenths" -ge 10 ]; then
+            mult_whole=$((mult_whole + 1))
+            mult_tenths=0
+        fi
+        mult_suffix=$(printf ' %d.%d×' "$mult_whole" "$mult_tenths")
+    fi
     case "$arrow_code" in
-        hot)    arrow=" ${VEL_HOT}↑${RESET}" ;;
-        warm)   arrow=" ${VEL_WARM}↗${RESET}" ;;
-        cold)   arrow=" ${GREEN}↓${RESET}" ;;
-        cool)   arrow=" ${VEL_COOL}↘${RESET}" ;;
+        hot)    arrow=" ${VEL_HOT}↑${mult_suffix}${RESET}" ;;
+        warm)   arrow=" ${VEL_WARM}↗${mult_suffix}${RESET}" ;;
+        cold)   arrow=" ${GREEN}↓${mult_suffix}${RESET}" ;;
+        cool)   arrow=" ${VEL_COOL}↘${mult_suffix}${RESET}" ;;
         *)      arrow=" ${DIM}→${RESET}" ;;
     esac
 

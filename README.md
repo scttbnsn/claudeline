@@ -11,10 +11,10 @@
 </div>
 
 ```
-✨ ████░░░░░░  ·  myrepo/main*  ·  👌→  ·  42¢/m ↗  ·  +50/-20  ·  💥▃  ·  💳25%
-│  └────┬────┘     └─────┬─────┘   └─┬──┘   └───┬───┘   └───┬──┘   └─┬┘   └─┬──┘
-│    context          repo/branch    pace   cost rate    lines    burst  credit
-│    bar              + git status   trend  + arrow      changed
+✨ ████░░░░░░  ·  myrepo/main*  ·  👌→  ·  42¢/m ↗ 1.3×  ·  +50/-20  ·  💥▃  ·  💳25%
+│  └────┬────┘     └─────┬─────┘   └─┬──┘   └─────┬─────┘   └───┬──┘   └─┬┘   └─┬──┘
+│    context          repo/branch    pace      cost rate      lines    burst  credit
+│    bar              + git status   trend   + arrow + mult.  changed
 └─ context icon (✨🌱💭🧠⚡🔥🌡️🫠💀💾)
 
     73.5K/168K  ·  🍕 3 joe's®  ·  Opus 4.6  ·  ⏱️ 45m
@@ -148,7 +148,7 @@ Vibey (default), Dark, Light, Nord, and Gruvbox — plus NO_COLOR support
 </td>
 <td align="center" width="33%">
 <h3>Cost-Rate Indicator</h3>
-Per-session cents/min (API-active time) on a fast ~30-s window so you can see tool calls and config flips live — plus a red/dim/green arrow showing whether you're spending above, at, or below your session baseline
+Per-session cents/min (API-active time) on a fast ~30-s window so you can see tool calls and config flips live — plus a red/dim/green arrow and a raw multiplier (e.g. <code>↑ 3.2×</code>) showing exactly how far above or below your session baseline you are
 </td>
 </tr>
 </table>

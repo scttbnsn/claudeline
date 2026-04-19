@@ -85,8 +85,8 @@ assert_eq "<dim>60¢/m<reset> <dim>→<reset>" "$got" \
 # Window delta: 5 c / 10 000 ms → rate = 30 ¢/m (0.5× baseline).
 body=$(printf '%s,%s,%s,%s' "sess-drop" 999980 175 170000)
 got=$(run_indicator "$body" "sess-drop" 180 180000 1000000)
-assert_eq "<dim>30¢/m<reset> <green>↓<reset>" "$got" \
-    "short-window rate ≤ 0.5× session renders bright-green cold arrow"
+assert_eq "<dim>30¢/m<reset> <green>↓ 0.5×<reset>" "$got" \
+    "short-window rate ≤ 0.5× session renders bright-green cold arrow with multiplier"
 
 # --- cool (moderate drop) uses VEL_COOL shade -------------------------
 
@@ -95,8 +95,8 @@ assert_eq "<dim>30¢/m<reset> <green>↓<reset>" "$got" \
 # anchor_cost = 180 - 11 = 169, anchor_api = 180 000 - 15 000 = 165 000.
 body=$(printf '%s,%s,%s,%s' "sess-cooling" 999985 169 165000)
 got=$(run_indicator "$body" "sess-cooling" 180 180000 1000000)
-assert_eq "<dim>44¢/m<reset> <cool>↘<reset>" "$got" \
-    "short-window rate in the 0.5×–0.85× band renders cool arrow"
+assert_eq "<dim>44¢/m<reset> <cool>↘ 0.7×<reset>" "$got" \
+    "short-window rate in the 0.5×–0.85× band renders cool arrow with multiplier"
 
 # --- hot (severe burst) renders bright red ↑ --------------------------
 
@@ -105,8 +105,8 @@ assert_eq "<dim>44¢/m<reset> <cool>↘<reset>" "$got" \
 # anchor_cost = 180 - 30 = 150, anchor_api = 180 000 - 15 000 = 165 000.
 body=$(printf '%s,%s,%s,%s' "sess-burst" 999985 150 165000)
 got=$(run_indicator "$body" "sess-burst" 180 180000 1000000)
-assert_eq "<dim>120¢/m<reset> <hot>↑<reset>" "$got" \
-    "short-window rate ≥ 1.5× session renders bright-red hot arrow"
+assert_eq "<dim>120¢/m<reset> <hot>↑ 2.0×<reset>" "$got" \
+    "short-window rate ≥ 1.5× session renders bright-red hot arrow with multiplier"
 
 # --- warm (moderate rise) uses VEL_WARM shade -------------------------
 
@@ -115,8 +115,8 @@ assert_eq "<dim>120¢/m<reset> <hot>↑<reset>" "$got" \
 # anchor_cost = 180 - 24 = 156, anchor_api = 180 000 - 20 000 = 160 000.
 body=$(printf '%s,%s,%s,%s' "sess-rising" 999985 156 160000)
 got=$(run_indicator "$body" "sess-rising" 180 180000 1000000)
-assert_eq "<dim>72¢/m<reset> <warm>↗<reset>" "$got" \
-    "short-window rate in the 1.15×–1.5× band renders warm arrow"
+assert_eq "<dim>72¢/m<reset> <warm>↗ 1.2×<reset>" "$got" \
+    "short-window rate in the 1.15×–1.5× band renders warm arrow with multiplier"
 
 # --- sub-floor api-delta falls back to session rate + dim stable ------
 
