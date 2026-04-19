@@ -411,9 +411,11 @@ The API call runs in a **non-blocking background subshell** so it never stalls t
 | `EXTRA_USAGE_TTL=600` | Extra usage / credit cache lifetime in seconds (default: 600) |
 | `TREND_WINDOW=900` | Trend arrow sample window in seconds (default: 900) |
 | `TREND_HISTORY_MAX_AGE=86400` | Max age for trend history entries in seconds (default: 86400) |
-| `COST_RATE_WINDOW=300` | Short-window lookback for the per-session cost rate, in wall-clock seconds (default: 300 = 5 min) |
+| `COST_RATE_WINDOW=300` | Display window for the cost-rate number, in wall-clock seconds (default: 300 = 5 min). Larger = smoother, slower to settle. |
+| `COST_RATE_ARROW_WINDOW=60` | Arrow window, in wall-clock seconds (default: 60). Smaller = snappier direction, more flicker. |
 | `COST_RATE_HISTORY_MAX_AGE=5400` | How long rows in `.cost-rate-history` are retained before pruning, in seconds (default: 5400 = 90 min) |
-| `COST_RATE_MIN_API_DELTA_MS=30000` | Minimum API-active delta before the short-window rate replaces session average (default: 30000 = 30 s) |
+| `COST_RATE_MIN_API_DELTA_MS=30000` | Minimum API-active delta before the display number switches from session average to the rolling window (default: 30000 = 30 s) |
+| `COST_RATE_ARROW_MIN_API_DELTA_MS=10000` | Minimum API-active delta before the arrow renders at all (default: 10000 = 10 s) |
 | `COST_RATE_TREND_HOT_X100=150` | Hot threshold: short-window rate ≥1.50× session average (default: 150) |
 | `COST_RATE_TREND_WARM_X100=115` | Warm threshold: short-window rate ≥1.15× session average (default: 115) |
 | `COST_RATE_TREND_COOL_X100=85` | Cool threshold: short-window rate ≤0.85× session average (default: 85) |
