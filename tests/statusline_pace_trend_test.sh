@@ -50,21 +50,6 @@ run_trend_case() {
 assert_eq "<stable>→<reset>" "$(run_trend_case "" 10 500)" "get_trend_arrow is stable with a single sample"
 assert_eq $'500,10' "$(cat "$tmpdir/history")" "get_trend_arrow appends the first sample to history"
 
-run_trend_clock_skew_case() {
-    local case_dir="$tmpdir/clock-skew"
-    local CACHE_DIR="$case_dir/cache"
-    local USAGE_HISTORY="$case_dir/history"
-    local TREND_WINDOW=900
-
-    mkdir -p "$CACHE_DIR"
-    printf '%s' $'600,10\n' > "$USAGE_HISTORY"
-    get_trend_arrow "10" 0 "500"
-    printf '%s\n' "$REPLY"
-}
-
-assert_eq "<stable>→<reset>" "$(run_trend_clock_skew_case)" "future-dated history samples do not break the trend arrow"
-assert_eq $'500,10' "$(cat "$tmpdir/clock-skew/history")" "future-dated history samples are dropped so the current sample is still appended"
-
 run_trend_case_with_blocked_predictable_tmp() {
     local case_dir="$tmpdir/blocked-predictable"
     local shim_dir="$case_dir/shim"

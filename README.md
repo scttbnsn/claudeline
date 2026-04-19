@@ -11,16 +11,16 @@
 </div>
 
 ```
-✨ ████░░░░░░  ·  myrepo/main*  ·  👌→  ·  ↗ 1h +0.2%/h  ·  +50/-20  ·  💥▃  ·  💳25%
-│  └────┬────┘     └─────┬─────┘    └┬┘       └────┬────┘    └───┬──┘    └┬┘    └─┬─┘
-│    context          repo/branch   pace        burn-rate       lines   burst  credit
-│    bar              + git status  trend       indicator       changed
+✨ ████░░░░░░  ·  myrepo/main*  ·  +50/-20  ·  👌→  ·  💥▃  ·  💳25%  ·  ⏱️ 45m
+│  └────┬────┘     └─────┬─────┘   └───┬──┘   └─┬──┘  └─┬┘   └─┬──┘    └──┬───┘
+│    context          repo/branch     lines    pace  burst  credit    duration
+│    bar              + git status    changed  trend
 └─ context icon (✨🌱💭🧠⚡🔥🌡️🫠💀💾)
 
-    73.5K/168K  ·  🍕 3 joe's®  ·  ⏱️ 45m  ·  Opus 4.6
-    └────┬────┘    └─────┬─────┘    └──┬──┘    └───┬───┘
-       context        rotating      session       model
-       tokens         metric        duration
+    73.5K/168K  ·  🍕 3 joe's®  ·  Opus 4.6  ·  44 🪙/s
+    └────┬────┘    └─────┬─────┘   └───┬───┘    └───┬───┘
+      context         rotating       model      throughput
+      tokens          metric
 ```
 
 <div align="center">
@@ -34,7 +34,6 @@
 - [🚀 Quick Start](#quick-start)
 - [✨ Features](#features)
 - [📊 Smart Pace Indicator](#smart-pace-indicator)
-- [📈 Progressive Burn-Rate](#progressive-burn-rate)
 - [💥 Burst & Credit Indicators](#burst--credit-indicators)
 - [🌍 Environmental Impact](#environmental-impact)
 - [🏆 All-Time Tracking](#all-time-tracking)
@@ -56,8 +55,6 @@ curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/insta
 > **Tip:** Review the [install script](install.sh) before running. The installer verifies SHA-256 checksums of all downloaded files before installing them.
 
 Then restart Claude Code. That's it.
-
-> **Migration note:** the `throughput` segment now renders a progressive burn-rate indicator — a rotating series of frames showing your current %/h burn plus deltas vs. 1h / 1d / 1w / 2w ago. Horizons unlock automatically as history accumulates, so day-0 shows just the raw rate and by week 2 you see the full comparison set. The segment key stays `throughput` for config compatibility.
 
 <details>
 <summary>Optional: create a config file</summary>
@@ -122,8 +119,8 @@ Adapts to auto-compact setting — scales to 168K (ON) or 200K (OFF) with color 
 Dual-signal weekly pace (burn rate + pressure) with 8-tier emoji scale and velocity-based trend arrows
 </td>
 <td align="center" width="33%">
-<h3>Progressive Burn-Rate</h3>
-Current %/h plus rotating deltas vs. 1h / 1d / 1w / 2w ago — horizons unlock as history accumulates so it never goes blank
+<h3>Burst & Credit</h3>
+8-level colored bar for 5-hour rate limit with reset countdown, plus overage credit tracking
 </td>
 </tr>
 <tr>
@@ -142,16 +139,16 @@ Cumulative usage across all sessions from JSONL files, shown with 🏆 trophy on
 </tr>
 <tr>
 <td align="center" width="33%">
-<h3>Burst & Credit</h3>
-8-level colored bar for 5-hour rate limit with reset countdown, plus overage credit tracking
-</td>
-<td align="center" width="33%">
 <h3>Git Integration</h3>
 Repo/branch with status indicators — unstaged, staged, ahead/behind, stash count
 </td>
 <td align="center" width="33%">
-<h3>5 Built-in Themes + 1M Context</h3>
-Vibey (default), Dark, Light, Nord, Gruvbox, NO_COLOR support, auto-detect extended 1M context windows
+<h3>5 Built-in Themes</h3>
+Vibey (default), Dark, Light, Nord, and Gruvbox — plus NO_COLOR support
+</td>
+<td align="center" width="33%">
+<h3>1M Context Support</h3>
+Detects extended context windows and scales the bar accordingly
 </td>
 </tr>
 </table>
@@ -201,47 +198,9 @@ Tracks **usage% velocity** — how fast you're burning tokens compared to the su
 | 0.1-0.5x sustainable | ↘ | Cooling down |
 | < 0.1x sustainable | ↓ | Cooling fast |
 
-**History retention:** Last 15 min dense (every ~30s), 15 min–4 h fine 10-min buckets (so the 1h burn-rate horizon has resolution), 4 h–15 d coarse 4-h buckets with a fine-bucketed band around 1 week ago, older than 15 d pruned. Same `.usage-history` file powers both the pace trend arrow and the progressive burn-rate indicator.
+**History retention:** Last 15 min dense (every ~30s), 15min–24h sparse anchors (1 per 4h), older pruned.
 
 </details>
-
-<hr>
-
-<h2 align="center" id="progressive-burn-rate">📈 Progressive Burn-Rate</h2>
-
-Answers *"am I burning through my weekly limit faster than I was before?"* in a single glance. The segment is designed to **always render something** given any usable history, and to **get more informative as data accumulates**.
-
-**What it shows:** the current weekly-% per hour burn rate, plus deltas comparing that rate to what it was 1 hour / 1 day / 1 week / 2 weeks ago. At steady state the segment rotates through every 5 seconds:
-
-```
-1.2%/h   →   ↗ 1h +0.3%/h   →   ↘ 1d −0.2%/h   →   → 1w +0.0%/h   →   ↑ 2w +0.8%/h
-```
-
-**Horizons unlock as history accumulates** — no blank days on day zero:
-
-| Elapsed since install | Segment shows |
-|-----------------------|---------------|
-| minute 1 | raw `1.2%/h` only |
-| hour 2 | raw + `↘ 1h ±...` |
-| day 2 | raw + 1h + `↘ 1d ±...` |
-| day 8 | raw + 1h + 1d + `↘ 1w ±...` |
-| day 15 | raw + 1h + 1d + 1w + `↘ 2w ±...` |
-
-**Arrow colors** reuse the pace-trend palette so visual language is consistent:
-
-| Delta (milli%/h) | Arrow | Meaning |
-|---|---|---|
-| ≥ +500 | `↑` hot | burning ~85% faster than the comparison window |
-| ≥ +150 | `↗` warm | ~25% faster |
-| ±150 | `→` stable | within sustainable-rate noise |
-| ≤ −150 | `↘` cool | ~25% slower |
-| ≤ −500 | `↓` cold | ~85% slower |
-
-*(Sustainable rate ≈ 595 milli%/h, i.e. 100% per 7-day window.)*
-
-**Reset-aware:** if all history samples are above the current weekly %, the segment treats the most recent pre-reset sample as the weekly reset point and extrapolates the raw rate forward — so within seconds of a weekly reset you see something like `33%/h` instead of a blank slot. Delta frames are suppressed during that fallback window since they'd compare an extrapolation to a real measurement.
-
-Configurable via `BURN_RATE_WINDOW` (slope window, default 2h), `BURN_RATE_ROTATION_SECONDS` (frame rotation, default 5s), and per-horizon tolerances (`BURN_RATE_TOL_HR`, `BURN_RATE_TOL_DAY`, `BURN_RATE_TOL_WEEK`, `BURN_RATE_TOL_2WEEK`).
 
 <hr>
 
@@ -443,9 +402,7 @@ The API call runs in a **non-blocking background subshell** so it never stalls t
 | Variable | Effect |
 |----------|--------|
 | `CLAUDELINE_THEME=nord` | Theme: `vibey` (default), `dark`, `light`, `nord`, `gruvbox` |
-| `CLAUDELINE_SEGMENTS=context,git,pace` | Show only listed segments (default: all). Available: `context`, `git`, `lines`, `pace`, `burst`, `duration`, `credit`, `tokens`, `metric`, `throughput`, `model`. `throughput` is the compatibility key for the progressive burn-rate indicator. |
-| `BURN_RATE_WINDOW=7200` | Sliding window (seconds) for the burn-rate slope measurement at each horizon. Shorter is twitchier (default: 2h) |
-| `BURN_RATE_ROTATION_SECONDS=5` | Seconds per frame when the burn-rate segment rotates through available horizons (raw / 1h / 1d / 1w / 2w) |
+| `CLAUDELINE_SEGMENTS=context,git,pace` | Show only listed segments (default: all). Available: `context`, `git`, `lines`, `pace`, `burst`, `duration`, `credit`, `tokens`, `metric`, `throughput`, `model` |
 | `NO_COLOR=1` | Disables all color output ([spec](https://no-color.org)) |
 | `CLAUDELINE_NO_NETWORK=1` | Disables all network access — the API call is skipped entirely |
 | `CLAUDELINE_DEBUG=1` | Enables debug logging to `$TMPDIR/claudeline-statusline-debug.log` |
@@ -453,7 +410,7 @@ The API call runs in a **non-blocking background subshell** so it never stalls t
 | `JSONL_CACHE_TTL=300` | JSONL cache lifetime in seconds (default: 300) |
 | `EXTRA_USAGE_TTL=600` | Extra usage / credit cache lifetime in seconds (default: 600) |
 | `TREND_WINDOW=900` | Trend arrow sample window in seconds (default: 900) |
-| `TREND_HISTORY_MAX_AGE=1296000` | Max age for trend/burn-rate history entries in seconds (default: 15d, needed for the 2w comparison horizon) |
+| `TREND_HISTORY_MAX_AGE=86400` | Max age for trend history entries in seconds (default: 86400) |
 
 **Local data stored** in `~/.claude-usage.d/` (created with `chmod 700`):
 
