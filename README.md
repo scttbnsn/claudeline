@@ -17,9 +17,9 @@
 │    bar              + git status    changed  trend
 └─ context icon (✨🌱💭🧠⚡🔥🌡️🫠💀💾)
 
-    73.5K/168K  ·  🍕 3 joe's®  ·  Opus 4.6  ·  44 🪙/s ↗
-    └────┬────┘    └─────┬─────┘   └───┬───┘    └─────┬────┘
-      context         rotating       model      throughput
+    73.5K/168K  ·  🍕 3 joe's®  ·  Opus 4.6  ·  42¢/m ↗
+    └────┬────┘    └─────┬─────┘   └───┬───┘    └───┬───┘
+      context         rotating       model      cost rate
       tokens          metric                    + trend arrow
 ```
 
@@ -147,8 +147,8 @@ Repo/branch with status indicators — unstaged, staged, ahead/behind, stash cou
 Vibey (default), Dark, Light, Nord, and Gruvbox — plus NO_COLOR support
 </td>
 <td align="center" width="33%">
-<h3>Throughput Trend</h3>
-Per-session tokens/sec (active time) with a semantically colored arrow comparing last-15-min rate vs session average — max-effort toggles show up immediately
+<h3>Cost-Rate Indicator</h3>
+Per-session cents/min (API-active time), rolling 5-min window so config changes (Opus ↔ Sonnet, max-thinking on/off) show up in the number fast — plus a semantically colored arrow vs session average
 </td>
 </tr>
 </table>
@@ -411,13 +411,13 @@ The API call runs in a **non-blocking background subshell** so it never stalls t
 | `EXTRA_USAGE_TTL=600` | Extra usage / credit cache lifetime in seconds (default: 600) |
 | `TREND_WINDOW=900` | Trend arrow sample window in seconds (default: 900) |
 | `TREND_HISTORY_MAX_AGE=86400` | Max age for trend history entries in seconds (default: 86400) |
-| `THROUGHPUT_TREND_WINDOW=900` | Short-window lookback for the per-session throughput arrow, in wall-clock seconds (default: 900) |
-| `THROUGHPUT_HISTORY_MAX_AGE=5400` | How long rows in `.throughput-history` are retained before pruning, in seconds (default: 5400 = 90 min) |
-| `THROUGHPUT_TREND_MIN_API_DELTA_MS=60000` | Minimum API-active delta required before the trend arrow renders (default: 60000 = 1 min) |
-| `THROUGHPUT_TREND_HOT_X100=150` | Hot threshold: short-window rate ≥1.50× session average (default: 150) |
-| `THROUGHPUT_TREND_WARM_X100=115` | Warm threshold: short-window rate ≥1.15× session average (default: 115) |
-| `THROUGHPUT_TREND_COOL_X100=85` | Cool threshold: short-window rate ≤0.85× session average (default: 85) |
-| `THROUGHPUT_TREND_COLD_X100=50` | Cold threshold: short-window rate ≤0.50× session average (default: 50) |
+| `COST_RATE_WINDOW=300` | Short-window lookback for the per-session cost rate, in wall-clock seconds (default: 300 = 5 min) |
+| `COST_RATE_HISTORY_MAX_AGE=5400` | How long rows in `.cost-rate-history` are retained before pruning, in seconds (default: 5400 = 90 min) |
+| `COST_RATE_MIN_API_DELTA_MS=30000` | Minimum API-active delta before the short-window rate replaces session average (default: 30000 = 30 s) |
+| `COST_RATE_TREND_HOT_X100=150` | Hot threshold: short-window rate ≥1.50× session average (default: 150) |
+| `COST_RATE_TREND_WARM_X100=115` | Warm threshold: short-window rate ≥1.15× session average (default: 115) |
+| `COST_RATE_TREND_COOL_X100=85` | Cool threshold: short-window rate ≤0.85× session average (default: 85) |
+| `COST_RATE_TREND_COLD_X100=50` | Cold threshold: short-window rate ≤0.50× session average (default: 50) |
 
 **Local data stored** in `~/.claude-usage.d/` (created with `chmod 700`):
 
@@ -427,7 +427,7 @@ The API call runs in a **non-blocking background subshell** so it never stalls t
 | `.jsonl-state` | Per-file JSONL scan state for incremental refreshes |
 | `.refresh.lock.d/` | Lock directory to prevent concurrent background JSONL refreshes |
 | `.usage-history` | Rolling 24h usage samples for trend arrows |
-| `.throughput-history` | Per-session throughput samples (keyed by `session_id`, pruned to 90 min) |
+| `.cost-rate-history` | Per-session `(session_id, t, total_cost_cents, api_duration_ms)` samples for the cost-rate slot, pruned to 90 min |
 | `.extra-usage-cache` | Cached overage/credit data |
 | `.extra-usage-fetch.lock/` | Lock directory to prevent concurrent API calls |
 | `.claude-config-auto-compact` | Cached auto-compact setting |

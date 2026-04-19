@@ -4,13 +4,13 @@ SECONDS_PER_DAY=${SECONDS_PER_DAY:-86400}
 SECONDS_PER_WEEK=${SECONDS_PER_WEEK:-$((7 * SECONDS_PER_DAY))}
 JSONL_CACHE_TTL=${JSONL_CACHE_TTL:-300}
 TREND_HISTORY_MAX_AGE=${TREND_HISTORY_MAX_AGE:-$SECONDS_PER_DAY}
-THROUGHPUT_TREND_WINDOW=${THROUGHPUT_TREND_WINDOW:-900}
-THROUGHPUT_HISTORY_MAX_AGE=${THROUGHPUT_HISTORY_MAX_AGE:-5400}
-THROUGHPUT_TREND_MIN_API_DELTA_MS=${THROUGHPUT_TREND_MIN_API_DELTA_MS:-60000}
-THROUGHPUT_TREND_HOT_X100=${THROUGHPUT_TREND_HOT_X100:-150}
-THROUGHPUT_TREND_WARM_X100=${THROUGHPUT_TREND_WARM_X100:-115}
-THROUGHPUT_TREND_COOL_X100=${THROUGHPUT_TREND_COOL_X100:-85}
-THROUGHPUT_TREND_COLD_X100=${THROUGHPUT_TREND_COLD_X100:-50}
+COST_RATE_WINDOW=${COST_RATE_WINDOW:-300}
+COST_RATE_HISTORY_MAX_AGE=${COST_RATE_HISTORY_MAX_AGE:-5400}
+COST_RATE_MIN_API_DELTA_MS=${COST_RATE_MIN_API_DELTA_MS:-30000}
+COST_RATE_TREND_HOT_X100=${COST_RATE_TREND_HOT_X100:-150}
+COST_RATE_TREND_WARM_X100=${COST_RATE_TREND_WARM_X100:-115}
+COST_RATE_TREND_COOL_X100=${COST_RATE_TREND_COOL_X100:-85}
+COST_RATE_TREND_COLD_X100=${COST_RATE_TREND_COLD_X100:-50}
 STATUSLINE_USAGE_DIR=$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 STATUSLINE_JSONL_PARSER=${STATUSLINE_JSONL_PARSER:-$STATUSLINE_USAGE_DIR/jsonl_parser.pl}
 STATUSLINE_STAT_MTIME_FLAG=${STATUSLINE_STAT_MTIME_FLAG:-}
@@ -690,105 +690,124 @@ get_trend_arrow() {
     esac
 }
 
-# Per-session throughput trend arrow.
-# Compares the short-window active rate (tokens per API-active second over the
-# last THROUGHPUT_TREND_WINDOW wall-clock seconds) against the session-to-date
-# active rate, and renders a colored arrow in REPLY. Empty when we don't yet
-# have enough history for this session to support a meaningful comparison.
+# Per-session cost-rate indicator (cents per minute of API-active time).
+# The displayed number is the short-window rate (last COST_RATE_WINDOW seconds
+# of wall-clock, divided by API-active time in that window). When the window
+# has too little API-active time yet, falls back to the session-to-date rate
+# with no arrow. A semantically colored arrow compares short-window vs session
+# rate.
 #
-# History lives in $THROUGHPUT_HISTORY as CSV rows:
-#     session_id,wall_epoch,total_output,api_duration_ms
-# Rows older than THROUGHPUT_HISTORY_MAX_AGE are pruned on each call so the
+# History lives in $COST_RATE_HISTORY as CSV rows:
+#     session_id,wall_epoch,total_cost_cents,api_duration_ms
+# Rows older than COST_RATE_HISTORY_MAX_AGE are pruned on each call so the
 # file stays bounded regardless of how many sessions pass through.
-get_throughput_trend_arrow() {
+get_cost_rate_indicator() {
     local session_id=$1
-    local total_output=$2
+    local total_cost_cents=$2
     local api_duration_ms=$3
     local now=${4:-$(date +%s)}
-    local history_file=${THROUGHPUT_HISTORY:-}
-    local short_window=${THROUGHPUT_TREND_WINDOW}
-    local max_age=${THROUGHPUT_HISTORY_MAX_AGE}
-    local min_api_delta=${THROUGHPUT_TREND_MIN_API_DELTA_MS}
-    local hot_x100=${THROUGHPUT_TREND_HOT_X100}
-    local warm_x100=${THROUGHPUT_TREND_WARM_X100}
-    local cool_x100=${THROUGHPUT_TREND_COOL_X100}
-    local cold_x100=${THROUGHPUT_TREND_COLD_X100}
+    local history_file=${COST_RATE_HISTORY:-}
+    local short_window=${COST_RATE_WINDOW}
+    local max_age=${COST_RATE_HISTORY_MAX_AGE}
+    local min_api_delta=${COST_RATE_MIN_API_DELTA_MS}
+    local hot_x100=${COST_RATE_TREND_HOT_X100}
+    local warm_x100=${COST_RATE_TREND_WARM_X100}
+    local cool_x100=${COST_RATE_TREND_COOL_X100}
+    local cold_x100=${COST_RATE_TREND_COLD_X100}
 
     REPLY=""
 
-    [ -n "$session_id" ] || return 0
-    [ -n "$history_file" ] || return 0
-    [[ "$total_output" =~ ^[0-9]+$ ]] || return 0
+    [[ "$total_cost_cents" =~ ^[0-9]+$ ]] || return 0
     [[ "$api_duration_ms" =~ ^[0-9]+$ ]] || return 0
     [ "$api_duration_ms" -gt 0 ] || return 0
+    [ "$total_cost_cents" -gt 0 ] || return 0
 
-    local session_rate_milli=$(( total_output * 1000000 / api_duration_ms ))
+    local session_rate_milli=$(( total_cost_cents * 60 * 1000 * 1000 / api_duration_ms ))
     [ "$session_rate_milli" -gt 0 ] || return 0
 
     local prune_cutoff=$((now - max_age))
     local short_cutoff=$((now - short_window))
     local anchor_time=0
-    local anchor_output=0
+    local anchor_cost=0
     local anchor_api_ms=0
     local kept_history=""
     local kept_sep=""
-    local r_session r_time r_output r_api
+    local r_session r_time r_cost r_api
 
-    if [ -f "$history_file" ]; then
-        while IFS=, read -r r_session r_time r_output r_api || [ -n "$r_session" ]; do
+    if [ -n "$session_id" ] && [ -n "$history_file" ] && [ -f "$history_file" ]; then
+        while IFS=, read -r r_session r_time r_cost r_api || [ -n "$r_session" ]; do
             [ -n "$r_session" ] || continue
             [[ "$r_time" =~ ^[0-9]+$ ]] || continue
-            [[ "$r_output" =~ ^[0-9]+$ ]] || continue
+            [[ "$r_cost" =~ ^[0-9]+$ ]] || continue
             [[ "$r_api" =~ ^[0-9]+$ ]] || continue
             [ "$r_time" -ge "$prune_cutoff" ] || continue
 
             printf -v kept_history '%s%s%s,%s,%s,%s' \
-                "$kept_history" "$kept_sep" "$r_session" "$r_time" "$r_output" "$r_api"
+                "$kept_history" "$kept_sep" "$r_session" "$r_time" "$r_cost" "$r_api"
             kept_sep=$'\n'
 
             if [ "$r_session" = "$session_id" ] && [ "$r_time" -ge "$short_cutoff" ]; then
                 if [ "$anchor_time" -eq 0 ] || [ "$r_time" -lt "$anchor_time" ]; then
                     anchor_time=$r_time
-                    anchor_output=$r_output
+                    anchor_cost=$r_cost
                     anchor_api_ms=$r_api
                 fi
             fi
         done < "$history_file"
     fi
 
-    printf -v kept_history '%s%s%s,%s,%s,%s' \
-        "$kept_history" "$kept_sep" "$session_id" "$now" "$total_output" "$api_duration_ms"
-
-    if ! printf '%s' "$kept_history" > "$history_file" 2>>"$STATUSLINE_DEBUG_LOG"; then
-        debug_log "Throughput history update failed"
+    if [ -n "$session_id" ] && [ -n "$history_file" ]; then
+        printf -v kept_history '%s%s%s,%s,%s,%s' \
+            "$kept_history" "$kept_sep" "$session_id" "$now" "$total_cost_cents" "$api_duration_ms"
+        if ! printf '%s' "$kept_history" > "$history_file" 2>>"$STATUSLINE_DEBUG_LOG"; then
+            debug_log "Cost-rate history update failed"
+        fi
     fi
 
-    [ "$anchor_time" -gt 0 ] || return 0
-    local api_delta=$(( api_duration_ms - anchor_api_ms ))
-    [ "$api_delta" -ge "$min_api_delta" ] || return 0
-    local out_delta=$(( total_output - anchor_output ))
-    [ "$out_delta" -ge 0 ] || return 0
-
-    local short_rate_milli=$(( out_delta * 1000000 / api_delta ))
-    local ratio_x100=$(( short_rate_milli * 100 / session_rate_milli ))
-    local arrow_code="stable"
-    if [ "$ratio_x100" -ge "$hot_x100" ]; then
-        arrow_code="hot"
-    elif [ "$ratio_x100" -ge "$warm_x100" ]; then
-        arrow_code="warm"
-    elif [ "$ratio_x100" -le "$cold_x100" ]; then
-        arrow_code="cold"
-    elif [ "$ratio_x100" -le "$cool_x100" ]; then
-        arrow_code="cool"
+    local display_rate_milli=$session_rate_milli
+    local arrow_code=""
+    if [ "$anchor_time" -gt 0 ]; then
+        local api_delta=$(( api_duration_ms - anchor_api_ms ))
+        if [ "$api_delta" -ge "$min_api_delta" ]; then
+            local cost_delta=$(( total_cost_cents - anchor_cost ))
+            if [ "$cost_delta" -ge 0 ]; then
+                local short_rate_milli=$(( cost_delta * 60 * 1000 * 1000 / api_delta ))
+                display_rate_milli=$short_rate_milli
+                local ratio_x100=$(( short_rate_milli * 100 / session_rate_milli ))
+                arrow_code="stable"
+                if [ "$ratio_x100" -ge "$hot_x100" ]; then
+                    arrow_code="hot"
+                elif [ "$ratio_x100" -ge "$warm_x100" ]; then
+                    arrow_code="warm"
+                elif [ "$ratio_x100" -le "$cold_x100" ]; then
+                    arrow_code="cold"
+                elif [ "$ratio_x100" -le "$cool_x100" ]; then
+                    arrow_code="cool"
+                fi
+            fi
+        fi
     fi
 
+    local display_number=""
+    local rate_int=$(( (display_rate_milli + 500) / 1000 ))
+    if [ "$rate_int" -lt 1000 ]; then
+        display_number="${rate_int}¢/m"
+    else
+        local dollars=$((rate_int / 100))
+        local cents_frac=$((rate_int % 100))
+        display_number=$(printf '$%d.%02d/m' "$dollars" "$cents_frac")
+    fi
+
+    local arrow=""
     case "$arrow_code" in
-        hot)    REPLY="${VEL_HOT}↑${RESET}" ;;
-        warm)   REPLY="${VEL_WARM}↗${RESET}" ;;
-        cold)   REPLY="${VEL_COLD}↓${RESET}" ;;
-        cool)   REPLY="${VEL_COOL}↘${RESET}" ;;
-        *)      REPLY="${VEL_STABLE}→${RESET}" ;;
+        hot)    arrow=" ${VEL_HOT}↑${RESET}" ;;
+        warm)   arrow=" ${VEL_WARM}↗${RESET}" ;;
+        cold)   arrow=" ${VEL_COLD}↓${RESET}" ;;
+        cool)   arrow=" ${VEL_COOL}↘${RESET}" ;;
+        stable) arrow=" ${VEL_STABLE}→${RESET}" ;;
     esac
+
+    REPLY="${DIM}${display_number}${RESET}${arrow}"
 }
 
 # Get smart pace indicator using dual-signal approach:
