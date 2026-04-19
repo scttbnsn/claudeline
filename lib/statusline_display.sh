@@ -67,6 +67,7 @@ BURST_BAND_COLOR_NAMES=(
     "BURST_BRIGHT_MAG"
 )
 BURST_COUNTDOWN_MIN_PCT=${BURST_BAND_MAXES[5]}
+BURST_COUNTDOWN_SOON_MINS=60
 
 set_context_tier() {
     local percent_used=$1
@@ -849,10 +850,12 @@ format_burst_indicator() {
         fi
     done
 
-    if [ "$burst_pct" -ge "$BURST_COUNTDOWN_MIN_PCT" ] && [ -n "$burst_reset_epoch" ] && [ "$secs_left" -gt 0 ]; then
+    if [ -n "$burst_reset_epoch" ] && [ "$secs_left" -gt 0 ]; then
         mins=$(( (secs_left + 59) / 60 ))
-        REPLY="💥${burst_color}${burst_bar}${RESET} ${DIM}-${mins}m${RESET}"
-    else
-        REPLY="💥${burst_color}${burst_bar}${RESET}"
+        if [ "$burst_pct" -ge "$BURST_COUNTDOWN_MIN_PCT" ] || [ "$mins" -lt "$BURST_COUNTDOWN_SOON_MINS" ]; then
+            REPLY="💥${burst_color}${burst_bar}${RESET} ${DIM}-${mins}m${RESET}"
+            return
+        fi
     fi
+    REPLY="💥${burst_color}${burst_bar}${RESET}"
 }

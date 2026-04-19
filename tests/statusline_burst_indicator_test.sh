@@ -61,6 +61,12 @@ format_burst_indicator "80" "1260" 1200
 assert_eq "💥<magenta>▇<reset> <dim>-1m<reset>" "$REPLY" "format_burst_indicator reuses reset countdown for high burst usage"
 
 format_burst_indicator "12" "1260" 1200
-assert_eq "💥<cyan>▁<reset>" "$REPLY" "format_burst_indicator omits countdown below the warning tiers"
+assert_eq "💥<cyan>▁<reset> <dim>-1m<reset>" "$REPLY" "format_burst_indicator surfaces countdown below warning tiers when reset is under an hour away"
+
+format_burst_indicator "12" "8400" 1200
+assert_eq "💥<cyan>▁<reset>" "$REPLY" "format_burst_indicator omits countdown below warning tiers when reset is still over an hour away"
+
+format_burst_indicator "12" "4800" 1200
+assert_eq "💥<cyan>▁<reset>" "$REPLY" "format_burst_indicator omits countdown at the 60-minute boundary"
 
 printf 'ok\n'
