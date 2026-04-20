@@ -21,6 +21,14 @@ VEL_WARM="<warm>"
 VEL_STABLE="<stable>"
 VEL_COOL="<cool>"
 VEL_COLD="<cold>"
+BURST_CYAN="<b-cyan>"
+BURST_TEAL="<b-teal>"
+BURST_GREEN="<b-green>"
+BURST_YELLOW="<b-yellow>"
+BURST_ORANGE="<b-orange>"
+BURST_RED="<b-red>"
+BURST_MAGENTA="<b-magenta>"
+BURST_BRIGHT_MAG="<b-bright-mag>"
 
 assert_eq() {
     local expected=$1
@@ -85,8 +93,8 @@ assert_eq "<dim>60¢/m<reset> <dim>→<reset>" "$got" \
 # Window delta: 5 c / 10 000 ms → rate = 30 ¢/m (0.5× baseline).
 body=$(printf '%s,%s,%s,%s' "sess-drop" 999980 175 170000)
 got=$(run_indicator "$body" "sess-drop" 180 180000 1000000)
-assert_eq "<dim>30¢/m<reset> <green>↓ 2.0x<reset>" "$got" \
-    "short-window rate ≤ 0.5× session renders bright-green cold arrow with fold"
+assert_eq "<dim>30¢/m<reset> <green>↓<reset><b-green> 2.0x<reset>" "$got" \
+    "short-window rate ≤ 0.5× session renders bright-green cold arrow + green fold"
 
 # --- cool (moderate drop) uses VEL_COOL shade -------------------------
 
@@ -95,8 +103,8 @@ assert_eq "<dim>30¢/m<reset> <green>↓ 2.0x<reset>" "$got" \
 # anchor_cost = 180 - 11 = 169, anchor_api = 180 000 - 15 000 = 165 000.
 body=$(printf '%s,%s,%s,%s' "sess-cooling" 999985 169 165000)
 got=$(run_indicator "$body" "sess-cooling" 180 180000 1000000)
-assert_eq "<dim>44¢/m<reset> <cool>↘ 1.4x<reset>" "$got" \
-    "short-window rate in the 0.5×–0.85× band renders cool arrow with fold"
+assert_eq "<dim>44¢/m<reset> <cool>↘<reset><b-teal> 1.4x<reset>" "$got" \
+    "short-window rate in the 0.5×–0.85× band renders cool arrow + teal fold"
 
 # --- hot (severe burst) renders bright red ↑ --------------------------
 
@@ -105,8 +113,8 @@ assert_eq "<dim>44¢/m<reset> <cool>↘ 1.4x<reset>" "$got" \
 # anchor_cost = 180 - 30 = 150, anchor_api = 180 000 - 15 000 = 165 000.
 body=$(printf '%s,%s,%s,%s' "sess-burst" 999985 150 165000)
 got=$(run_indicator "$body" "sess-burst" 180 180000 1000000)
-assert_eq "<dim>120¢/m<reset> <hot>↑ 2.0x<reset>" "$got" \
-    "short-window rate ≥ 1.5× session renders bright-red hot arrow with fold"
+assert_eq "<dim>120¢/m<reset> <hot>↑<reset><b-orange> 2.0x<reset>" "$got" \
+    "short-window rate ≥ 1.5× session renders bright-red hot arrow + orange fold"
 
 # --- warm (moderate rise) uses VEL_WARM shade -------------------------
 
@@ -115,8 +123,8 @@ assert_eq "<dim>120¢/m<reset> <hot>↑ 2.0x<reset>" "$got" \
 # anchor_cost = 180 - 24 = 156, anchor_api = 180 000 - 20 000 = 160 000.
 body=$(printf '%s,%s,%s,%s' "sess-rising" 999985 156 160000)
 got=$(run_indicator "$body" "sess-rising" 180 180000 1000000)
-assert_eq "<dim>72¢/m<reset> <warm>↗ 1.2x<reset>" "$got" \
-    "short-window rate in the 1.15×–1.5× band renders warm arrow with fold"
+assert_eq "<dim>72¢/m<reset> <warm>↗<reset><b-yellow> 1.2x<reset>" "$got" \
+    "short-window rate in the 1.15×–1.5× band renders warm arrow + yellow fold"
 
 # --- sub-floor api-delta falls back to session rate + dim stable ------
 

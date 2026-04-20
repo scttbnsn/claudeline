@@ -812,6 +812,7 @@ get_cost_rate_indicator() {
     [ -z "$arrow_code" ] && arrow_code="stable"
     local arrow=""
     local mult_suffix=""
+    local fold_color=""
     if [ "$arrow_code" != "stable" ] && [ "${ratio_x100:-0}" -gt 0 ]; then
         local fold_x100
         if [ "$ratio_x100" -ge 100 ]; then
@@ -828,12 +829,33 @@ get_cost_rate_indicator() {
             fold_tenths=0
         fi
         mult_suffix=$(printf ' %d.%dx' "$fold_whole" "$fold_tenths")
+
+        # Color the fold number by magnitude using the 8-shade burst palette —
+        # arrows only have 4 states, but the number can escalate further. Up
+        # (faster = bad) climbs yellow→orange→red→magenta→bright-magenta;
+        # down (slower = good) stays chill at teal→green→cyan.
+        case "$arrow_code" in
+            hot|warm)
+                if   [ "$fold_x100" -ge 1000 ]; then fold_color=$BURST_BRIGHT_MAG
+                elif [ "$fold_x100" -ge 500 ];  then fold_color=$BURST_MAGENTA
+                elif [ "$fold_x100" -ge 250 ];  then fold_color=$BURST_RED
+                elif [ "$fold_x100" -ge 150 ];  then fold_color=$BURST_ORANGE
+                else                                 fold_color=$BURST_YELLOW
+                fi
+                ;;
+            cold|cool)
+                if   [ "$fold_x100" -ge 500 ]; then fold_color=$BURST_CYAN
+                elif [ "$fold_x100" -ge 200 ]; then fold_color=$BURST_GREEN
+                else                                fold_color=$BURST_TEAL
+                fi
+                ;;
+        esac
     fi
     case "$arrow_code" in
-        hot)    arrow=" ${VEL_HOT}↑${mult_suffix}${RESET}" ;;
-        warm)   arrow=" ${VEL_WARM}↗${mult_suffix}${RESET}" ;;
-        cold)   arrow=" ${GREEN}↓${mult_suffix}${RESET}" ;;
-        cool)   arrow=" ${VEL_COOL}↘${mult_suffix}${RESET}" ;;
+        hot)    arrow=" ${VEL_HOT}↑${RESET}${fold_color}${mult_suffix}${RESET}" ;;
+        warm)   arrow=" ${VEL_WARM}↗${RESET}${fold_color}${mult_suffix}${RESET}" ;;
+        cold)   arrow=" ${GREEN}↓${RESET}${fold_color}${mult_suffix}${RESET}" ;;
+        cool)   arrow=" ${VEL_COOL}↘${RESET}${fold_color}${mult_suffix}${RESET}" ;;
         *)      arrow=" ${DIM}→${RESET}" ;;
     esac
 
