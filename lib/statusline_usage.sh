@@ -803,22 +803,31 @@ get_cost_rate_indicator() {
     # Cost-rate semantics: spending faster = bad (red gradient), slower = good
     # (green gradient), stable = dim. Two shades on each side so the severity
     # of the change is visible: hot/cold are vivid, warm/cool are muted. When
-    # direction is classified we also append the raw multiplier (e.g. "3.2×")
-    # so the magnitude reads at a glance even when two sessions both show ↑.
-    # The arrow always renders — when we don't have enough history or api-delta
-    # to classify direction, default to a dim stable arrow so the slot keeps
-    # a consistent shape.
+    # direction is classified we append a symmetric fold change — always ≥1
+    # so 2× faster reads as "2.0x" up and ½× speed reads as "2.0x" down. The
+    # arrow carries direction; the number is pure magnitude. The arrow always
+    # renders — when we don't have enough history or api-delta to classify
+    # direction, default to a dim stable arrow so the slot keeps a consistent
+    # shape.
     [ -z "$arrow_code" ] && arrow_code="stable"
     local arrow=""
     local mult_suffix=""
     if [ "$arrow_code" != "stable" ] && [ "${ratio_x100:-0}" -gt 0 ]; then
-        local mult_whole=$((ratio_x100 / 100))
-        local mult_tenths=$(( (ratio_x100 % 100 + 5) / 10 ))
-        if [ "$mult_tenths" -ge 10 ]; then
-            mult_whole=$((mult_whole + 1))
-            mult_tenths=0
+        local fold_x100
+        if [ "$ratio_x100" -ge 100 ]; then
+            fold_x100=$ratio_x100
+        else
+            # Slower than baseline: invert so the number is always ≥1.
+            # Round to nearest hundredth.
+            fold_x100=$(( (10000 + ratio_x100 / 2) / ratio_x100 ))
         fi
-        mult_suffix=$(printf ' %d.%d×' "$mult_whole" "$mult_tenths")
+        local fold_whole=$((fold_x100 / 100))
+        local fold_tenths=$(( (fold_x100 % 100 + 5) / 10 ))
+        if [ "$fold_tenths" -ge 10 ]; then
+            fold_whole=$((fold_whole + 1))
+            fold_tenths=0
+        fi
+        mult_suffix=$(printf ' %d.%dx' "$fold_whole" "$fold_tenths")
     fi
     case "$arrow_code" in
         hot)    arrow=" ${VEL_HOT}↑${mult_suffix}${RESET}" ;;
