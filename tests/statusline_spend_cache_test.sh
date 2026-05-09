@@ -46,6 +46,6 @@ JSON
 
 TZ=America/New_York refresh_spend_cache_now 1778342400 /repo
 assert_eq "1778342400" "$(sed -n '1p' "$SPEND_CACHE")" "spend refresh writes timestamp"
-assert_eq "1500 1500 300" "$(sed -n '2p' "$SPEND_CACHE")" "spend refresh writes today, block, and project cents"
+assert_eq "1000000 1500 1000000 1500 1000000 300" "$(sed -n '2p' "$SPEND_CACHE")" "spend refresh writes today, block, and project token/cost pairs"
 
 printf 'ok\n'

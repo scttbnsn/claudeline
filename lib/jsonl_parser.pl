@@ -279,7 +279,7 @@ sub run_window_scan {
 
     my $day_start = local_day_start_epoch($now);
     my $block_start = $now - $block_seconds;
-    my ($today_cost_units, $block_cost_units, $project_cost_units) = (0, 0, 0);
+    my ($today_tokens, $today_cost_units, $block_tokens, $block_cost_units) = (0, 0, 0, 0);
     my %seen_message_ids;
 
     while (my $line = <STDIN>) {
@@ -287,21 +287,26 @@ sub run_window_scan {
         next unless $record;
         next if defined $record->{id} && $seen_message_ids{$record->{id}}++;
 
+        my $tokens = $record->{fields}[0];
         my $cost_units = $record->{fields}[1];
         my $epoch = timestamp_epoch($record->{timestamp});
         if (defined $epoch) {
-            $today_cost_units += $cost_units if $epoch >= $day_start && $epoch <= $now;
-            $block_cost_units += $cost_units if $epoch >= $block_start && $epoch <= $now;
-        }
-        if (defined $record->{cwd} && $record->{cwd} eq $current_dir) {
-            $project_cost_units += $cost_units;
+            if ($epoch >= $day_start && $epoch <= $now) {
+                $today_tokens += $tokens;
+                $today_cost_units += $cost_units;
+            }
+            if ($epoch >= $block_start && $epoch <= $now) {
+                $block_tokens += $tokens;
+                $block_cost_units += $cost_units;
+            }
         }
     }
 
     print join(' ',
+        $today_tokens,
         cost_units_to_cents($today_cost_units),
+        $block_tokens,
         cost_units_to_cents($block_cost_units),
-        cost_units_to_cents($project_cost_units),
     );
     return 0;
 }

@@ -41,9 +41,9 @@ format_effort_indicator "" false
 assert_eq "" "$REPLY" "missing thinking and effort renders empty"
 
 format_cache_efficiency_indicator 100 0 900
-assert_eq "🧊90%" "$REPLY" "cache reads render as hit percentage"
+assert_eq "🗄️90%" "$REPLY" "cache reads render with an explicit cache icon"
 format_cache_efficiency_indicator 100 5000 50
-assert_eq "✍️5K" "$REPLY" "cache write spikes render as write volume"
+assert_eq "🗄️✍️5K" "$REPLY" "cache write spikes render with an explicit cache icon"
 format_cache_efficiency_indicator 100 0 0
 assert_eq "" "$REPLY" "fresh input without cache activity stays quiet"
 
@@ -77,7 +77,7 @@ SH
 chmod +x "$shim_dir/git"
 
 printf '1000000\n0 0 0 0 0 0\n' > "$home_dir/.claude-usage.d/.jsonl-cache"
-printf '1000000\n1800 450 12345\n' > "$home_dir/.claude-usage.d/.spend-cache"
+printf '1000000\n1000000 1800 500000 450 1234000 12345\n' > "$home_dir/.claude-usage.d/.spend-cache"
 
 input_json='{
   "model": {"display_name": "Claude Sonnet 4"},
@@ -114,6 +114,6 @@ env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW -u CLAUDE_AUTOCOMPACT_PCT_OVERRIDE \
     bash "$repo_root/statusline.sh" <<< "$input_json" > "$tmpdir/rendered.txt"
 
 second_line=$(sed -n '2p' "$tmpdir/rendered.txt")
-assert_eq '      1K/168K  ·  💰$18.00d  ·  🧊90%  ·  🔥max  ·  💧 1 tablespoons  ·  Claude Sonnet 4  ·  ⏱️ 5m' "$second_line" "statusline renders spend, cache, and effort segments"
+assert_eq '      1K/168K  ·  🗄️90%  ·  🔥max  ·  💧 1 tablespoons  ·  ⏱️ 5m' "$second_line" "statusline renders compact cache, effort, and sober metric segments"
 
 printf 'ok\n'

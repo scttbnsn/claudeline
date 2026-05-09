@@ -848,7 +848,7 @@ format_cache_efficiency_indicator() {
     [[ "$cache_read_tokens" =~ ^[0-9]+$ ]] || cache_read_tokens=0
 
     if [ "$cache_write_tokens" -gt "$cache_read_tokens" ] && [ "$cache_write_tokens" -gt 0 ]; then
-        REPLY="${DIM}✍️$(format_number "$cache_write_tokens")${RESET}"
+        REPLY="${DIM}🗄️✍️$(format_number "$cache_write_tokens")${RESET}"
         return
     fi
 
@@ -858,7 +858,7 @@ format_cache_efficiency_indicator() {
         if [ "$total_tokens" -gt 0 ]; then
             pct=$(( (cache_read_tokens * 100 + total_tokens / 2) / total_tokens ))
         fi
-        REPLY="${DIM}🧊${pct}%${RESET}"
+        REPLY="${DIM}🗄️${pct}%${RESET}"
         return
     fi
 

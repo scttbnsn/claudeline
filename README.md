@@ -2,7 +2,7 @@
 
 <h1>claudeline</h1>
 
-**A cute, informative status line for Claude Code with rotating environmental metrics.**
+**A compact, informative status line for Claude Code with spend, cache, and usage signals.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Bash](https://img.shields.io/badge/bash-3.2+-4EAA25?logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
@@ -17,10 +17,10 @@
 │    bar              + git status   trend   + arrow + fold   changed
 └─ context icon (✨🌱💭🧠⚡🔥🌡️🫠💀💾)
 
-    73.5K/168K  ·  💰$18.00d  ·  🧊90%  ·  🔥max  ·  🍕 3 joe's®  ·  Opus 4.6  ·  ⏱️ 45m
-    └────┬────┘     └───┬───┘     └─┬─┘     └┬┘      └─────┬─────┘    └───┬───┘    └──┬──┘
-      context          spend       cache   effort       rotating       model      duration
-      tokens          window      reuse                  metric
+    73.5K/168K  ·  🗄️90%  ·  🔥max  ·  🧱💰 $4.50  ·  ⏱️ 45m
+    └────┬────┘    └─┬──┘    └┬┘      └────┬────┘    └──┬──┘
+      context       cache   effort      scoped       duration
+      tokens        reuse                metric
 ```
 
 <div align="center">
@@ -65,7 +65,7 @@ Create `~/.claude/claudeline.conf` to customize without env vars:
 ```bash
 # ~/.claude/claudeline.conf
 theme=nord
-segments=context,git,pace,duration,tokens,spend,cache,effort,throughput,model
+segments=context,git,pace,duration,tokens,cache,effort,throughput,metric
 no_network=0
 ```
 
@@ -127,15 +127,15 @@ Dual-signal weekly pace (burn rate + pressure) with 8-tier emoji scale and veloc
 <tr>
 <td align="center">
 <h3>Environmental Metrics</h3>
-Rotating display of water, power, and data usage with dynamic unit scaling (drops → gallons, Wh → MWh)
+Rotating display of water, power, cost, tokens, and data with dynamic unit scaling
 </td>
 <td align="center">
-<h3>Fun Cost Conversions</h3>
-34 normal + 7 absurd items with multi-unit scaling — see your session cost in joe's pizza slices or joey-chestnuts
+<h3>Scoped Usage</h3>
+Session, today, 5-hour block, project, and all-time metrics share one compact rotation
 </td>
 <td align="center">
 <h3>All-Time Tracking</h3>
-Cumulative usage across all sessions from JSONL files, shown with 🏆 trophy on rotating cycle
+Cumulative usage across all sessions from JSONL files, shown with the 🏆 scope marker
 </td>
 </tr>
 <tr>
@@ -155,11 +155,11 @@ Account-wide cents/min (API-active time) over the current working window, with a
 <tr>
 <td align="center" width="33%">
 <h3>Spend Windows</h3>
-Rotates today, 5-hour active block, current project, and session spend from local transcript history
+Folds today, 5-hour block, project, and all-time token/cost totals into the metric slot
 </td>
 <td align="center" width="33%">
 <h3>Cache Efficiency</h3>
-Shows cache-read share (<code>🧊90%</code>) or cache-write spikes (<code>✍️5K</code>) from the live statusline payload
+Shows cache-read share (<code>🗄️90%</code>) or cache-write spikes (<code>🗄️✍️5K</code>) from the live statusline payload
 </td>
 <td align="center" width="33%">
 <h3>Thinking Effort</h3>
@@ -172,18 +172,19 @@ Shows the active thinking tier with five distinct states: <code>🌱low</code>, 
 
 <h2 align="center" id="spend-cache-effort">💰 Spend, Cache & Effort</h2>
 
-**Spend window** — line 2 rotates through compact spend views:
+**Scoped metrics** — line 2 keeps one metric slot and rotates scope + metric:
 
 | Display | Meaning |
 |---------|---------|
-| `💰$18.00d` | Today's local-calendar spend across Claude Code transcripts |
-| `🧱$4.50/5h` | Spend inside the active rolling block window (5h by default) |
-| `📁$123.45` | All-time spend for the current project directory |
-| `💬$0.23` | Current session spend fallback while the window cache warms |
+| `💧 1 tablespoons` | Current session water estimate |
+| `📅💰 $18.00` | Today's local-calendar spend |
+| `🧱🎟️ 1.2M` | Tokens inside the active rolling block window (5h by default) |
+| `📁📡 4.7MB` | Current project data estimate |
+| `🏆💰 $123.45` | All-time account spend |
 
-Window totals are computed from local JSONL transcripts in a background refresh and cached in `.spend-cache`, so the statusline stays fast.
+The metric types are fixed and sober: `💧` water, `⚡` power, `💰` cost, `🎟️` tokens, and `📡` data. Window totals are computed from local JSONL transcripts in a background refresh and cached in `.spend-cache`, so the statusline stays fast.
 
-**Cache efficiency** — `🧊90%` means most prompt/context input came from cache reads. `✍️5K` means cache writes are currently larger than cache reads, which is usually the interesting cost spike when a new setup, hook, or context load causes fresh cache creation.
+**Cache efficiency** — `🗄️90%` means most prompt/context input came from cache reads. `🗄️✍️5K` means cache writes are currently larger than cache reads, which is usually the interesting cost spike when a new setup, hook, or context load causes fresh cache creation.
 
 **Thinking effort** — the effort segment maps the current Claude Code effort level to five compact states: `🌱low`, `💭med`, `🧠high`, `⚡xhi`, `🔥max`. If thinking is enabled but no effort level is present, it shows `💭think`.
 
@@ -271,96 +272,13 @@ The rotating metrics visualize the environmental cost of AI inference:
 
 **Dynamic units:** Water scales drops → tsp → tbsp → oz → cups → pints → quarts → gallons. Power scales Wh → kWh → MWh.
 
-<details>
-<summary><strong>Fun cost conversions (34 normal + 7 absurd)</strong></summary>
-
-Many items have **multi-unit scaling** — they pick the appropriate unit based on cost:
-- Joe's: bite ($0.33) → joe's ($4)
-- Nathan's: bite ($1) → dog ($6) → joey-chestnut ($456)
-- Starbucks: sip ($0.31) → starbucks ($5.50)
-- Yuengling: sip ($0.37) → yuengling ($7) → keg ($200)
-
-**Normal Items (34)** — shown in session + all-time normal:
-
-| Emoji | Item | Price |
-|-------|------|-------|
-| ☕ | starbucks® | $5.50 |
-| 🍕 | joe's® | $4 |
-| 🌮 | tacorias® | $4.60 |
-| 🍺 | yuenglings® | $7 |
-| 🍔 | shackburgers® | $9 |
-| 🍌 | chiquitas® | $0.30 |
-| 🍿 | alamos® | $18 |
-| 🎮 | gta6s® | $70 |
-| 🧻 | charmins® | $1 |
-| 🖍️ | crayolas® | $0.11 |
-| 🥑 | haas® | $2 |
-| 🥨 | auntie-annes® | $5 |
-| 🦪 | blue-points® | $3.50 |
-| 🌭 | nathans® | $6 |
-| 🥯 | ess-a-bagels® | $4 |
-| 🍣 | nami-noris® | $8 |
-| 🥩 | lugers® | $65 |
-| 🛢️ | exxon-valdezs® | $75 |
-| 🥤 | big-gulps® | $2.50 |
-| 🍝 | carbones® | $40 |
-| 🦞 | redlobsters® | $30 |
-| 🥗 | sweetgreens® | $15 |
-| 🏋️ | equinoxs® | $260 |
-| 🚴 | soulcycles® | $38 |
-| 🍪 | levains® | $5 |
-| 🌯 | chipotles® | $12 |
-| 🧃 | juice-presses® | $11 |
-| 🍟 | pommes-frites® | $9 |
-| 🛴 | razors® | $35 |
-| 🚋 | njts® | $5.90 |
-| 🖱️ | magic-mice® | $99 |
-| 📱 | iphones® | $999 |
-| 🥐 | cronuts® | $7.75 |
-| 🎵 | apple-musics® | $0.004 |
-
-**Absurd Items (7)** — all-time only, decimal chasing 1:
-
-| Emoji | Item | Price |
-|-------|------|-------|
-| 🚐 | sprinters® | $50,000 |
-| 🧟 | thrillers® | $1,600,000 |
-| 🏝️ | private-islands® | $18,000,000 |
-| 🏪 | chipotle-franchises® | $1,000,000 |
-| 🚁 | h130s® | $3,500,000 |
-| ☕ | starbucks-franchises® | $315,000 |
-| ☕ | starbucks-ceo-pays® | $57,000,000 |
-
-</details>
-
-<details>
-<summary><strong>Fun power conversions (8 items)</strong></summary>
-
-| Emoji | Item | Rate | Example |
-|-------|------|------|---------|
-| 🔌 | phone-charging | 5W | `🔌 833h phone-charging` |
-| 💡 | hue-light® | 10W | `💡 417h hue-light®` |
-| 🏠 | home-power | 1kW | `🏠 4.2h home-power` |
-| 🏢 | 395-hudson® | 2MW | `🏢 7.5s 395-hudson®` |
-| 🚗 | 4xe® | 1.45 mi/kWh | `🚗 6.0mi 4xe®` |
-| ✈️ | a320neo® | 0.019 mi/kWh | `✈️ 421ft a320neo®` |
-| 🪨 | coal | ~1 lb/kWh | `🪨 4.2 lbs coal` |
-| ☢️ | reactor-output | 1GW | `☢️ 15ms reactor-output` |
-
-Session displays phone through a320neo. Coal and reactor are all-time only.
-
-</details>
-
 <hr>
 
 <h2 align="center" id="all-time-tracking">🏆 All-Time Tracking</h2>
 
 Cumulative usage across all sessions by scanning JSONL files in `~/.claude/projects/` and `~/.config/claude/projects/`.
 
-The 🏆 trophy indicates all-time totals. The 8-cycle rotation (10s each) shows:
-- **Cycles 0-2, 4-6:** Session metrics (no trophy)
-- **Cycle 3:** All-time normal with 🏆 — 15-item rotation: 10 fun cost + coal + reactor + tokens + cost + data
-- **Cycle 7:** All-time absurd with 🏆 (e.g., `🏝️ 0.0015 private-islands® 🏆`)
+The `🏆` prefix indicates all-time totals in the scoped metric rotation. The same five metrics are used for every scope: water, power, cost, tokens, and data.
 
 <details>
 <summary><strong>Context bar tiers</strong></summary>
@@ -436,7 +354,7 @@ The API call runs in a **non-blocking background subshell** so it never stalls t
 | Variable | Effect |
 |----------|--------|
 | `CLAUDELINE_THEME=nord` | Theme: `vibey` (default), `dark`, `light`, `nord`, `gruvbox` |
-| `CLAUDELINE_SEGMENTS=context,git,pace` | Show only listed segments (default: all). Available: `context`, `git`, `lines`, `pace`, `burst`, `duration`, `credit`, `tokens`, `spend`, `cache`, `effort`, `metric`, `throughput`, `model` |
+| `CLAUDELINE_SEGMENTS=context,git,pace` | Show only listed segments. Default keeps `model` and standalone `spend` off for a shorter line. Available: `context`, `git`, `lines`, `pace`, `burst`, `duration`, `credit`, `tokens`, `spend`, `cache`, `effort`, `metric`, `throughput`, `model` |
 | `NO_COLOR=1` | Disables all color output ([spec](https://no-color.org)) |
 | `CLAUDELINE_NO_NETWORK=1` | Disables all network access — the API call is skipped entirely |
 | `CLAUDELINE_DEBUG=1` | Enables debug logging to `$TMPDIR/claudeline-statusline-debug.log` |
@@ -465,7 +383,7 @@ The API call runs in a **non-blocking background subshell** so it never stalls t
 | `.jsonl-cache` | Cached all-time token/cost totals (5-min TTL; stale values are served immediately while a background refresh runs) |
 | `.jsonl-state` | Per-file JSONL scan state for incremental refreshes |
 | `.refresh.lock.d/` | Lock directory to prevent concurrent background JSONL refreshes |
-| `.spend-cache` | Cached today, rolling-block, and current-project spend totals |
+| `.spend-cache` | Cached today, rolling-block, and current-project token/cost totals |
 | `.spend-refresh.lock.d/` | Lock directory to prevent concurrent spend scans |
 | `.usage-history` | Rolling 24h usage samples for trend arrows |
 | `.cost-rate-history` | Account-wide `(bucket_epoch, cost_delta_cents, api_delta_ms)` buckets for the cost-rate slot, pruned to 7d |

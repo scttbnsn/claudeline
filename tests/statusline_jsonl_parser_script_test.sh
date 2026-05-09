@@ -124,6 +124,6 @@ assert_eq "2 1800 1 1 0 0" "$shrunk_refresh" "refresh-state reparses files that 
 
 window_input=$'{"type":"assistant","message":{"id":"today_repo","type":"message","model":"claude-sonnet-4","usage":{"input_tokens":1000000,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"timestamp":"2026-05-09T14:00:00.000Z","cwd":"/repo"}\n{"type":"assistant","message":{"id":"today_other","type":"message","model":"claude-sonnet-4","usage":{"input_tokens":0,"output_tokens":1000000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"timestamp":"2026-05-09T13:00:00.000Z","cwd":"/other"}\n{"type":"assistant","message":{"id":"old_repo","type":"message","model":"claude-sonnet-4","usage":{"input_tokens":1000000,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"timestamp":"2026-05-08T23:00:00.000Z","cwd":"/repo"}\n'
 window_summary=$(printf '%s' "$window_input" | TZ=America/New_York perl "$parser" window-scan 1778342400 /repo)
-assert_eq "1800 1800 600" "$window_summary" "window-scan returns today, active-block, and current-project cost cents"
+assert_eq "2000000 1800 2000000 1800" "$window_summary" "window-scan returns today and active-block token/cost pairs"
 
 printf 'ok\n'

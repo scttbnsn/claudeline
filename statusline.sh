@@ -168,7 +168,7 @@ source "$STATUSLINE_DIR/lib/statusline_usage.sh"
 
 # Segment visibility — parse CLAUDELINE_SEGMENTS into a fast lookup
 # Default: all segments enabled. Set e.g. CLAUDELINE_SEGMENTS="context,git,pace,duration"
-_SEG_ALL=1
+_SEG_ALL=0
 if [ -n "${CLAUDELINE_SEGMENTS:-}" ]; then
     _SEG_ALL=0
     _SEG_CONTEXT=0; _SEG_GIT=0; _SEG_LINES=0; _SEG_PACE=0
@@ -197,8 +197,8 @@ if [ -n "${CLAUDELINE_SEGMENTS:-}" ]; then
 else
     _SEG_CONTEXT=1; _SEG_GIT=1; _SEG_LINES=1; _SEG_PACE=1
     _SEG_BURST=1; _SEG_DURATION=1; _SEG_CREDIT=1
-    _SEG_TOKENS=1; _SEG_SPEND=1; _SEG_CACHE=1; _SEG_EFFORT=1
-    _SEG_METRIC=1; _SEG_THROUGHPUT=1; _SEG_MODEL=1
+    _SEG_TOKENS=1; _SEG_SPEND=0; _SEG_CACHE=1; _SEG_EFFORT=1
+    _SEG_METRIC=1; _SEG_THROUGHPUT=1; _SEG_MODEL=0
 fi
 
 seg_on() { [ "${_SEG_ALL}" -eq 1 ] || [ "${1:-0}" -eq 1 ]; }
@@ -218,11 +218,9 @@ COST_RATE_STATE="$CACHE_DIR/.cost-rate-state"
 TREND_WINDOW=${TREND_WINDOW:-900}   # 15 minutes in seconds
 AUTO_COMPACT_THRESHOLD_PCT=${CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:-84}
 [[ "$AUTO_COMPACT_THRESHOLD_PCT" =~ ^[0-9]+$ ]] && [ "$AUTO_COMPACT_THRESHOLD_PCT" -ge 1 ] && [ "$AUTO_COMPACT_THRESHOLD_PCT" -le 100 ] || AUTO_COMPACT_THRESHOLD_PCT=84
-# ALLTIME_COST_ITEMS is defined in lib/statusline_display.sh
-ALLTIME_NORMAL_CATALOG_ITEM_COUNT=${#ALLTIME_COST_ITEMS[@]}
-ALLTIME_NORMAL_FIXED_ITEMS=("coal" "reactor" "tokens" "cost" "data")
-ALLTIME_NORMAL_FIXED_ITEM_COUNT=${#ALLTIME_NORMAL_FIXED_ITEMS[@]}
-ALLTIME_NORMAL_ITEM_COUNT=$((ALLTIME_NORMAL_CATALOG_ITEM_COUNT + ALLTIME_NORMAL_FIXED_ITEM_COUNT))
+METRIC_SCOPE_LABELS=("" "📅" "🧱" "📁" "🏆")
+METRIC_SCOPE_COUNT=${#METRIC_SCOPE_LABELS[@]}
+METRIC_KIND_COUNT=5
 (umask 077 && mkdir -p "$CACHE_DIR") 2>>"$STATUSLINE_DEBUG_LOG"
 
 # Read auto-compact setting from Claude Code config
@@ -362,110 +360,66 @@ read_git_status_info() {
 build_rotating_metric_info() {
     local now_div_10=$1
     local session_tokens=$2
-    local session_cost=$3
-    local all_time_tokens=$4
-    local all_time_cost=$5
-    local cycle_len=8 cycle_pos=0 is_alltime=0 is_absurd=0 category_index=0 item_cycle=0
-    local power_item_index=0 utility_item_index=0 fun_cost_item_id="" alltime_absurd_index=0
-    local metric_info="" use_tokens="" use_cost="" use_cost_fmt="" trophy=""
-    local alltime_normal_cycle=0 alltime_cost_id="" alltime_normal_fixed_index=0 alltime_normal_fixed_item=""
+    local session_cost_cents=$3
+    local today_tokens=$4
+    local today_cost_cents=$5
+    local block_tokens=$6
+    local block_cost_cents=$7
+    local project_tokens=$8
+    local project_cost_cents=$9
+    local all_time_tokens=${10}
+    local all_time_cost_cents=${11}
+    local metric_kind=$((now_div_10 % METRIC_KIND_COUNT))
+    local scope_index=$(((now_div_10 / METRIC_KIND_COUNT) % METRIC_SCOPE_COUNT))
+    local attempt=0 selected_scope=0 selected_tokens=0 selected_cost_cents=0
+    local scope_label="" metric_value=""
 
-    if ! [ "$session_tokens" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG" && ! [ "$all_time_tokens" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
-        printf -v REPLY '%s' ""
-        return 0
-    fi
+    REPLY=""
 
-    # 8-cycle rotation pattern: 3 session → 1 all-time normal 🏆 → 3 session → 1 all-time absurd 🏆 → repeat
-    # Session metrics: water(1), power(7), utility(3), fun_cost(28 session-tier) = 39 total
-    cycle_pos=$((now_div_10 % cycle_len))
-    if [ "$cycle_pos" -eq 3 ]; then
-        is_alltime=1
-        is_absurd=0
-    elif [ "$cycle_pos" -eq 7 ]; then
-        is_alltime=1
-        is_absurd=1
-    fi
+    while [ "$attempt" -lt "$METRIC_SCOPE_COUNT" ]; do
+        selected_scope=$(((scope_index + attempt) % METRIC_SCOPE_COUNT))
+        case "$selected_scope" in
+            0) selected_tokens=$session_tokens; selected_cost_cents=$session_cost_cents ;;
+            1) selected_tokens=$today_tokens; selected_cost_cents=$today_cost_cents ;;
+            2) selected_tokens=$block_tokens; selected_cost_cents=$block_cost_cents ;;
+            3) selected_tokens=$project_tokens; selected_cost_cents=$project_cost_cents ;;
+            4) selected_tokens=$all_time_tokens; selected_cost_cents=$all_time_cost_cents ;;
+        esac
 
-    # Session metric: 4 equal categories, rotate items within each
-    # Categories: 0=water(1), 1=power(7), 2=utility(3), 3=fun_cost(24 session-tier)
-    category_index=$((now_div_10 % 4))
-    # Item within category rotates on slower cycle (every 40s = 4 categories * 10s)
-    item_cycle=$((now_div_10 / 4))
-    power_item_index=$((item_cycle % 7))      # 0=standard, 1-6=fun power (no coal/reactor)
-    utility_item_index=$((item_cycle % 3))    # 0=tokens, 1=money, 2=data
-    fun_cost_item_id=${SESSION_COST_ITEMS[$((item_cycle % ${#SESSION_COST_ITEMS[@]}))]}  # session-tier only (price <= $20)
-
-    # All-time item indices (rotate through items within their category)
-    # Normal: 10 cost + coal + reactor + tokens + cost + data = 15; Absurd: 7 items
-    alltime_absurd_index=$((now_div_10 % ${#ABSURD_EMOJI[@]}))
-
-    if [ "$is_alltime" -eq 1 ]; then
-        use_tokens=$all_time_tokens
-        use_cost=$all_time_cost
-        printf -v use_cost_fmt '%.2f' "$use_cost"
-        trophy=" 🏆"
-
-        if [ "$is_absurd" -eq 1 ]; then
-            metric_info="${DIM}$(format_absurd_cost "$use_cost" "$alltime_absurd_index")${trophy}${RESET}"
-        else
-            # Use now_div_10/cycle_len so cycle advances each time the outer cycle completes
-            # (avoids modular conflict with cycle_pos which also uses now_div_10)
-            alltime_normal_cycle=$(( (now_div_10 / cycle_len) % ALLTIME_NORMAL_ITEM_COUNT ))
-            if [ "$alltime_normal_cycle" -lt "$ALLTIME_NORMAL_CATALOG_ITEM_COUNT" ]; then
-                alltime_cost_id=${ALLTIME_COST_ITEMS[$alltime_normal_cycle]}
-                metric_info="${DIM}$(format_fun_cost "$use_cost" "$alltime_cost_id")${trophy}${RESET}"
-            else
-                alltime_normal_fixed_index=$((alltime_normal_cycle - ALLTIME_NORMAL_CATALOG_ITEM_COUNT))
-                alltime_normal_fixed_item=${ALLTIME_NORMAL_FIXED_ITEMS[$alltime_normal_fixed_index]}
-                case "$alltime_normal_fixed_item" in
-                    coal)
-                        metric_info="${DIM}$(format_fun_power "$use_tokens" "6")${trophy}${RESET}"
-                        ;;
-                    reactor)
-                        metric_info="${DIM}$(format_fun_power "$use_tokens" "7")${trophy}${RESET}"
-                        ;;
-                    tokens)
-                        metric_info="${DIM}🎟️ $(format_number "$use_tokens")${trophy}${RESET}"
-                        ;;
-                    cost)
-                        metric_info="${DIM}💰 \$$use_cost_fmt${trophy}${RESET}"
-                        ;;
-                    data)
-                        metric_info="${DIM}📡 $(format_data "$use_tokens")${trophy}${RESET}"
-                        ;;
-                esac
-            fi
-        fi
-    else
-        use_tokens=$session_tokens
-        use_cost=$session_cost
-        printf -v use_cost_fmt '%.2f' "$use_cost"
-
-        case "$category_index" in
-            0)
-                metric_info="${DIM}💧 $(format_water "$use_tokens")${RESET}"
-                ;;
-            1)
-                if [ "$power_item_index" -eq 0 ]; then
-                    metric_info="${DIM}⚡ $(format_power "$use_tokens")${RESET}"
-                else
-                    metric_info="${DIM}$(format_fun_power "$use_tokens" "$((power_item_index - 1))")${RESET}"
-                fi
+        case "$metric_kind" in
+            0|1|3|4)
+                [ "$selected_tokens" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG" && break
                 ;;
             2)
-                case "$utility_item_index" in
-                    0) metric_info="${DIM}🎟️ $(format_number "$use_tokens")${RESET}" ;;
-                    1) metric_info="${DIM}💰 \$$use_cost_fmt${RESET}" ;;
-                    2) metric_info="${DIM}📡 $(format_data "$use_tokens")${RESET}" ;;
-                esac
-                ;;
-            3)
-                metric_info="${DIM}$(format_fun_cost "$use_cost" "$fun_cost_item_id")${RESET}"
+                [ "$selected_cost_cents" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG" && break
                 ;;
         esac
-    fi
+        attempt=$((attempt + 1))
+    done
 
-    printf -v REPLY '%s' "$metric_info"
+    [ "$attempt" -lt "$METRIC_SCOPE_COUNT" ] || return 0
+    scope_label=${METRIC_SCOPE_LABELS[$selected_scope]}
+
+    case "$metric_kind" in
+        0)
+            metric_value="💧 $(format_water "$selected_tokens")"
+            ;;
+        1)
+            metric_value="⚡ $(format_power "$selected_tokens")"
+            ;;
+        2)
+            format_cost_cents "$selected_cost_cents"
+            metric_value="💰 $REPLY"
+            ;;
+        3)
+            metric_value="🎟️ $(format_number "$selected_tokens")"
+            ;;
+        4)
+            metric_value="📡 $(format_data "$selected_tokens")"
+            ;;
+    esac
+
+    REPLY="${DIM}${scope_label}${metric_value}${RESET}"
 }
 
 # Get all-time totals from JSONL files (cached)
@@ -537,8 +491,26 @@ if seg_on "$_SEG_GIT"; then
     read_git_status_info "$CURRENT_DIR"
 fi
 
+TODAY_TOKENS=0
+TODAY_COST_CENTS=0
+BLOCK_TOKENS=0
+BLOCK_COST_CENTS=0
+PROJECT_TOKENS=0
+PROJECT_COST_CENTS=0
+if seg_on "$_SEG_METRIC" || seg_on "$_SEG_SPEND"; then
+    get_spend_window_totals_nonblocking "$NOW" "$CURRENT_DIR"
+    if [ -n "$REPLY" ]; then
+        read -r TODAY_TOKENS TODAY_COST_CENTS BLOCK_TOKENS BLOCK_COST_CENTS PROJECT_TOKENS PROJECT_COST_CENTS <<< "$REPLY"
+    fi
+fi
+
 METRIC_INFO=""
-build_rotating_metric_info "$NOW_DIV_10" "$SESSION_TOKENS" "$TOTAL_COST" "$ALL_TIME_TOKENS" "$ALL_TIME_COST"
+build_rotating_metric_info "$NOW_DIV_10" \
+    "$SESSION_TOKENS" "$TOTAL_COST_CENTS" \
+    "$TODAY_TOKENS" "$TODAY_COST_CENTS" \
+    "$BLOCK_TOKENS" "$BLOCK_COST_CENTS" \
+    "$PROJECT_TOKENS" "$PROJECT_COST_CENTS" \
+    "$ALL_TIME_TOKENS" "$ALL_TIME_COST_CENTS"
 METRIC_INFO=$REPLY
 
 # Separator
@@ -706,13 +678,6 @@ if seg_on "$_SEG_TOKENS"; then
 fi
 _L2_SPEND=""
 if seg_on "$_SEG_SPEND"; then
-    TODAY_COST_CENTS=0
-    BLOCK_COST_CENTS=0
-    PROJECT_COST_CENTS=0
-    get_spend_window_totals_nonblocking "$NOW" "$CURRENT_DIR"
-    if [ -n "$REPLY" ]; then
-        read -r TODAY_COST_CENTS BLOCK_COST_CENTS PROJECT_COST_CENTS <<< "$REPLY"
-    fi
     format_spend_indicator "$TODAY_COST_CENTS" "$BLOCK_COST_CENTS" "$PROJECT_COST_CENTS" "$TOTAL_COST_CENTS" "$NOW"
     _L2_SPEND=$REPLY
 fi

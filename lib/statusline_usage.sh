@@ -352,18 +352,25 @@ get_jsonl_totals() {
 write_spend_cache() {
     local now=$1
     local summary=$2
-    local today_cost_cents block_cost_cents project_cost_cents tmp_cache
+    local today_tokens today_cost_cents block_tokens block_cost_cents project_tokens project_cost_cents tmp_cache
 
-    read -r today_cost_cents block_cost_cents project_cost_cents <<< "$summary"
+    read -r today_tokens today_cost_cents block_tokens block_cost_cents project_tokens project_cost_cents <<< "$summary"
+    today_tokens=${today_tokens:-0}
     today_cost_cents=${today_cost_cents:-0}
+    block_tokens=${block_tokens:-0}
     block_cost_cents=${block_cost_cents:-0}
+    project_tokens=${project_tokens:-0}
     project_cost_cents=${project_cost_cents:-0}
+    [[ "$today_tokens" =~ ^[0-9]+$ ]] || today_tokens=0
     [[ "$today_cost_cents" =~ ^[0-9]+$ ]] || today_cost_cents=0
+    [[ "$block_tokens" =~ ^[0-9]+$ ]] || block_tokens=0
     [[ "$block_cost_cents" =~ ^[0-9]+$ ]] || block_cost_cents=0
+    [[ "$project_tokens" =~ ^[0-9]+$ ]] || project_tokens=0
     [[ "$project_cost_cents" =~ ^[0-9]+$ ]] || project_cost_cents=0
 
     tmp_cache=$(mktemp "${CACHE_DIR}/.spend-cache-XXXXXX") || return 1
-    printf '%s\n%s %s %s\n' "$now" "$today_cost_cents" "$block_cost_cents" "$project_cost_cents" > "$tmp_cache" || {
+    printf '%s\n%s %s %s %s %s %s\n' \
+        "$now" "$today_tokens" "$today_cost_cents" "$block_tokens" "$block_cost_cents" "$project_tokens" "$project_cost_cents" > "$tmp_cache" || {
         rm -f "$tmp_cache"
         return 1
     }
@@ -377,7 +384,7 @@ write_spend_cache() {
 read_spend_cache() {
     local now=$1
     local max_age=${2:-600}
-    local cache_time cache_summary cache_age
+    local cache_time cache_summary cache_age _today_cost _block_cost _project_cost
 
     SPEND_CACHE_VALUE=""
     SPEND_CACHE_IS_FRESH=0
@@ -392,7 +399,10 @@ read_spend_cache() {
         debug_log "Ignoring invalid spend cache timestamp in $SPEND_CACHE: ${cache_time:-<empty>}"
         return 1
     fi
-    if ! [[ "$cache_summary" =~ ^[0-9]+[[:space:]][0-9]+[[:space:]][0-9]+$ ]]; then
+    if [[ "$cache_summary" =~ ^[0-9]+[[:space:]][0-9]+[[:space:]][0-9]+$ ]]; then
+        read -r _today_cost _block_cost _project_cost <<< "$cache_summary"
+        cache_summary="0 ${_today_cost:-0} 0 ${_block_cost:-0} 0 ${_project_cost:-0}"
+    elif ! [[ "$cache_summary" =~ ^[0-9]+[[:space:]][0-9]+[[:space:]][0-9]+[[:space:]][0-9]+[[:space:]][0-9]+[[:space:]][0-9]+$ ]]; then
         debug_log "Ignoring invalid spend cache value in $SPEND_CACHE: ${cache_summary:-<empty>}"
         return 1
     fi
@@ -406,8 +416,8 @@ read_spend_cache() {
 refresh_spend_cache_now() {
     local now=$1
     local current_dir=$2
-    local summary="0 0 0"
-    local today_cost_cents=0 block_cost_cents=0 project_cost_cents=0
+    local summary="0 0 0 0"
+    local today_tokens=0 today_cost_cents=0 block_tokens=0 block_cost_cents=0 project_tokens=0 project_cost_cents=0
     local recent_mins=$((SECONDS_PER_DAY / 60 + 120))
     local first_recent="" first_project="" project_summary=""
     local _project_tokens project_cost_units _project_input _project_output _project_cw _project_cr
@@ -429,10 +439,12 @@ refresh_spend_cache_now() {
             -name "*.jsonl" -type f -not -type l -mmin "-$recent_mins" -print0 2>>"$STATUSLINE_DEBUG_LOG" \
             | xargs -0 cat 2>/dev/null \
             | perl "$STATUSLINE_JSONL_PARSER" window-scan "$now" "$current_dir" "${SPEND_BLOCK_SECONDS:-18000}" \
-            2>>"$STATUSLINE_DEBUG_LOG") || summary="0 0 0"
+            2>>"$STATUSLINE_DEBUG_LOG") || summary="0 0 0 0"
     fi
-    read -r today_cost_cents block_cost_cents _ <<< "${summary:-0 0 0}"
+    read -r today_tokens today_cost_cents block_tokens block_cost_cents <<< "${summary:-0 0 0 0}"
+    today_tokens=${today_tokens:-0}
     today_cost_cents=${today_cost_cents:-0}
+    block_tokens=${block_tokens:-0}
     block_cost_cents=${block_cost_cents:-0}
 
     if collect_project_jsonl_search_roots "$current_dir"; then
@@ -443,7 +455,8 @@ refresh_spend_cache_now() {
                 -name "*.jsonl" -type f -not -type l -print0 2>>"$STATUSLINE_DEBUG_LOG" \
                 | xargs -0 cat 2>/dev/null \
                 | perl "$STATUSLINE_JSONL_PARSER" cold-scan 2>>"$STATUSLINE_DEBUG_LOG") || project_summary=""
-            read -r _project_tokens project_cost_units _project_input _project_output _project_cw _project_cr <<< "$project_summary"
+            read -r project_tokens project_cost_units _project_input _project_output _project_cw _project_cr <<< "$project_summary"
+            project_tokens=${project_tokens:-0}
             project_cost_units=${project_cost_units:-0}
             if [[ "$project_cost_units" =~ ^[0-9]+$ ]]; then
                 project_cost_cents=$(( (project_cost_units + 500000) / 1000000 ))
@@ -451,7 +464,7 @@ refresh_spend_cache_now() {
         fi
     fi
 
-    write_spend_cache "$now" "$today_cost_cents $block_cost_cents $project_cost_cents"
+    write_spend_cache "$now" "$today_tokens $today_cost_cents $block_tokens $block_cost_cents $project_tokens $project_cost_cents"
 }
 
 start_spend_refresh() {
