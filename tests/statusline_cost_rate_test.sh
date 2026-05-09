@@ -47,7 +47,9 @@ run_indicator() {
     local api_ms=$4
     local now=$5
     COST_RATE_HISTORY="$tmpdir/h-$RANDOM"
+    COST_RATE_STATE="$tmpdir/s-$RANDOM"
     printf '%s' "$history_body" > "$COST_RATE_HISTORY"
+    : > "$COST_RATE_STATE"
     REPLY=""
     get_cost_rate_indicator "$session" "$cost_cents" "$api_ms" "$now"
     printf '%s' "$REPLY"
@@ -63,112 +65,135 @@ REPLY=""
 get_cost_rate_indicator "sess" 100 0 1000000
 assert_eq "" "$REPLY" "zero api duration renders empty"
 
-# --- first render: session rate + dim-stable arrow fallback -----------
+# Keep tests small and deterministic.
+COST_RATE_CURRENT_WINDOW=3600
+COST_RATE_BASELINE_WINDOW=86400
+COST_RATE_HISTORY_MAX_AGE=604800
+COST_RATE_MIN_CURRENT_API_MS=10000
+COST_RATE_MIN_BASELINE_API_MS=10000
 
-# Session: 120 cents over 120 s API → 60 ¢/m. No prior history, so no
-# short-window anchor yet — the displayed number falls back to the
-# session-to-date rate and the arrow falls back to dim stable so the slot
-# keeps a consistent shape from the very first render.
+# --- first render: session rate + warming marker fallback -------------
+
+# Session: 120 cents over 120 s API -> 60 c/m. No prior account history
+# means the display can show a rate, but not a trustworthy trend yet.
 REPLY=""
 COST_RATE_HISTORY="$tmpdir/h-fresh"
+COST_RATE_STATE="$tmpdir/s-fresh"
 rm -f "$COST_RATE_HISTORY"
+rm -f "$COST_RATE_STATE"
 get_cost_rate_indicator "sess-fresh" 120 120000 1000000
-assert_eq "<dim>60¢/m<reset> <dim>→<reset>" "$REPLY" \
-    "first render shows session rate + dim stable arrow"
+assert_eq "<dim>60¢/m<reset> <dim>◌<reset>" "$REPLY" \
+    "first render shows session rate + warming marker"
 
-# --- stable arrow when short-window matches session baseline ----------
+# --- stable arrow when current account window matches baseline --------
 
-# Session: 180 c / 180 000 ms api = 60 ¢/m baseline.
-# Short anchor 20 s ago: 140 c / 140 000 ms api.
-# Window delta: 40 c / 40 000 ms → rate = 60 ¢/m. Ratio 100 → stable → dim →.
-body=$(printf '%s,%s,%s,%s' "sess-stable" 999980 140 140000)
+# History rows are minute buckets:
+#   bucket_epoch,cost_delta_cents,api_delta_ms
+# Current 1h: 60 c / 60 s API -> 60 c/m.
+# Previous 24h baseline: same rate -> stable.
+body=$(printf '%s,%s,%s\n%s,%s,%s' 999940 60 60000 992800 60 60000)
 got=$(run_indicator "$body" "sess-stable" 180 180000 1000000)
 assert_eq "<dim>60¢/m<reset> <dim>→<reset>" "$got" \
-    "short-window rate matching session baseline renders dim stable arrow"
+    "current account rate matching baseline renders dim stable arrow"
 
-# --- cold (severe drop) renders bright green ↓ ------------------------
+# --- cold (severe drop) renders bright green down arrow ---------------
 
-# Session: 180 c / 180 000 ms api = 60 ¢/m baseline.
-# Short anchor 20 s ago: 175 c / 170 000 ms api.
-# Window delta: 5 c / 10 000 ms → rate = 30 ¢/m (0.5× baseline).
-body=$(printf '%s,%s,%s,%s' "sess-drop" 999980 175 170000)
+# Baseline: 60 c/m. Current: 30 c/m (0.5x baseline).
+body=$(printf '%s,%s,%s\n%s,%s,%s' 999940 30 60000 992800 60 60000)
 got=$(run_indicator "$body" "sess-drop" 180 180000 1000000)
 assert_eq "<dim>30¢/m<reset> <green>↓<reset><b-green> 2.0x<reset>" "$got" \
-    "short-window rate ≤ 0.5× session renders bright-green cold arrow + green fold"
+    "current account rate <= 0.5x baseline renders bright-green cold arrow + green fold"
 
 # --- cool (moderate drop) uses VEL_COOL shade -------------------------
 
-# Baseline 60 ¢/m. Window rate 42 ¢/m (0.7× → cool).
-# api_delta 15 000 ms → cost_delta = 42 * 15 000 / 60 000 = 10.5 ≈ 11 c.
-# anchor_cost = 180 - 11 = 169, anchor_api = 180 000 - 15 000 = 165 000.
-body=$(printf '%s,%s,%s,%s' "sess-cooling" 999985 169 165000)
+# Baseline 60 c/m. Current 42 c/m (0.7x -> cool).
+body=$(printf '%s,%s,%s\n%s,%s,%s' 999940 42 60000 992800 60 60000)
 got=$(run_indicator "$body" "sess-cooling" 180 180000 1000000)
-assert_eq "<dim>44¢/m<reset> <cool>↘<reset><b-teal> 1.4x<reset>" "$got" \
-    "short-window rate in the 0.5×–0.85× band renders cool arrow + teal fold"
+assert_eq "<dim>42¢/m<reset> <cool>↘<reset><b-teal> 1.4x<reset>" "$got" \
+    "current account rate in the 0.5x-0.85x band renders cool arrow + teal fold"
 
-# --- hot (severe burst) renders bright red ↑ --------------------------
+# --- hot (sustained rise) renders bright red up arrow -----------------
 
-# Baseline 60 ¢/m. Want window rate ~120 ¢/m (2.0× → hot).
-# api_delta 15 000 ms, cost_delta = 120 * 15 000 / 60 000 = 30 c.
-# anchor_cost = 180 - 30 = 150, anchor_api = 180 000 - 15 000 = 165 000.
-body=$(printf '%s,%s,%s,%s' "sess-burst" 999985 150 165000)
+# Baseline 60 c/m. Current 120 c/m (2.0x -> hot).
+body=$(printf '%s,%s,%s\n%s,%s,%s' 999940 120 60000 992800 60 60000)
 got=$(run_indicator "$body" "sess-burst" 180 180000 1000000)
 assert_eq "<dim>120¢/m<reset> <hot>↑<reset><b-orange> 2.0x<reset>" "$got" \
-    "short-window rate ≥ 1.5× session renders bright-red hot arrow + orange fold"
+    "current account rate >= 1.5x baseline renders bright-red hot arrow + orange fold"
 
 # --- warm (moderate rise) uses VEL_WARM shade -------------------------
 
-# Baseline 60 ¢/m. Want window rate 72 ¢/m (1.2× → warm).
-# api_delta 20 000 ms, cost_delta = 72 * 20 000 / 60 000 = 24 c.
-# anchor_cost = 180 - 24 = 156, anchor_api = 180 000 - 20 000 = 160 000.
-body=$(printf '%s,%s,%s,%s' "sess-rising" 999985 156 160000)
+# Baseline 60 c/m. Current 72 c/m (1.2x -> warm).
+body=$(printf '%s,%s,%s\n%s,%s,%s' 999940 72 60000 992800 60 60000)
 got=$(run_indicator "$body" "sess-rising" 180 180000 1000000)
 assert_eq "<dim>72¢/m<reset> <warm>↗<reset><b-yellow> 1.2x<reset>" "$got" \
-    "short-window rate in the 1.15×–1.5× band renders warm arrow + yellow fold"
+    "current account rate in the 1.15x-1.5x band renders warm arrow + yellow fold"
 
-# --- sub-floor api-delta falls back to session rate + dim stable ------
+# --- thin current sample shows warming marker -------------------------
 
-# Anchor in window but only 500 ms api-delta (below the 2 s floor) → fall
-# back to session-to-date rate and the dim stable arrow.
-body=$(printf '%s,%s,%s,%s' "sess-tiny" 999985 179 179500)
+# Current bucket has a rate, but not enough active API time to classify.
+COST_RATE_MIN_CURRENT_API_MS=30000
+body=$(printf '%s,%s,%s\n%s,%s,%s' 999940 10 10000 992800 60 60000)
 got=$(run_indicator "$body" "sess-tiny" 180 180000 1000000)
-assert_eq "<dim>60¢/m<reset> <dim>→<reset>" "$got" \
-    "sub-floor window api-delta falls back to session rate + dim stable arrow"
+assert_eq "<dim>60¢/m<reset> <dim>◌<reset>" "$got" \
+    "sub-floor current active time renders current rate + warming marker"
+COST_RATE_MIN_CURRENT_API_MS=10000
 
-# --- other-session history does not contaminate ------------------------
+# --- previous 7d baseline fallback is used when previous 24h is thin ---
 
-body=$(printf '%s,%s,%s,%s' "sess-other" 999985 9999 59999)
-got=$(run_indicator "$body" "sess-alone" 180 180000 1000000)
-assert_eq "<dim>60¢/m<reset> <dim>→<reset>" "$got" \
-    "other-session history does not provide an anchor"
+# The primary previous-24h baseline is too small, so older retained account
+# history supplies the baseline.
+old_bucket=$((1000000 - 3 * 86400))
+body=$(printf '%s,%s,%s\n%s,%s,%s\n%s,%s,%s' 999940 120 60000 992800 1 1000 "$old_bucket" 60 60000)
+got=$(run_indicator "$body" "sess-fallback" 180 180000 1000000)
+assert_eq "<dim>120¢/m<reset> <hot>↑<reset><b-orange> 2.0x<reset>" "$got" \
+    "older retained account history provides baseline when previous 24h is thin"
 
-# --- rows older than COST_RATE_HISTORY_MAX_AGE get pruned -------------
+# --- current session delta is bucketed before rendering ----------------
 
-ancient=$((1000000 - 10 * 3600))
-body=$(printf '%s,%s,%s,%s' "sess-prune" "$ancient" 9999 99999)
-COST_RATE_HISTORY="$tmpdir/h-prune"
-printf '%s' "$body" > "$COST_RATE_HISTORY"
+COST_RATE_HISTORY="$tmpdir/h-delta"
+COST_RATE_STATE="$tmpdir/s-delta"
+printf '%s,%s,%s' 992800 60 60000 > "$COST_RATE_HISTORY"
+printf '%s,%s,%s,%s' "sess-delta" 999900 100 60000 > "$COST_RATE_STATE"
 REPLY=""
-get_cost_rate_indicator "sess-prune" 100 10000 1000000
+get_cost_rate_indicator "sess-delta" 220 120000 1000000
+assert_eq "<dim>120¢/m<reset> <hot>↑<reset><b-orange> 2.0x<reset>" "$REPLY" \
+    "current session delta contributes to current account window before rendering"
+if ! grep -q "^999960,120,60000$" "$COST_RATE_HISTORY"; then
+    printf 'FAIL: current session delta should be added to the current minute bucket\n' >&2
+    exit 1
+fi
+
+# --- buckets older than COST_RATE_HISTORY_MAX_AGE get pruned ----------
+
+ancient=$((1000000 - 8 * 86400))
+body=$(printf '%s,%s,%s' "$ancient" 9999 99999)
+COST_RATE_HISTORY="$tmpdir/h-prune"
+COST_RATE_STATE="$tmpdir/s-prune"
+printf '%s' "$body" > "$COST_RATE_HISTORY"
+printf '%s,%s,%s,%s' "sess-prune" 999900 40 10000 > "$COST_RATE_STATE"
+REPLY=""
+get_cost_rate_indicator "sess-prune" 100 70000 1000000
 
 if grep -q "$ancient" "$COST_RATE_HISTORY"; then
-    printf 'FAIL: ancient rows should be pruned from cost-rate history\n' >&2
+    printf 'FAIL: ancient buckets should be pruned from cost-rate history\n' >&2
     exit 1
 fi
-if ! grep -q "^sess-prune,1000000,100,10000$" "$COST_RATE_HISTORY"; then
-    printf 'FAIL: current sample should have been appended after prune\n' >&2
+if ! grep -q "^999960,60,60000$" "$COST_RATE_HISTORY"; then
+    printf 'FAIL: current bucket should have been appended after prune\n' >&2
     exit 1
 fi
 
-# --- high rate falls back to dollar format ----------------------------
+# --- high rate uses dollar format -------------------------------------
 
 REPLY=""
 COST_RATE_HISTORY="$tmpdir/h-dollars"
+COST_RATE_STATE="$tmpdir/s-dollars"
 rm -f "$COST_RATE_HISTORY"
+rm -f "$COST_RATE_STATE"
 get_cost_rate_indicator "sess-dollars" 120000 60000 1000000
 case "$REPLY" in
-    "<dim>\$"*"/m<reset> <dim>→<reset>") ;;
-    *) printf 'FAIL: rate ≥ $10/m should render in dollar format with fallback arrow, got: %q\n' "$REPLY" >&2; exit 1 ;;
+    "<dim>\$"*"/m<reset> <dim>◌<reset>") ;;
+    *) printf 'FAIL: rate >= $10/m should render in dollar format with warming marker, got: %q\n' "$REPLY" >&2; exit 1 ;;
 esac
 
 printf 'ok\n'

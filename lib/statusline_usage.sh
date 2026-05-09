@@ -4,9 +4,12 @@ SECONDS_PER_DAY=${SECONDS_PER_DAY:-86400}
 SECONDS_PER_WEEK=${SECONDS_PER_WEEK:-$((7 * SECONDS_PER_DAY))}
 JSONL_CACHE_TTL=${JSONL_CACHE_TTL:-300}
 TREND_HISTORY_MAX_AGE=${TREND_HISTORY_MAX_AGE:-$SECONDS_PER_DAY}
-COST_RATE_WINDOW=${COST_RATE_WINDOW:-30}
-COST_RATE_MIN_API_DELTA_MS=${COST_RATE_MIN_API_DELTA_MS:-2000}
-COST_RATE_HISTORY_MAX_AGE=${COST_RATE_HISTORY_MAX_AGE:-5400}
+COST_RATE_CURRENT_WINDOW=${COST_RATE_CURRENT_WINDOW:-${COST_RATE_WINDOW:-3600}}
+COST_RATE_BASELINE_WINDOW=${COST_RATE_BASELINE_WINDOW:-$SECONDS_PER_DAY}
+COST_RATE_BUCKET_SECONDS=${COST_RATE_BUCKET_SECONDS:-60}
+COST_RATE_MIN_CURRENT_API_MS=${COST_RATE_MIN_CURRENT_API_MS:-300000}
+COST_RATE_MIN_BASELINE_API_MS=${COST_RATE_MIN_BASELINE_API_MS:-1800000}
+COST_RATE_HISTORY_MAX_AGE=${COST_RATE_HISTORY_MAX_AGE:-$((7 * SECONDS_PER_DAY))}
 COST_RATE_TREND_HOT_X100=${COST_RATE_TREND_HOT_X100:-150}
 COST_RATE_TREND_WARM_X100=${COST_RATE_TREND_WARM_X100:-115}
 COST_RATE_TREND_COOL_X100=${COST_RATE_TREND_COOL_X100:-85}
@@ -690,27 +693,35 @@ get_trend_arrow() {
     esac
 }
 
-# Per-session cost-rate indicator (cents per minute of API-active time).
-# The displayed number is the COST_RATE_WINDOW-second rolling rate (30 s by
-# default), so it changes fast and reflects what's actually being spent
-# right now — during tool calls, during max-effort bursts, etc. The
-# background baseline is the session-to-date average (stabilizes on its
-# own as the session runs), and the arrow compares the short-window rate
-# against that baseline: up = spending faster than baseline, down = slower.
+# Account-wide cost-rate indicator (cents per minute of API-active time).
+# The displayed number is the current account-wide active-work rate over
+# COST_RATE_CURRENT_WINDOW (1h by default). Idle wall-clock time never enters
+# the denominator: every rate is cost_delta / api_duration_delta.
 #
-# History lives in $COST_RATE_HISTORY as CSV rows:
+# The arrow compares the current window against a slower baseline from the
+# previous COST_RATE_BASELINE_WINDOW (24h by default), excluding the current
+# window. If the previous 24h is too thin, retained history up to
+# COST_RATE_HISTORY_MAX_AGE (7d by default) supplies the baseline. This keeps
+# the signal responsive to real setup changes while letting a new setup become
+# normal after it has dominated the lookback.
+#
+# History lives in $COST_RATE_HISTORY as account-wide minute buckets:
+#     bucket_epoch,total_cost_delta_cents,total_api_delta_ms
+# Last-seen per-session cumulative totals live in $COST_RATE_STATE:
 #     session_id,wall_epoch,total_cost_cents,api_duration_ms
-# Rows older than COST_RATE_HISTORY_MAX_AGE are pruned on each call so the
-# file stays bounded regardless of how many sessions pass through.
 get_cost_rate_indicator() {
     local session_id=$1
     local total_cost_cents=$2
     local api_duration_ms=$3
     local now=${4:-$(date +%s)}
     local history_file=${COST_RATE_HISTORY:-}
-    local window=${COST_RATE_WINDOW}
+    local state_file=${COST_RATE_STATE:-}
+    local current_window=${COST_RATE_CURRENT_WINDOW}
+    local baseline_window=${COST_RATE_BASELINE_WINDOW}
+    local bucket_seconds=${COST_RATE_BUCKET_SECONDS}
     local max_age=${COST_RATE_HISTORY_MAX_AGE}
-    local min_api_delta=${COST_RATE_MIN_API_DELTA_MS}
+    local min_current_api=${COST_RATE_MIN_CURRENT_API_MS}
+    local min_baseline_api=${COST_RATE_MIN_BASELINE_API_MS}
     local hot_x100=${COST_RATE_TREND_HOT_X100}
     local warm_x100=${COST_RATE_TREND_WARM_X100}
     local cool_x100=${COST_RATE_TREND_COOL_X100}
@@ -723,70 +734,168 @@ get_cost_rate_indicator() {
     [ "$api_duration_ms" -gt 0 ] || return 0
     [ "$total_cost_cents" -gt 0 ] || return 0
 
+    [[ "$current_window" =~ ^[0-9]+$ ]] || current_window=3600
+    [[ "$baseline_window" =~ ^[0-9]+$ ]] || baseline_window=$SECONDS_PER_DAY
+    [[ "$bucket_seconds" =~ ^[0-9]+$ ]] || bucket_seconds=60
+    [[ "$max_age" =~ ^[0-9]+$ ]] || max_age=$((7 * SECONDS_PER_DAY))
+    [[ "$min_current_api" =~ ^[0-9]+$ ]] || min_current_api=300000
+    [[ "$min_baseline_api" =~ ^[0-9]+$ ]] || min_baseline_api=1800000
+    [[ "$hot_x100" =~ ^[0-9]+$ ]] || hot_x100=150
+    [[ "$warm_x100" =~ ^[0-9]+$ ]] || warm_x100=115
+    [[ "$cool_x100" =~ ^[0-9]+$ ]] || cool_x100=85
+    [[ "$cold_x100" =~ ^[0-9]+$ ]] || cold_x100=50
+    [ "$current_window" -gt 0 ] || current_window=3600
+    [ "$baseline_window" -gt 0 ] || baseline_window=$SECONDS_PER_DAY
+    [ "$bucket_seconds" -gt 0 ] || bucket_seconds=60
+    [ "$max_age" -gt "$current_window" ] || max_age=$((current_window + baseline_window))
+
     local session_rate_milli=$(( total_cost_cents * 60 * 1000 * 1000 / api_duration_ms ))
     [ "$session_rate_milli" -gt 0 ] || return 0
 
+    [ -z "$state_file" ] && [ -n "$history_file" ] && state_file="${history_file}.state"
+
     local prune_cutoff=$((now - max_age))
-    local window_cutoff=$((now - window))
-    local anchor_time=0 anchor_cost=0 anchor_api_ms=0
+    local current_cutoff=$((now - current_window))
+    local baseline_cutoff=$((current_cutoff - baseline_window))
+    local current_bucket=$((now - (now % bucket_seconds)))
+    local delta_cost=0
+    local delta_api_ms=0
+
+    # First convert this session's cumulative totals into one account-wide
+    # delta. State is separate from bucket history so the render path only has
+    # to aggregate bounded minute buckets.
+    if [ -n "$session_id" ] && [ -n "$state_file" ]; then
+        local kept_state=""
+        local kept_state_sep=""
+        local s_session s_time s_cost s_api s_extra
+        local prev_time=0 prev_cost=0 prev_api=0
+
+        if [ -f "$state_file" ]; then
+            while IFS=, read -r s_session s_time s_cost s_api s_extra || [ -n "$s_session" ]; do
+                [ -n "$s_session" ] || continue
+                [[ "$s_time" =~ ^[0-9]+$ ]] || continue
+                [[ "$s_cost" =~ ^[0-9]+$ ]] || continue
+                [[ "$s_api" =~ ^[0-9]+$ ]] || continue
+                [ "$s_time" -ge "$prune_cutoff" ] || continue
+
+                if [ "$s_session" = "$session_id" ]; then
+                    if [ "$s_time" -ge "$prev_time" ]; then
+                        prev_time=$s_time
+                        prev_cost=$s_cost
+                        prev_api=$s_api
+                    fi
+                    continue
+                fi
+
+                printf -v kept_state '%s%s%s,%s,%s,%s' \
+                    "$kept_state" "$kept_state_sep" "$s_session" "$s_time" "$s_cost" "$s_api"
+                kept_state_sep=$'\n'
+            done < "$state_file"
+        fi
+
+        if [ "$prev_time" -gt 0 ] \
+            && [ "$total_cost_cents" -ge "$prev_cost" ] \
+            && [ "$api_duration_ms" -ge "$prev_api" ]; then
+            delta_cost=$((total_cost_cents - prev_cost))
+            delta_api_ms=$((api_duration_ms - prev_api))
+        fi
+
+        printf -v kept_state '%s%s%s,%s,%s,%s' \
+            "$kept_state" "$kept_state_sep" "$session_id" "$now" "$total_cost_cents" "$api_duration_ms"
+        if ! printf '%s' "$kept_state" > "$state_file" 2>>"$STATUSLINE_DEBUG_LOG"; then
+            debug_log "Cost-rate state update failed"
+        fi
+    fi
+
+    # Bucket history is account-wide, so every session contributes to the same
+    # current window and baseline. Buckets make seven-day retention cheap enough
+    # for statusline rendering.
+    local current_cost=0 current_api=0
+    local baseline_cost=0 baseline_api=0
+    local fallback_cost=0 fallback_api=0
     local kept_history=""
     local kept_sep=""
-    local r_session r_time r_cost r_api
+    local bucket_delta_applied=0
+    local r_bucket r_cost r_api r_extra
 
-    if [ -n "$session_id" ] && [ -n "$history_file" ] && [ -f "$history_file" ]; then
-        while IFS=, read -r r_session r_time r_cost r_api || [ -n "$r_session" ]; do
-            [ -n "$r_session" ] || continue
-            [[ "$r_time" =~ ^[0-9]+$ ]] || continue
+    if [ -n "$history_file" ] && [ -f "$history_file" ]; then
+        while IFS=, read -r r_bucket r_cost r_api r_extra || [ -n "$r_bucket" ]; do
+            [[ "$r_bucket" =~ ^[0-9]+$ ]] || continue
             [[ "$r_cost" =~ ^[0-9]+$ ]] || continue
             [[ "$r_api" =~ ^[0-9]+$ ]] || continue
-            [ "$r_time" -ge "$prune_cutoff" ] || continue
+            [ "$r_bucket" -ge "$prune_cutoff" ] || continue
 
-            printf -v kept_history '%s%s%s,%s,%s,%s' \
-                "$kept_history" "$kept_sep" "$r_session" "$r_time" "$r_cost" "$r_api"
+            if [ "$r_bucket" -eq "$current_bucket" ] \
+                && [ "$delta_api_ms" -gt 0 ] \
+                && [ "$bucket_delta_applied" -eq 0 ]; then
+                r_cost=$((r_cost + delta_cost))
+                r_api=$((r_api + delta_api_ms))
+                bucket_delta_applied=1
+            fi
+
+            printf -v kept_history '%s%s%s,%s,%s' \
+                "$kept_history" "$kept_sep" "$r_bucket" "$r_cost" "$r_api"
             kept_sep=$'\n'
 
-            if [ "$r_session" = "$session_id" ] && [ "$r_time" -ge "$window_cutoff" ]; then
-                if [ "$anchor_time" -eq 0 ] || [ "$r_time" -lt "$anchor_time" ]; then
-                    anchor_time=$r_time
-                    anchor_cost=$r_cost
-                    anchor_api_ms=$r_api
-                fi
+            if [ "$r_bucket" -ge "$current_cutoff" ]; then
+                current_cost=$((current_cost + r_cost))
+                current_api=$((current_api + r_api))
+            elif [ "$r_bucket" -ge "$baseline_cutoff" ]; then
+                baseline_cost=$((baseline_cost + r_cost))
+                baseline_api=$((baseline_api + r_api))
+                fallback_cost=$((fallback_cost + r_cost))
+                fallback_api=$((fallback_api + r_api))
+            else
+                fallback_cost=$((fallback_cost + r_cost))
+                fallback_api=$((fallback_api + r_api))
             fi
         done < "$history_file"
     fi
 
-    if [ -n "$session_id" ] && [ -n "$history_file" ]; then
-        printf -v kept_history '%s%s%s,%s,%s,%s' \
-            "$kept_history" "$kept_sep" "$session_id" "$now" "$total_cost_cents" "$api_duration_ms"
+    if [ "$delta_api_ms" -gt 0 ] && [ "$bucket_delta_applied" -eq 0 ]; then
+        printf -v kept_history '%s%s%s,%s,%s' \
+            "$kept_history" "$kept_sep" "$current_bucket" "$delta_cost" "$delta_api_ms"
+        current_cost=$((current_cost + delta_cost))
+        current_api=$((current_api + delta_api_ms))
+    fi
+
+    if [ -n "$history_file" ]; then
         if ! printf '%s' "$kept_history" > "$history_file" 2>>"$STATUSLINE_DEBUG_LOG"; then
             debug_log "Cost-rate history update failed"
         fi
     fi
 
-    # Default: show the session-to-date rate (arrow falls back to dim stable
-    # via the always-arrow rule below). As soon as we have a short-window
-    # sample with enough API-active time, swap to the short-window rate for
-    # the number and classify direction against the session baseline.
     local display_rate_milli=$session_rate_milli
-    local arrow_code=""
-    if [ "$anchor_time" -gt 0 ]; then
-        local api_delta=$(( api_duration_ms - anchor_api_ms ))
-        if [ "$api_delta" -ge "$min_api_delta" ]; then
-            local cost_delta=$(( total_cost_cents - anchor_cost ))
-            if [ "$cost_delta" -ge 0 ]; then
-                display_rate_milli=$(( cost_delta * 60 * 1000 * 1000 / api_delta ))
-                local ratio_x100=$(( display_rate_milli * 100 / session_rate_milli ))
-                arrow_code="stable"
-                if [ "$ratio_x100" -ge "$hot_x100" ]; then
-                    arrow_code="hot"
-                elif [ "$ratio_x100" -ge "$warm_x100" ]; then
-                    arrow_code="warm"
-                elif [ "$ratio_x100" -le "$cold_x100" ]; then
-                    arrow_code="cold"
-                elif [ "$ratio_x100" -le "$cool_x100" ]; then
-                    arrow_code="cool"
-                fi
-            fi
+    local current_rate_milli=0
+    if [ "$current_api" -gt 0 ]; then
+        current_rate_milli=$(( current_cost * 60 * 1000 * 1000 / current_api ))
+        display_rate_milli=$current_rate_milli
+    fi
+
+    local baseline_rate_milli=0
+    if [ "$baseline_api" -lt "$min_baseline_api" ] && [ "$fallback_api" -ge "$min_baseline_api" ]; then
+        baseline_cost=$fallback_cost
+        baseline_api=$fallback_api
+    fi
+    if [ "$baseline_api" -gt 0 ]; then
+        baseline_rate_milli=$(( baseline_cost * 60 * 1000 * 1000 / baseline_api ))
+    fi
+
+    local arrow_code="warming"
+    local ratio_x100=0
+    if [ "$current_api" -ge "$min_current_api" ] \
+        && [ "$baseline_api" -ge "$min_baseline_api" ] \
+        && [ "$baseline_rate_milli" -gt 0 ]; then
+        ratio_x100=$(( current_rate_milli * 100 / baseline_rate_milli ))
+        arrow_code="stable"
+        if [ "$ratio_x100" -ge "$hot_x100" ]; then
+            arrow_code="hot"
+        elif [ "$ratio_x100" -ge "$warm_x100" ]; then
+            arrow_code="warm"
+        elif [ "$ratio_x100" -le "$cold_x100" ]; then
+            arrow_code="cold"
+        elif [ "$ratio_x100" -le "$cool_x100" ]; then
+            arrow_code="cool"
         fi
     fi
 
@@ -801,25 +910,18 @@ get_cost_rate_indicator() {
     fi
 
     # Cost-rate semantics: spending faster = bad (red gradient), slower = good
-    # (green gradient), stable = dim. Two shades on each side so the severity
-    # of the change is visible: hot/cold are vivid, warm/cool are muted. When
-    # direction is classified we append a symmetric fold change — always ≥1
-    # so 2× faster reads as "2.0x" up and ½× speed reads as "2.0x" down. The
-    # arrow carries direction; the number is pure magnitude. The arrow always
-    # renders — when we don't have enough history or api-delta to classify
-    # direction, default to a dim stable arrow so the slot keeps a consistent
-    # shape.
-    [ -z "$arrow_code" ] && arrow_code="stable"
+    # (green gradient), stable = dim. Warming means we can display the current
+    # rate, but do not yet have enough active current/baseline time to call the
+    # trend. The fold number is symmetric: the arrow carries direction, and the
+    # number is pure magnitude.
     local arrow=""
     local mult_suffix=""
     local fold_color=""
-    if [ "$arrow_code" != "stable" ] && [ "${ratio_x100:-0}" -gt 0 ]; then
+    if [ "$arrow_code" != "stable" ] && [ "$arrow_code" != "warming" ] && [ "$ratio_x100" -gt 0 ]; then
         local fold_x100
         if [ "$ratio_x100" -ge 100 ]; then
             fold_x100=$ratio_x100
         else
-            # Slower than baseline: invert so the number is always ≥1.
-            # Round to nearest hundredth.
             fold_x100=$(( (10000 + ratio_x100 / 2) / ratio_x100 ))
         fi
         local fold_whole=$((fold_x100 / 100))
@@ -830,10 +932,6 @@ get_cost_rate_indicator() {
         fi
         mult_suffix=$(printf ' %d.%dx' "$fold_whole" "$fold_tenths")
 
-        # Color the fold number by magnitude using the 8-shade burst palette —
-        # arrows only have 4 states, but the number can escalate further. Up
-        # (faster = bad) climbs yellow→orange→red→magenta→bright-magenta;
-        # down (slower = good) stays chill at teal→green→cyan.
         case "$arrow_code" in
             hot|warm)
                 if   [ "$fold_x100" -ge 1000 ]; then fold_color=$BURST_BRIGHT_MAG
@@ -852,11 +950,12 @@ get_cost_rate_indicator() {
         esac
     fi
     case "$arrow_code" in
-        hot)    arrow=" ${VEL_HOT}↑${RESET}${fold_color}${mult_suffix}${RESET}" ;;
-        warm)   arrow=" ${VEL_WARM}↗${RESET}${fold_color}${mult_suffix}${RESET}" ;;
-        cold)   arrow=" ${GREEN}↓${RESET}${fold_color}${mult_suffix}${RESET}" ;;
-        cool)   arrow=" ${VEL_COOL}↘${RESET}${fold_color}${mult_suffix}${RESET}" ;;
-        *)      arrow=" ${DIM}→${RESET}" ;;
+        hot)     arrow=" ${VEL_HOT}↑${RESET}${fold_color}${mult_suffix}${RESET}" ;;
+        warm)    arrow=" ${VEL_WARM}↗${RESET}${fold_color}${mult_suffix}${RESET}" ;;
+        cold)    arrow=" ${GREEN}↓${RESET}${fold_color}${mult_suffix}${RESET}" ;;
+        cool)    arrow=" ${VEL_COOL}↘${RESET}${fold_color}${mult_suffix}${RESET}" ;;
+        stable)  arrow=" ${DIM}→${RESET}" ;;
+        *)       arrow=" ${DIM}◌${RESET}" ;;
     esac
 
     REPLY="${DIM}${display_number}${RESET}${arrow}"

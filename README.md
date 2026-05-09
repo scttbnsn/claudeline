@@ -148,7 +148,7 @@ Vibey (default), Dark, Light, Nord, and Gruvbox — plus NO_COLOR support
 </td>
 <td align="center" width="33%">
 <h3>Cost-Rate Indicator</h3>
-Per-session cents/min (API-active time) on a fast ~30-s window so you can see tool calls and config flips live — plus a red/dim/green arrow and a symmetric fold change (e.g. <code>↑ 3.2x</code> for 3.2× faster, <code>↓ 2.0x</code> for half-speed) showing exactly how far above or below your session baseline you are
+Account-wide cents/min (API-active time) over the current working window, with a red/dim/green arrow and symmetric fold change (e.g. <code>↑ 3.2x</code> for 3.2× faster, <code>↓ 2.0x</code> for half-speed) against your recent baseline. Shows <code>◌</code> while current/baseline data is still warming.
 </td>
 </tr>
 </table>
@@ -411,13 +411,16 @@ The API call runs in a **non-blocking background subshell** so it never stalls t
 | `EXTRA_USAGE_TTL=600` | Extra usage / credit cache lifetime in seconds (default: 600) |
 | `TREND_WINDOW=900` | Trend arrow sample window in seconds (default: 900) |
 | `TREND_HISTORY_MAX_AGE=86400` | Max age for trend history entries in seconds (default: 86400) |
-| `COST_RATE_WINDOW=30` | Cost-rate sampling window, in wall-clock seconds (default: 30). The displayed number is the cost-rate over this window; the arrow compares it against the session-to-date baseline. Smaller = snappier and more jittery. |
-| `COST_RATE_MIN_API_DELTA_MS=2000` | Minimum API-active delta inside the window before the short-window rate replaces the session rate on the display (default: 2000 = 2 s) |
-| `COST_RATE_HISTORY_MAX_AGE=5400` | How long rows in `.cost-rate-history` are retained before pruning, in seconds (default: 5400 = 90 min) |
-| `COST_RATE_TREND_HOT_X100=150` | Hot threshold: short-window rate ≥1.50× session average (default: 150) |
-| `COST_RATE_TREND_WARM_X100=115` | Warm threshold: short-window rate ≥1.15× session average (default: 115) |
-| `COST_RATE_TREND_COOL_X100=85` | Cool threshold: short-window rate ≤0.85× session average (default: 85) |
-| `COST_RATE_TREND_COLD_X100=50` | Cold threshold: short-window rate ≤0.50× session average (default: 50) |
+| `COST_RATE_CURRENT_WINDOW=3600` | Current account-wide cost-rate window, in wall-clock seconds (default: 1h). Rates divide only by API-active time inside the window, so idle time does not lower the pace. `COST_RATE_WINDOW` is still accepted as a legacy alias. |
+| `COST_RATE_BASELINE_WINDOW=86400` | Baseline lookback before the current window, in wall-clock seconds (default: 24h). If this is thin, retained history up to `COST_RATE_HISTORY_MAX_AGE` is used. |
+| `COST_RATE_BUCKET_SECONDS=60` | Account-wide cost-rate bucket size, in seconds (default: 60). |
+| `COST_RATE_MIN_CURRENT_API_MS=300000` | Minimum active API time in the current window before the arrow leaves the warming marker (default: 5 min). |
+| `COST_RATE_MIN_BASELINE_API_MS=1800000` | Minimum active API time in the baseline before the arrow leaves the warming marker (default: 30 min). |
+| `COST_RATE_HISTORY_MAX_AGE=604800` | How long `.cost-rate-history` buckets and `.cost-rate-state` rows are retained before pruning, in seconds (default: 7d). |
+| `COST_RATE_TREND_HOT_X100=150` | Hot threshold: current active rate ≥1.50× baseline (default: 150) |
+| `COST_RATE_TREND_WARM_X100=115` | Warm threshold: current active rate ≥1.15× baseline (default: 115) |
+| `COST_RATE_TREND_COOL_X100=85` | Cool threshold: current active rate ≤0.85× baseline (default: 85) |
+| `COST_RATE_TREND_COLD_X100=50` | Cold threshold: current active rate ≤0.50× baseline (default: 50) |
 
 **Local data stored** in `~/.claude-usage.d/` (created with `chmod 700`):
 
@@ -427,7 +430,8 @@ The API call runs in a **non-blocking background subshell** so it never stalls t
 | `.jsonl-state` | Per-file JSONL scan state for incremental refreshes |
 | `.refresh.lock.d/` | Lock directory to prevent concurrent background JSONL refreshes |
 | `.usage-history` | Rolling 24h usage samples for trend arrows |
-| `.cost-rate-history` | Per-session `(session_id, t, total_cost_cents, api_duration_ms)` samples for the cost-rate slot, pruned to 90 min |
+| `.cost-rate-history` | Account-wide `(bucket_epoch, cost_delta_cents, api_delta_ms)` buckets for the cost-rate slot, pruned to 7d |
+| `.cost-rate-state` | Last-seen per-session cumulative totals used to turn session counters into account-wide cost-rate buckets |
 | `.extra-usage-cache` | Cached overage/credit data |
 | `.extra-usage-fetch.lock/` | Lock directory to prevent concurrent API calls |
 | `.claude-config-auto-compact` | Cached auto-compact setting |
