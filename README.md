@@ -17,10 +17,10 @@
 │    bar              + git status   trend   + arrow + fold   changed
 └─ context icon (✨🌱💭🧠⚡🔥🌡️🫠💀💾)
 
-    73.5K/168K  ·  🍕 3 joe's®  ·  Opus 4.6  ·  ⏱️ 45m
-    └────┬────┘    └─────┬─────┘   └───┬───┘    └──┬──┘
-      context         rotating       model      duration
-      tokens          metric
+    73.5K/168K  ·  💰$18.00d  ·  🧊90%  ·  🔥max  ·  🍕 3 joe's®  ·  Opus 4.6  ·  ⏱️ 45m
+    └────┬────┘     └───┬───┘     └─┬─┘     └┬┘      └─────┬─────┘    └───┬───┘    └──┬──┘
+      context          spend       cache   effort       rotating       model      duration
+      tokens          window      reuse                  metric
 ```
 
 <div align="center">
@@ -33,6 +33,7 @@
 
 - [🚀 Quick Start](#quick-start)
 - [✨ Features](#features)
+- [💰 Spend, Cache & Effort](#spend-cache-effort)
 - [📊 Smart Pace Indicator](#smart-pace-indicator)
 - [💥 Burst & Credit Indicators](#burst--credit-indicators)
 - [🌍 Environmental Impact](#environmental-impact)
@@ -64,13 +65,13 @@ Create `~/.claude/claudeline.conf` to customize without env vars:
 ```bash
 # ~/.claude/claudeline.conf
 theme=nord
-segments=context,git,pace,duration,tokens,throughput,model
+segments=context,git,pace,duration,tokens,spend,cache,effort,throughput,model
 no_network=0
 ```
 
 Env vars override config file values. All keys are optional.
 
-Available keys: `theme`, `segments`, `no_network`, `no_color`, `debug`, `debug_log`, `jsonl_cache_ttl`, `extra_usage_ttl`, `trend_window`, `trend_history_max_age`
+Available keys: `theme`, `segments`, `no_network`, `no_color`, `debug`, `debug_log`, `jsonl_cache_ttl`, `extra_usage_ttl`, `spend_cache_ttl`, `spend_block_seconds`, `trend_window`, `trend_history_max_age`, and the `cost_rate_*` knobs listed below.
 
 </details>
 
@@ -151,7 +152,40 @@ Vibey (default), Dark, Light, Nord, and Gruvbox — plus NO_COLOR support
 Account-wide cents/min (API-active time) over the current working window, with a red/dim/green arrow and symmetric fold change (e.g. <code>↑ 3.2x</code> for 3.2× faster, <code>↓ 2.0x</code> for half-speed) against your recent baseline. Shows <code>◌</code> while current/baseline data is still warming.
 </td>
 </tr>
+<tr>
+<td align="center" width="33%">
+<h3>Spend Windows</h3>
+Rotates today, 5-hour active block, current project, and session spend from local transcript history
+</td>
+<td align="center" width="33%">
+<h3>Cache Efficiency</h3>
+Shows cache-read share (<code>🧊90%</code>) or cache-write spikes (<code>✍️5K</code>) from the live statusline payload
+</td>
+<td align="center" width="33%">
+<h3>Thinking Effort</h3>
+Shows the active thinking tier with five distinct states: <code>🌱low</code>, <code>💭med</code>, <code>🧠high</code>, <code>⚡xhi</code>, <code>🔥max</code>
+</td>
+</tr>
 </table>
+
+<hr>
+
+<h2 align="center" id="spend-cache-effort">💰 Spend, Cache & Effort</h2>
+
+**Spend window** — line 2 rotates through compact spend views:
+
+| Display | Meaning |
+|---------|---------|
+| `💰$18.00d` | Today's local-calendar spend across Claude Code transcripts |
+| `🧱$4.50/5h` | Spend inside the active rolling block window (5h by default) |
+| `📁$123.45` | All-time spend for the current project directory |
+| `💬$0.23` | Current session spend fallback while the window cache warms |
+
+Window totals are computed from local JSONL transcripts in a background refresh and cached in `.spend-cache`, so the statusline stays fast.
+
+**Cache efficiency** — `🧊90%` means most prompt/context input came from cache reads. `✍️5K` means cache writes are currently larger than cache reads, which is usually the interesting cost spike when a new setup, hook, or context load causes fresh cache creation.
+
+**Thinking effort** — the effort segment maps the current Claude Code effort level to five compact states: `🌱low`, `💭med`, `🧠high`, `⚡xhi`, `🔥max`. If thinking is enabled but no effort level is present, it shows `💭think`.
 
 <hr>
 
@@ -402,13 +436,15 @@ The API call runs in a **non-blocking background subshell** so it never stalls t
 | Variable | Effect |
 |----------|--------|
 | `CLAUDELINE_THEME=nord` | Theme: `vibey` (default), `dark`, `light`, `nord`, `gruvbox` |
-| `CLAUDELINE_SEGMENTS=context,git,pace` | Show only listed segments (default: all). Available: `context`, `git`, `lines`, `pace`, `burst`, `duration`, `credit`, `tokens`, `metric`, `throughput`, `model` |
+| `CLAUDELINE_SEGMENTS=context,git,pace` | Show only listed segments (default: all). Available: `context`, `git`, `lines`, `pace`, `burst`, `duration`, `credit`, `tokens`, `spend`, `cache`, `effort`, `metric`, `throughput`, `model` |
 | `NO_COLOR=1` | Disables all color output ([spec](https://no-color.org)) |
 | `CLAUDELINE_NO_NETWORK=1` | Disables all network access — the API call is skipped entirely |
 | `CLAUDELINE_DEBUG=1` | Enables debug logging to `$TMPDIR/claudeline-statusline-debug.log` |
 | `CLAUDELINE_DEBUG_LOG=/path` | Custom debug log path (requires `CLAUDELINE_DEBUG=1`) |
 | `JSONL_CACHE_TTL=300` | JSONL cache lifetime in seconds (default: 300) |
 | `EXTRA_USAGE_TTL=600` | Extra usage / credit cache lifetime in seconds (default: 600) |
+| `SPEND_CACHE_TTL=600` | Spend window cache lifetime in seconds (default: 600). Stale values render immediately while a background refresh runs. |
+| `SPEND_BLOCK_SECONDS=18000` | Rolling active block spend window in seconds (default: 5h). |
 | `TREND_WINDOW=900` | Trend arrow sample window in seconds (default: 900) |
 | `TREND_HISTORY_MAX_AGE=86400` | Max age for trend history entries in seconds (default: 86400) |
 | `COST_RATE_CURRENT_WINDOW=3600` | Current account-wide cost-rate window, in wall-clock seconds (default: 1h). Rates divide only by API-active time inside the window, so idle time does not lower the pace. `COST_RATE_WINDOW` is still accepted as a legacy alias. |
@@ -429,6 +465,8 @@ The API call runs in a **non-blocking background subshell** so it never stalls t
 | `.jsonl-cache` | Cached all-time token/cost totals (5-min TTL; stale values are served immediately while a background refresh runs) |
 | `.jsonl-state` | Per-file JSONL scan state for incremental refreshes |
 | `.refresh.lock.d/` | Lock directory to prevent concurrent background JSONL refreshes |
+| `.spend-cache` | Cached today, rolling-block, and current-project spend totals |
+| `.spend-refresh.lock.d/` | Lock directory to prevent concurrent spend scans |
 | `.usage-history` | Rolling 24h usage samples for trend arrows |
 | `.cost-rate-history` | Account-wide `(bucket_epoch, cost_delta_cents, api_delta_ms)` buckets for the cost-rate slot, pruned to 7d |
 | `.cost-rate-state` | Last-seen per-session cumulative totals used to turn session counters into account-wide cost-rate buckets |

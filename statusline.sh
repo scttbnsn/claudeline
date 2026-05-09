@@ -25,8 +25,20 @@ if [ -f "$CLAUDELINE_CONF" ]; then
             no_color)             [ -z "${NO_COLOR:-}" ]                    && NO_COLOR="$_val" ;;
             jsonl_cache_ttl)      [ -z "${JSONL_CACHE_TTL:-}" ]             && JSONL_CACHE_TTL="$_val" ;;
             extra_usage_ttl)      [ -z "${EXTRA_USAGE_TTL:-}" ]             && EXTRA_USAGE_TTL="$_val" ;;
+            spend_cache_ttl)      [ -z "${SPEND_CACHE_TTL:-}" ]             && SPEND_CACHE_TTL="$_val" ;;
+            spend_block_seconds)  [ -z "${SPEND_BLOCK_SECONDS:-}" ]         && SPEND_BLOCK_SECONDS="$_val" ;;
             trend_window)         [ -z "${TREND_WINDOW:-}" ]                && TREND_WINDOW="$_val" ;;
             trend_history_max_age) [ -z "${TREND_HISTORY_MAX_AGE:-}" ]      && TREND_HISTORY_MAX_AGE="$_val" ;;
+            cost_rate_current_window) [ -z "${COST_RATE_CURRENT_WINDOW:-}" ] && COST_RATE_CURRENT_WINDOW="$_val" ;;
+            cost_rate_baseline_window) [ -z "${COST_RATE_BASELINE_WINDOW:-}" ] && COST_RATE_BASELINE_WINDOW="$_val" ;;
+            cost_rate_bucket_seconds) [ -z "${COST_RATE_BUCKET_SECONDS:-}" ] && COST_RATE_BUCKET_SECONDS="$_val" ;;
+            cost_rate_min_current_api_ms) [ -z "${COST_RATE_MIN_CURRENT_API_MS:-}" ] && COST_RATE_MIN_CURRENT_API_MS="$_val" ;;
+            cost_rate_min_baseline_api_ms) [ -z "${COST_RATE_MIN_BASELINE_API_MS:-}" ] && COST_RATE_MIN_BASELINE_API_MS="$_val" ;;
+            cost_rate_history_max_age) [ -z "${COST_RATE_HISTORY_MAX_AGE:-}" ] && COST_RATE_HISTORY_MAX_AGE="$_val" ;;
+            cost_rate_trend_hot_x100) [ -z "${COST_RATE_TREND_HOT_X100:-}" ] && COST_RATE_TREND_HOT_X100="$_val" ;;
+            cost_rate_trend_warm_x100) [ -z "${COST_RATE_TREND_WARM_X100:-}" ] && COST_RATE_TREND_WARM_X100="$_val" ;;
+            cost_rate_trend_cool_x100) [ -z "${COST_RATE_TREND_COOL_X100:-}" ] && COST_RATE_TREND_COOL_X100="$_val" ;;
+            cost_rate_trend_cold_x100) [ -z "${COST_RATE_TREND_COLD_X100:-}" ] && COST_RATE_TREND_COLD_X100="$_val" ;;
         esac
     done < "$CLAUDELINE_CONF"
 fi
@@ -161,7 +173,8 @@ if [ -n "${CLAUDELINE_SEGMENTS:-}" ]; then
     _SEG_ALL=0
     _SEG_CONTEXT=0; _SEG_GIT=0; _SEG_LINES=0; _SEG_PACE=0
     _SEG_BURST=0; _SEG_DURATION=0; _SEG_CREDIT=0
-    _SEG_TOKENS=0; _SEG_METRIC=0; _SEG_THROUGHPUT=0; _SEG_MODEL=0
+    _SEG_TOKENS=0; _SEG_SPEND=0; _SEG_CACHE=0; _SEG_EFFORT=0
+    _SEG_METRIC=0; _SEG_THROUGHPUT=0; _SEG_MODEL=0
     IFS=',' read -ra _segs <<< "$CLAUDELINE_SEGMENTS"
     for _s in "${_segs[@]}"; do
         case "${_s## }" in  # trim leading space
@@ -173,6 +186,9 @@ if [ -n "${CLAUDELINE_SEGMENTS:-}" ]; then
             duration)   _SEG_DURATION=1 ;;
             credit)     _SEG_CREDIT=1 ;;
             tokens)     _SEG_TOKENS=1 ;;
+            spend)      _SEG_SPEND=1 ;;
+            cache)      _SEG_CACHE=1 ;;
+            effort)     _SEG_EFFORT=1 ;;
             metric)     _SEG_METRIC=1 ;;
             throughput) _SEG_THROUGHPUT=1 ;;
             model)      _SEG_MODEL=1 ;;
@@ -181,7 +197,8 @@ if [ -n "${CLAUDELINE_SEGMENTS:-}" ]; then
 else
     _SEG_CONTEXT=1; _SEG_GIT=1; _SEG_LINES=1; _SEG_PACE=1
     _SEG_BURST=1; _SEG_DURATION=1; _SEG_CREDIT=1
-    _SEG_TOKENS=1; _SEG_METRIC=1; _SEG_THROUGHPUT=1; _SEG_MODEL=1
+    _SEG_TOKENS=1; _SEG_SPEND=1; _SEG_CACHE=1; _SEG_EFFORT=1
+    _SEG_METRIC=1; _SEG_THROUGHPUT=1; _SEG_MODEL=1
 fi
 
 seg_on() { [ "${_SEG_ALL}" -eq 1 ] || [ "${1:-0}" -eq 1 ]; }
@@ -193,6 +210,8 @@ JSONL_STATE="$CACHE_DIR/.jsonl-state"
 EXTRA_USAGE_CACHE="$CACHE_DIR/.extra-usage-cache"
 EXTRA_USAGE_LOCK="$CACHE_DIR/.extra-usage-fetch.lock"
 EXTRA_USAGE_TTL=${EXTRA_USAGE_TTL:-600}
+SPEND_CACHE="$CACHE_DIR/.spend-cache"
+SPEND_LOCK="$CACHE_DIR/.spend-refresh.lock.d"
 USAGE_HISTORY="$CACHE_DIR/.usage-history"
 COST_RATE_HISTORY="$CACHE_DIR/.cost-rate-history"
 COST_RATE_STATE="$CACHE_DIR/.cost-rate-state"
@@ -233,15 +252,26 @@ if ! INPUT_FIELDS=$(printf '%s\n' "$input" | jq -r '[
         (.rate_limits.seven_day.resets_at // "_"),
         (.rate_limits.five_hour.used_percentage // "_"),
         (.rate_limits.five_hour.resets_at // "_"),
-        (.session_id // "")
+        (.session_id // "_"),
+        (.context_window.current_usage.input_tokens // 0),
+        (.context_window.current_usage.output_tokens // 0),
+        (.context_window.current_usage.cache_creation_input_tokens // 0),
+        (.context_window.current_usage.cache_read_input_tokens // 0),
+        (.effort.level // "_"),
+        (.thinking.enabled // false)
     ] | @tsv' 2>>"$STATUSLINE_DEBUG_LOG"); then
     debug_log "Failed to parse statusline input; using defaults"
-    INPUT_FIELDS=$'Claude\t\t0\t0\t0\t0\t0\t0\t0\t0\t200000\t_\t_\t_\t_\t'
+    INPUT_FIELDS=$'Claude\t\t0\t0\t0\t0\t0\t0\t0\t0\t200000\t_\t_\t_\t_\t_\t0\t0\t0\t0\t_\tfalse'
 fi
 
 IFS=$'\t' read -r MODEL CURRENT_DIR LINES_ADDED LINES_REMOVED \
     TOTAL_INPUT TOTAL_OUTPUT DURATION_MS API_DURATION_MS TOTAL_COST CURRENT_TOKENS CONTEXT_WINDOW_SIZE \
-    WEEKLY_USAGE RESETS_AT BURST_USAGE BURST_RESETS SESSION_ID <<< "$INPUT_FIELDS"
+    WEEKLY_USAGE RESETS_AT BURST_USAGE BURST_RESETS SESSION_ID \
+    CURRENT_INPUT_TOKENS CURRENT_OUTPUT_TOKENS CURRENT_CACHE_WRITE_TOKENS CURRENT_CACHE_READ_TOKENS \
+    EFFORT_LEVEL THINKING_ENABLED <<< "$INPUT_FIELDS"
+
+[ "$SESSION_ID" = "_" ] && SESSION_ID=""
+[ "$EFFORT_LEVEL" = "_" ] && EFFORT_LEVEL=""
 
 normalize_scalar_var LINES_ADDED int 0 "lines added"
 normalize_scalar_var LINES_REMOVED int 0 "lines removed"
@@ -251,6 +281,10 @@ normalize_scalar_var DURATION_MS int 0 "duration ms"
 normalize_scalar_var API_DURATION_MS int 0 "api duration ms"
 normalize_scalar_var TOTAL_COST decimal 0 "total cost usd"
 normalize_scalar_var CURRENT_TOKENS int 0 "current tokens"
+normalize_scalar_var CURRENT_INPUT_TOKENS int 0 "current input tokens"
+normalize_scalar_var CURRENT_OUTPUT_TOKENS int 0 "current output tokens"
+normalize_scalar_var CURRENT_CACHE_WRITE_TOKENS int 0 "current cache write tokens"
+normalize_scalar_var CURRENT_CACHE_READ_TOKENS int 0 "current cache read tokens"
 normalize_scalar_var CONTEXT_WINDOW_SIZE int 200000 "context window size"
 normalize_scalar_var WEEKLY_USAGE rate "_" "weekly usage"
 normalize_scalar_var BURST_USAGE rate "_" "burst usage"
@@ -259,6 +293,7 @@ normalize_scalar_var BURST_RESETS int 0 "burst reset epoch"
 
 # Derived values (pure bash math, no bc)
 SESSION_TOKENS=$((TOTAL_INPUT + TOTAL_OUTPUT))
+CURRENT_TOKENS=$((CURRENT_INPUT_TOKENS + CURRENT_CACHE_WRITE_TOKENS + CURRENT_CACHE_READ_TOKENS))
 if ! decimal_to_scaled "$TOTAL_COST" 2; then
     debug_log "Invalid total cost value '${TOTAL_COST:-<empty>}'; defaulting session cost to 0"
     TOTAL_COST_CENTS=0
@@ -669,9 +704,31 @@ if seg_on "$_SEG_TOKENS"; then
     CTX_PADDED=$(printf "%13s" "$CTX_STATS")
     _L2_TOKENS="${DIM}${CTX_PADDED}${RESET}"
 fi
+_L2_SPEND=""
+if seg_on "$_SEG_SPEND"; then
+    TODAY_COST_CENTS=0
+    BLOCK_COST_CENTS=0
+    PROJECT_COST_CENTS=0
+    get_spend_window_totals_nonblocking "$NOW" "$CURRENT_DIR"
+    if [ -n "$REPLY" ]; then
+        read -r TODAY_COST_CENTS BLOCK_COST_CENTS PROJECT_COST_CENTS <<< "$REPLY"
+    fi
+    format_spend_indicator "$TODAY_COST_CENTS" "$BLOCK_COST_CENTS" "$PROJECT_COST_CENTS" "$TOTAL_COST_CENTS" "$NOW"
+    _L2_SPEND=$REPLY
+fi
+_L2_CACHE=""
+if seg_on "$_SEG_CACHE"; then
+    format_cache_efficiency_indicator "$CURRENT_INPUT_TOKENS" "$CURRENT_CACHE_WRITE_TOKENS" "$CURRENT_CACHE_READ_TOKENS"
+    _L2_CACHE=$REPLY
+fi
+_L2_EFFORT=""
+if seg_on "$_SEG_EFFORT"; then
+    format_effort_indicator "$EFFORT_LEVEL" "$THINKING_ENABLED"
+    _L2_EFFORT=$REPLY
+fi
 _L2_MODEL=""; seg_on "$_SEG_MODEL" && _L2_MODEL="${DIM}${MODEL}${RESET}"
 _L2_DURATION=""; seg_on "$_SEG_DURATION" && _L2_DURATION="$DURATION_INFO"
 _L2_METRIC=""; seg_on "$_SEG_METRIC" && _L2_METRIC="$METRIC_INFO"
 
-# Priority order: tokens > metric > model > duration
-printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_METRIC" "$_L2_MODEL" "$_L2_DURATION")"
+# Priority order: tokens > spend > cache > effort > metric > model > duration
+printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_SPEND" "$_L2_CACHE" "$_L2_EFFORT" "$_L2_METRIC" "$_L2_MODEL" "$_L2_DURATION")"

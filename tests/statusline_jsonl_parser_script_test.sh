@@ -61,6 +61,8 @@ assert_eq "14 2135 10 2 1 1" "$(run_cold_scan $'{"type":"message","model":"claud
 assert_eq "17 10905 10 5 1 1" "$(run_cold_scan $'{"type":"message","model":"claude-sonnet-4","usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":1,"cache_read_input_tokens":1}}\n')" "cold-scan uses Sonnet pricing for shared usage payloads"
 assert_eq "17 54525 10 5 1 1" "$(run_cold_scan $'{"type":"message","model":"claude-opus-4","usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":1,"cache_read_input_tokens":1}}\n')" "cold-scan uses legacy Opus pricing for the same usage payload"
 assert_eq "17 18175 10 5 1 1" "$(run_cold_scan $'{"type":"message","model":"claude-opus-4-5","usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":1,"cache_read_input_tokens":1}}\n')" "cold-scan uses newer Opus pricing tiers distinct from Sonnet"
+assert_eq "17 10905 10 5 1 1" "$(run_cold_scan $'{"type":"assistant","message":{"id":"msg_nested","type":"message","model":"claude-sonnet-4","usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":1,"cache_read_input_tokens":1}},"timestamp":"2026-05-09T14:00:00.000Z","cwd":"/repo"}\n')" "cold-scan reads modern nested Claude Code assistant usage"
+assert_eq "17 10905 10 5 1 1" "$(run_cold_scan $'{"type":"assistant","message":{"id":"msg_dupe","type":"message","model":"claude-sonnet-4","usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":1,"cache_read_input_tokens":1}},"timestamp":"2026-05-09T14:00:00.000Z","cwd":"/repo"}\n{"type":"assistant","message":{"id":"msg_dupe","type":"message","model":"claude-sonnet-4","usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":1,"cache_read_input_tokens":1}},"timestamp":"2026-05-09T14:00:01.000Z","cwd":"/repo"}\n')" "cold-scan counts duplicated Claude Code message ids once"
 assert_eq "0 0 0 0 0 0" "$(run_cold_scan "")" "cold-scan returns zeros for empty input"
 assert_eq "0 0 0 0 0 0" "$(run_cold_scan $'garbage\nnot-json\n')" "cold-scan ignores garbage lines"
 assert_eq "15 10500 10 5 0 0" "$(run_cold_scan $'{"type":"message","model":"claude-sonnet-4","usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}\n{"type":"message","usage":{"input_tokens":7' )" "cold-scan ignores truncated JSON lines"
@@ -119,5 +121,9 @@ EOF
 shrunk_out="$tmpdir/shrunk-out"
 shrunk_refresh=$(printf '%s\0' "$shrunk_file" | perl "$parser" refresh-state "$shrunk_state" 300 "$shrunk_out")
 assert_eq "2 1800 1 1 0 0" "$shrunk_refresh" "refresh-state reparses files that shrink"
+
+window_input=$'{"type":"assistant","message":{"id":"today_repo","type":"message","model":"claude-sonnet-4","usage":{"input_tokens":1000000,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"timestamp":"2026-05-09T14:00:00.000Z","cwd":"/repo"}\n{"type":"assistant","message":{"id":"today_other","type":"message","model":"claude-sonnet-4","usage":{"input_tokens":0,"output_tokens":1000000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"timestamp":"2026-05-09T13:00:00.000Z","cwd":"/other"}\n{"type":"assistant","message":{"id":"old_repo","type":"message","model":"claude-sonnet-4","usage":{"input_tokens":1000000,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"timestamp":"2026-05-08T23:00:00.000Z","cwd":"/repo"}\n'
+window_summary=$(printf '%s' "$window_input" | TZ=America/New_York perl "$parser" window-scan 1778342400 /repo)
+assert_eq "1800 1800 600" "$window_summary" "window-scan returns today, active-block, and current-project cost cents"
 
 printf 'ok\n'

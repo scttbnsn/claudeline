@@ -798,6 +798,119 @@ format_duration() {
     fi
 }
 
+format_cost_cents() {
+    local cents=$1
+    local dollars cents_remainder
+
+    [[ "$cents" =~ ^[0-9]+$ ]] || cents=0
+    dollars=$((cents / 100))
+    cents_remainder=$((cents % 100))
+    printf -v REPLY '$%d.%02d' "$dollars" "$cents_remainder"
+}
+
+format_effort_indicator() {
+    local effort_level=${1:-}
+    local thinking_enabled=${2:-false}
+    local emoji="" label=""
+
+    case "$effort_level" in
+        low)    emoji="🌱"; label="low" ;;
+        medium) emoji="💭"; label="med" ;;
+        high)   emoji="🧠"; label="high" ;;
+        xhigh)  emoji="⚡"; label="xhi" ;;
+        max)    emoji="🔥"; label="max" ;;
+        "")
+            case "$thinking_enabled" in
+                true|1|yes|on) emoji="💭"; label="think" ;;
+            esac
+            ;;
+        *)
+            case "$thinking_enabled" in
+                true|1|yes|on) emoji="💭"; label="think" ;;
+            esac
+            ;;
+    esac
+
+    if [ -n "$emoji" ]; then
+        REPLY="${DIM}${emoji}${label}${RESET}"
+    else
+        REPLY=""
+    fi
+}
+
+format_cache_efficiency_indicator() {
+    local input_tokens=$1
+    local cache_write_tokens=$2
+    local cache_read_tokens=$3
+
+    [[ "$input_tokens" =~ ^[0-9]+$ ]] || input_tokens=0
+    [[ "$cache_write_tokens" =~ ^[0-9]+$ ]] || cache_write_tokens=0
+    [[ "$cache_read_tokens" =~ ^[0-9]+$ ]] || cache_read_tokens=0
+
+    if [ "$cache_write_tokens" -gt "$cache_read_tokens" ] && [ "$cache_write_tokens" -gt 0 ]; then
+        REPLY="${DIM}✍️$(format_number "$cache_write_tokens")${RESET}"
+        return
+    fi
+
+    if [ "$cache_read_tokens" -gt 0 ]; then
+        local total_tokens=$((input_tokens + cache_write_tokens + cache_read_tokens))
+        local pct=0
+        if [ "$total_tokens" -gt 0 ]; then
+            pct=$(( (cache_read_tokens * 100 + total_tokens / 2) / total_tokens ))
+        fi
+        REPLY="${DIM}🧊${pct}%${RESET}"
+        return
+    fi
+
+    REPLY=""
+}
+
+format_spend_indicator() {
+    local today_cost_cents=$1
+    local block_cost_cents=$2
+    local project_cost_cents=$3
+    local session_cost_cents=$4
+    local now=${5:-${NOW:-$(date +%s)}}
+    local cycle=$(( (now / 10) % 10 ))
+    local selected_cents=0
+    local prefix="" suffix=""
+
+    [[ "$today_cost_cents" =~ ^[0-9]+$ ]] || today_cost_cents=0
+    [[ "$block_cost_cents" =~ ^[0-9]+$ ]] || block_cost_cents=0
+    [[ "$project_cost_cents" =~ ^[0-9]+$ ]] || project_cost_cents=0
+    [[ "$session_cost_cents" =~ ^[0-9]+$ ]] || session_cost_cents=0
+
+    if [ "$cycle" -le 2 ]; then
+        selected_cents=$today_cost_cents
+        prefix="💰"
+        suffix="d"
+    elif [ "$cycle" -le 5 ]; then
+        selected_cents=$block_cost_cents
+        prefix="🧱"
+        suffix="/5h"
+    elif [ "$cycle" -le 8 ]; then
+        selected_cents=$project_cost_cents
+        prefix="📁"
+    else
+        selected_cents=$session_cost_cents
+        prefix="💬"
+    fi
+
+    if [ "$selected_cents" -le 0 ] && [ "$session_cost_cents" -gt 0 ]; then
+        selected_cents=$session_cost_cents
+        prefix="💬"
+        suffix=""
+    fi
+
+    if [ "$selected_cents" -le 0 ]; then
+        REPLY=""
+        return
+    fi
+
+    format_cost_cents "$selected_cents"
+    REPLY="${DIM}${prefix}${REPLY}${suffix}${RESET}"
+}
+
 # Format burst indicator with optional countdown near/at the burst limit.
 format_burst_indicator() {
     local burst_usage=$1

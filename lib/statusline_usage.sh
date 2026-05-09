@@ -14,6 +14,8 @@ COST_RATE_TREND_HOT_X100=${COST_RATE_TREND_HOT_X100:-150}
 COST_RATE_TREND_WARM_X100=${COST_RATE_TREND_WARM_X100:-115}
 COST_RATE_TREND_COOL_X100=${COST_RATE_TREND_COOL_X100:-85}
 COST_RATE_TREND_COLD_X100=${COST_RATE_TREND_COLD_X100:-50}
+SPEND_CACHE_TTL=${SPEND_CACHE_TTL:-600}
+SPEND_BLOCK_SECONDS=${SPEND_BLOCK_SECONDS:-18000}
 STATUSLINE_USAGE_DIR=$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 STATUSLINE_JSONL_PARSER=${STATUSLINE_JSONL_PARSER:-$STATUSLINE_USAGE_DIR/jsonl_parser.pl}
 STATUSLINE_STAT_MTIME_FLAG=${STATUSLINE_STAT_MTIME_FLAG:-}
@@ -129,6 +131,27 @@ collect_jsonl_search_roots() {
     [ -d "$HOME/.claude/projects" ] && JSONL_SEARCH_ROOTS+=("$HOME/.claude/projects")
     [ -d "$HOME/.config/claude/projects" ] && JSONL_SEARCH_ROOTS+=("$HOME/.config/claude/projects")
     [ "${#JSONL_SEARCH_ROOTS[@]}" -gt 0 ]
+}
+
+encode_claude_project_dir() {
+    local current_dir=$1
+    local out_var=$2
+    local encoded=${current_dir//\//-}
+
+    printf -v "$out_var" '%s' "$encoded"
+}
+
+collect_project_jsonl_search_roots() {
+    local current_dir=$1
+    local encoded_dir=""
+
+    PROJECT_JSONL_SEARCH_ROOTS=()
+    [ -n "$current_dir" ] || return 1
+    encode_claude_project_dir "$current_dir" encoded_dir
+
+    [ -d "$HOME/.claude/projects/$encoded_dir" ] && PROJECT_JSONL_SEARCH_ROOTS+=("$HOME/.claude/projects/$encoded_dir")
+    [ -d "$HOME/.config/claude/projects/$encoded_dir" ] && PROJECT_JSONL_SEARCH_ROOTS+=("$HOME/.config/claude/projects/$encoded_dir")
+    [ "${#PROJECT_JSONL_SEARCH_ROOTS[@]}" -gt 0 ]
 }
 
 # Fast streaming scan for cold start (no per-file state, just global totals).
@@ -324,6 +347,164 @@ get_jsonl_totals() {
 
     debug_log "JSONL totals unavailable; returning zeroed fallback"
     printf '%s\n0 0 0 0 0 0\n' "$now"
+}
+
+write_spend_cache() {
+    local now=$1
+    local summary=$2
+    local today_cost_cents block_cost_cents project_cost_cents tmp_cache
+
+    read -r today_cost_cents block_cost_cents project_cost_cents <<< "$summary"
+    today_cost_cents=${today_cost_cents:-0}
+    block_cost_cents=${block_cost_cents:-0}
+    project_cost_cents=${project_cost_cents:-0}
+    [[ "$today_cost_cents" =~ ^[0-9]+$ ]] || today_cost_cents=0
+    [[ "$block_cost_cents" =~ ^[0-9]+$ ]] || block_cost_cents=0
+    [[ "$project_cost_cents" =~ ^[0-9]+$ ]] || project_cost_cents=0
+
+    tmp_cache=$(mktemp "${CACHE_DIR}/.spend-cache-XXXXXX") || return 1
+    printf '%s\n%s %s %s\n' "$now" "$today_cost_cents" "$block_cost_cents" "$project_cost_cents" > "$tmp_cache" || {
+        rm -f "$tmp_cache"
+        return 1
+    }
+    mv "$tmp_cache" "$SPEND_CACHE" 2>>"$STATUSLINE_DEBUG_LOG" || {
+        debug_log "Failed to atomically update $SPEND_CACHE"
+        rm -f "$tmp_cache"
+        return 1
+    }
+}
+
+read_spend_cache() {
+    local now=$1
+    local max_age=${2:-600}
+    local cache_time cache_summary cache_age
+
+    SPEND_CACHE_VALUE=""
+    SPEND_CACHE_IS_FRESH=0
+    [ -f "$SPEND_CACHE" ] || return 1
+
+    exec 3<"$SPEND_CACHE" || return 1
+    read -r cache_time <&3 || { exec 3<&-; return 1; }
+    read -r cache_summary <&3 || cache_summary=""
+    exec 3<&-
+
+    if ! [[ "$cache_time" =~ ^[0-9]+$ ]]; then
+        debug_log "Ignoring invalid spend cache timestamp in $SPEND_CACHE: ${cache_time:-<empty>}"
+        return 1
+    fi
+    if ! [[ "$cache_summary" =~ ^[0-9]+[[:space:]][0-9]+[[:space:]][0-9]+$ ]]; then
+        debug_log "Ignoring invalid spend cache value in $SPEND_CACHE: ${cache_summary:-<empty>}"
+        return 1
+    fi
+
+    cache_age=$((now - cache_time))
+    [ "$cache_age" -lt "$max_age" ] && SPEND_CACHE_IS_FRESH=1
+    SPEND_CACHE_VALUE=$cache_summary
+    return 0
+}
+
+refresh_spend_cache_now() {
+    local now=$1
+    local current_dir=$2
+    local summary="0 0 0"
+    local today_cost_cents=0 block_cost_cents=0 project_cost_cents=0
+    local recent_mins=$((SECONDS_PER_DAY / 60 + 120))
+    local first_recent="" first_project="" project_summary=""
+    local _project_tokens project_cost_units _project_input _project_output _project_cw _project_cr
+
+    collect_jsonl_search_roots || {
+        debug_log "No JSONL search roots found for spend scan"
+        return 1
+    }
+
+    if [[ "${SPEND_BLOCK_SECONDS:-18000}" =~ ^[0-9]+$ ]] && [ "${SPEND_BLOCK_SECONDS:-18000}" -gt "$SECONDS_PER_DAY" ]; then
+        recent_mins=$((SPEND_BLOCK_SECONDS / 60 + 120))
+    fi
+
+    first_recent=$(find "${JSONL_SEARCH_ROOTS[@]}" \
+        -name "*.jsonl" -type f -not -type l -mmin "-$recent_mins" -print -quit \
+        2>>"$STATUSLINE_DEBUG_LOG" || true)
+    if [ -n "$first_recent" ]; then
+        summary=$(find "${JSONL_SEARCH_ROOTS[@]}" \
+            -name "*.jsonl" -type f -not -type l -mmin "-$recent_mins" -print0 2>>"$STATUSLINE_DEBUG_LOG" \
+            | xargs -0 cat 2>/dev/null \
+            | perl "$STATUSLINE_JSONL_PARSER" window-scan "$now" "$current_dir" "${SPEND_BLOCK_SECONDS:-18000}" \
+            2>>"$STATUSLINE_DEBUG_LOG") || summary="0 0 0"
+    fi
+    read -r today_cost_cents block_cost_cents _ <<< "${summary:-0 0 0}"
+    today_cost_cents=${today_cost_cents:-0}
+    block_cost_cents=${block_cost_cents:-0}
+
+    if collect_project_jsonl_search_roots "$current_dir"; then
+        first_project=$(find "${PROJECT_JSONL_SEARCH_ROOTS[@]}" \
+            -name "*.jsonl" -type f -not -type l -print -quit 2>>"$STATUSLINE_DEBUG_LOG" || true)
+        if [ -n "$first_project" ]; then
+            project_summary=$(find "${PROJECT_JSONL_SEARCH_ROOTS[@]}" \
+                -name "*.jsonl" -type f -not -type l -print0 2>>"$STATUSLINE_DEBUG_LOG" \
+                | xargs -0 cat 2>/dev/null \
+                | perl "$STATUSLINE_JSONL_PARSER" cold-scan 2>>"$STATUSLINE_DEBUG_LOG") || project_summary=""
+            read -r _project_tokens project_cost_units _project_input _project_output _project_cw _project_cr <<< "$project_summary"
+            project_cost_units=${project_cost_units:-0}
+            if [[ "$project_cost_units" =~ ^[0-9]+$ ]]; then
+                project_cost_cents=$(( (project_cost_units + 500000) / 1000000 ))
+            fi
+        fi
+    fi
+
+    write_spend_cache "$now" "$today_cost_cents $block_cost_cents $project_cost_cents"
+}
+
+start_spend_refresh() {
+    local now=$1
+    local current_dir=$2
+    local lock_dir=${SPEND_LOCK:-}
+
+    [ -n "$lock_dir" ] || return 0
+
+    if [ -d "$lock_dir" ]; then
+        local stale
+        stale=$(find "$lock_dir" -maxdepth 0 -mmin +10 -print 2>/dev/null)
+        if [ -n "$stale" ]; then
+            debug_log "Removing stale spend refresh lock $lock_dir"
+            rmdir "$lock_dir" 2>/dev/null || true
+        fi
+    fi
+
+    mkdir "$lock_dir" 2>/dev/null || {
+        debug_log "Background spend refresh already in progress; skipping"
+        return 0
+    }
+
+    (
+        # shellcheck disable=SC2064
+        trap "rmdir '$lock_dir' 2>/dev/null" EXIT INT TERM
+        refresh_spend_cache_now "$now" "$current_dir" >/dev/null 2>&1 || true
+    ) </dev/null >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+    return 0
+}
+
+get_spend_window_totals_nonblocking() {
+    local now=${1:-${NOW:-$(date +%s)}}
+    local current_dir=${2:-}
+
+    REPLY=""
+    if read_spend_cache "$now" "${SPEND_CACHE_TTL:-600}"; then
+        REPLY=$SPEND_CACHE_VALUE
+        if [ "$SPEND_CACHE_IS_FRESH" -eq 1 ]; then
+            return 0
+        fi
+    fi
+
+    if [ "${STATUSLINE_SPEND_REFRESH_BLOCKING:-0}" = "1" ]; then
+        if refresh_spend_cache_now "$now" "$current_dir" && read_spend_cache "$now" "${SPEND_CACHE_TTL:-600}"; then
+            REPLY=$SPEND_CACHE_VALUE
+        fi
+        return 0
+    fi
+
+    start_spend_refresh "$now" "$current_dir"
+    return 0
 }
 
 write_extra_usage_cache() {

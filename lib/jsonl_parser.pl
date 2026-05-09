@@ -3,6 +3,7 @@ use strict;
 use warnings;
 use JSON::PP qw(decode_json);
 use FindBin qw($Bin);
+use Time::Local qw(timegm timelocal);
 
 my $PRICING_MANIFEST_PATH = $ENV{STATUSLINE_PRICING_MANIFEST} // "$Bin/anthropic_pricing.json";
 my %PRICING_BY_KEY;
@@ -11,7 +12,7 @@ my %FALLBACK_PRICING_KEYS;
 my %WARNED_UNKNOWN_MODELS;
 
 sub usage {
-    die "usage: $0 cold-scan | refresh-state <state_path> <now> <out_path>\n";
+    die "usage: $0 cold-scan | refresh-state <state_path> <now> <out_path> | window-scan <now> <current_dir> [block_seconds]\n";
 }
 
 sub slurp {
@@ -131,27 +132,43 @@ sub cost_units_for_line {
         + $cache_read * $pricing->{cache_read_cost_units};
 }
 
-sub usage_fields_from_line {
+sub usage_record_from_line {
     my ($line) = @_;
     my $data = eval { decode_json($line) };
     return unless $data && ref($data) eq 'HASH';
-    return unless ($data->{type} // '') eq 'message';
-    return unless ref($data->{usage}) eq 'HASH';
 
-    my $input = usage_int_field($data->{usage}, 'input_tokens');
-    my $output = usage_int_field($data->{usage}, 'output_tokens');
-    my $cache_write = usage_int_field($data->{usage}, 'cache_creation_input_tokens');
-    my $cache_read = usage_int_field($data->{usage}, 'cache_read_input_tokens');
+    my $message = $data;
+    if (($data->{type} // '') eq 'assistant' && ref($data->{message}) eq 'HASH') {
+        $message = $data->{message};
+    } elsif (($data->{type} // '') ne 'message') {
+        return;
+    }
+
+    return unless ($message->{type} // 'message') eq 'message';
+    return unless ref($message->{usage}) eq 'HASH';
+
+    my $input = usage_int_field($message->{usage}, 'input_tokens');
+    my $output = usage_int_field($message->{usage}, 'output_tokens');
+    my $cache_write = usage_int_field($message->{usage}, 'cache_creation_input_tokens');
+    my $cache_read = usage_int_field($message->{usage}, 'cache_read_input_tokens');
     my $total_tokens = $input + $output + $cache_write + $cache_read;
     my $cost_units = cost_units_for_line(
-        $data->{model},
+        $message->{model} // $data->{model},
         $input,
         $output,
         $cache_write,
         $cache_read,
     );
+    my $message_id = $message->{id};
+    $message_id = undef unless defined $message_id && length $message_id;
+    my $workspace_cwd = ref($data->{workspace}) eq 'HASH' ? $data->{workspace}{current_dir} : undef;
 
-    return ($total_tokens, $cost_units, $input, $output, $cache_write, $cache_read);
+    return {
+        id => $message_id,
+        timestamp => $data->{timestamp} // $message->{timestamp},
+        cwd => $data->{cwd} // $workspace_cwd // $message->{cwd},
+        fields => [$total_tokens, $cost_units, $input, $output, $cache_write, $cache_read],
+    };
 }
 
 sub zero_summary {
@@ -161,10 +178,13 @@ sub zero_summary {
 sub summarize_handle {
     my ($fh) = @_;
     my ($total_tokens, $total_cost_units, $total_input, $total_output, $total_cw, $total_cr) = zero_summary();
+    my %seen_message_ids;
 
     while (my $line = <$fh>) {
-        my @fields = usage_fields_from_line($line);
-        next unless @fields;
+        my $record = usage_record_from_line($line);
+        next unless $record;
+        next if defined $record->{id} && $seen_message_ids{$record->{id}}++;
+        my @fields = @{$record->{fields}};
 
         $total_tokens += $fields[0];
         $total_cost_units += $fields[1];
@@ -190,6 +210,24 @@ sub parse_usage_file {
 sub print_summary {
     my (@summary) = @_;
     print join(' ', @summary);
+}
+
+sub cost_units_to_cents {
+    my ($cost_units) = @_;
+    return int(($cost_units + 500_000) / 1_000_000);
+}
+
+sub timestamp_epoch {
+    my ($timestamp) = @_;
+    return unless defined $timestamp;
+    return unless $timestamp =~ /\A(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/;
+    return eval { timegm($6, $5, $4, $3, $2 - 1, $1) };
+}
+
+sub local_day_start_epoch {
+    my ($now) = @_;
+    my ($sec, $min, $hour, $mday, $mon, $year) = localtime($now);
+    return timelocal(0, 0, 0, $mday, $mon, $year);
 }
 
 sub read_nul_paths {
@@ -231,6 +269,40 @@ sub load_prior_state {
 sub run_cold_scan {
     my @summary = summarize_handle(*STDIN);
     print_summary(@summary);
+    return 0;
+}
+
+sub run_window_scan {
+    my ($now, $current_dir, $block_seconds) = @_;
+    usage() unless defined $now && $now =~ /\A\d+\z/ && defined $current_dir;
+    $block_seconds = 18_000 unless defined $block_seconds && $block_seconds =~ /\A\d+\z/ && $block_seconds > 0;
+
+    my $day_start = local_day_start_epoch($now);
+    my $block_start = $now - $block_seconds;
+    my ($today_cost_units, $block_cost_units, $project_cost_units) = (0, 0, 0);
+    my %seen_message_ids;
+
+    while (my $line = <STDIN>) {
+        my $record = usage_record_from_line($line);
+        next unless $record;
+        next if defined $record->{id} && $seen_message_ids{$record->{id}}++;
+
+        my $cost_units = $record->{fields}[1];
+        my $epoch = timestamp_epoch($record->{timestamp});
+        if (defined $epoch) {
+            $today_cost_units += $cost_units if $epoch >= $day_start && $epoch <= $now;
+            $block_cost_units += $cost_units if $epoch >= $block_start && $epoch <= $now;
+        }
+        if (defined $record->{cwd} && $record->{cwd} eq $current_dir) {
+            $project_cost_units += $cost_units;
+        }
+    }
+
+    print join(' ',
+        cost_units_to_cents($today_cost_units),
+        cost_units_to_cents($block_cost_units),
+        cost_units_to_cents($project_cost_units),
+    );
     return 0;
 }
 
@@ -294,6 +366,10 @@ if ($mode eq 'cold-scan') {
 
 if ($mode eq 'refresh-state') {
     exit run_refresh_state(@ARGV);
+}
+
+if ($mode eq 'window-scan') {
+    exit run_window_scan(@ARGV);
 }
 
 usage();
