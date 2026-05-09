@@ -826,6 +826,13 @@ format_burst_indicator() {
         return
     fi
 
+    # Alternate display: bar 7 times, then raw % 3 times (every 10 sec update).
+    local cycle=$(( (now / 10) % 10 ))
+    if [ "$cycle" -ge 7 ]; then
+        REPLY="💥${DIM}${burst_pct}%${RESET}"
+        return
+    fi
+
     if ! is_sentinel_value "$burst_resets" && [ "$burst_resets" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
         burst_reset_epoch="$burst_resets"
         secs_left=$((burst_reset_epoch - now))

@@ -54,6 +54,12 @@ assert_burst_tier "63" "💥<red>▆<reset>" "format_burst_indicator renders the
 assert_burst_tier "75" "💥<magenta>▇<reset>" "format_burst_indicator renders the magenta tier"
 assert_burst_tier "88" "💥<bright-mag>█<reset>" "format_burst_indicator renders the bright-magenta tier"
 
+format_burst_indicator "25" "_" 1270
+assert_eq "💥<dim>25%<reset>" "$REPLY" "format_burst_indicator shows raw percent on raw-display cycles"
+
+format_burst_indicator "100" "1300" 1270
+assert_eq "💥<dim>100%<reset>" "$REPLY" "format_burst_indicator shows raw percent on raw-display cycles even at limit"
+
 format_burst_indicator "100" "1300" 1200
 assert_eq "💥🤑 <dim>-2m<reset>" "$REPLY" "format_burst_indicator shows limit countdown"
 

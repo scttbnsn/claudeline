@@ -206,7 +206,7 @@ Tracks **usage% velocity** — how fast you're burning tokens compared to the su
 
 <h2 align="center" id="burst--credit-indicators">💥 Burst & Credit Indicators</h2>
 
-**💥 Burst** (5-hour rate limit) — colored bar mapped directly to API utilization %, only shown when > 0%.
+**💥 Burst** (5-hour rate limit) — colored bar mapped directly to API utilization %, only shown when > 0%. Alternates to raw percent (`💥25%`) on the same cycle style as the pace indicator.
 
 | Range | Bar | Color |
 |-------|-----|-------|
