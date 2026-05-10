@@ -180,7 +180,7 @@ Shows the active thinking tier with five distinct states: <code>🌱low</code>, 
 | `📅💰 $18.00` | Today's local-calendar spend |
 | `🧱🎟️ 1.2M` | Tokens inside the active rolling block window (5h by default) |
 | `📁📡 4.7MB` | Current project data estimate |
-| `🏆💰 $123.45` | All-time account spend |
+| `💰 $123.45 🏆` | All-time account spend |
 
 The metric types are fixed and sober: `💧` water, `⚡` power, `💰` cost, `🎟️` tokens, and `📡` data. Window totals are computed from local JSONL transcripts in a background refresh and cached in `.spend-cache`, so the statusline stays fast.
 
@@ -278,7 +278,7 @@ The rotating metrics visualize the environmental cost of AI inference:
 
 Cumulative usage across all sessions by scanning JSONL files in `~/.claude/projects/` and `~/.config/claude/projects/`.
 
-The `🏆` prefix indicates all-time totals in the scoped metric rotation. The same five metrics are used for every scope: water, power, cost, tokens, and data.
+The `🏆` suffix indicates all-time totals in the scoped metric rotation. The same five metrics are used for every scope: water, power, cost, tokens, and data.
 
 <details>
 <summary><strong>Context bar tiers</strong></summary>

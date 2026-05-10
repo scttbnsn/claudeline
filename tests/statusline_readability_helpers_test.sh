@@ -117,8 +117,14 @@ assert_eq "<dim>💰 \$0.01<reset>" "$REPLY" "metric helper renders session cost
 build_rotating_metric_info 7 0 0 0 0 0 0 1234000 12345 0 0
 assert_eq "<dim>📁💰 $project_cost<reset>" "$REPLY" "metric helper can fall forward to project cost when session cost is empty"
 
+build_rotating_metric_info 7 0 0 0 0 0 0 0 0 5000000 98765
+metric_reply=$REPLY
+format_cost_cents 98765
+all_time_cost=$REPLY
+assert_eq "<dim>💰 $all_time_cost 🏆<reset>" "$metric_reply" "metric helper renders all-time cost with trophy suffix"
+
 build_rotating_metric_info 9 0 0 0 0 0 0 0 0 5000000 98765
-assert_eq "<dim>🏆📡 $(format_data "5000000")<reset>" "$REPLY" "metric helper keeps all-time data without fun comparisons"
+assert_eq "<dim>📡 $(format_data "5000000") 🏆<reset>" "$REPLY" "metric helper keeps all-time data without stacked trophy prefix"
 
 build_rotating_metric_info 0 0 0 0 0 0 0 0 0 0 0
 assert_eq '' "$REPLY" "metric helper returns empty output when no session or all-time metrics exist"

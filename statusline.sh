@@ -372,7 +372,7 @@ build_rotating_metric_info() {
     local metric_kind=$((now_div_10 % METRIC_KIND_COUNT))
     local scope_index=$(((now_div_10 / METRIC_KIND_COUNT) % METRIC_SCOPE_COUNT))
     local attempt=0 selected_scope=0 selected_tokens=0 selected_cost_cents=0
-    local scope_label="" metric_value=""
+    local scope_label="" scope_suffix="" metric_value=""
 
     REPLY=""
 
@@ -399,6 +399,10 @@ build_rotating_metric_info() {
 
     [ "$attempt" -lt "$METRIC_SCOPE_COUNT" ] || return 0
     scope_label=${METRIC_SCOPE_LABELS[$selected_scope]}
+    if [ "$selected_scope" -eq 4 ]; then
+        scope_suffix=" $scope_label"
+        scope_label=""
+    fi
 
     case "$metric_kind" in
         0)
@@ -419,7 +423,7 @@ build_rotating_metric_info() {
             ;;
     esac
 
-    REPLY="${DIM}${scope_label}${metric_value}${RESET}"
+    REPLY="${DIM}${scope_label}${metric_value}${scope_suffix}${RESET}"
 }
 
 # Get all-time totals from JSONL files (cached)
