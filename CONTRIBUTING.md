@@ -5,7 +5,7 @@ Thanks for your interest in claudeline.
 ## Development Setup
 
 ```bash
-git clone https://github.com/s-b-e-n-s-o-n/claudeline.git
+git clone https://github.com/scttbnsn/claudeline.git
 cd claudeline
 ```
 
