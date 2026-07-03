@@ -1,6 +1,6 @@
 #!/bin/bash
 # Claude Code Statusline Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/scttbnsn/claudeline/main/install.sh | bash
 
 set -e
 
@@ -13,7 +13,7 @@ DIM='\033[2m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-REPO_URL="https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main"
+REPO_URL="https://raw.githubusercontent.com/scttbnsn/claudeline/main"
 CLAUDE_DIR="$HOME/.claude"
 CLAUDE_LIB_DIR="$CLAUDE_DIR/lib"
 SCRIPT_PATH="$CLAUDE_DIR/statusline.sh"
