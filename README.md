@@ -50,7 +50,7 @@
 **One command:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/scttbnsn/claudeline/main/install.sh | bash
 ```
 
 > **Tip:** Review the [install script](install.sh) before running. The installer verifies SHA-256 checksums of all downloaded files before installing them.
@@ -81,12 +81,12 @@ Available keys: `theme`, `segments`, `no_network`, `no_color`, `debug`, `debug_l
 1. Download the runtime files:
    ```bash
    mkdir -p ~/.claude/lib
-   curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/statusline.sh -o ~/.claude/statusline.sh
-   curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/lib/statusline_themes.sh -o ~/.claude/lib/statusline_themes.sh
-   curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/lib/statusline_display.sh -o ~/.claude/lib/statusline_display.sh
-   curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/lib/statusline_usage.sh -o ~/.claude/lib/statusline_usage.sh
-   curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/lib/jsonl_parser.pl -o ~/.claude/lib/jsonl_parser.pl
-   curl -fsSL https://raw.githubusercontent.com/s-b-e-n-s-o-n/claudeline/main/lib/anthropic_pricing.json -o ~/.claude/lib/anthropic_pricing.json
+   curl -fsSL https://raw.githubusercontent.com/scttbnsn/claudeline/main/statusline.sh -o ~/.claude/statusline.sh
+   curl -fsSL https://raw.githubusercontent.com/scttbnsn/claudeline/main/lib/statusline_themes.sh -o ~/.claude/lib/statusline_themes.sh
+   curl -fsSL https://raw.githubusercontent.com/scttbnsn/claudeline/main/lib/statusline_display.sh -o ~/.claude/lib/statusline_display.sh
+   curl -fsSL https://raw.githubusercontent.com/scttbnsn/claudeline/main/lib/statusline_usage.sh -o ~/.claude/lib/statusline_usage.sh
+   curl -fsSL https://raw.githubusercontent.com/scttbnsn/claudeline/main/lib/jsonl_parser.pl -o ~/.claude/lib/jsonl_parser.pl
+   curl -fsSL https://raw.githubusercontent.com/scttbnsn/claudeline/main/lib/anthropic_pricing.json -o ~/.claude/lib/anthropic_pricing.json
    chmod 700 ~/.claude/statusline.sh
    ```
 
