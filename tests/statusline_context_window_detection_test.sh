@@ -34,6 +34,7 @@ cat > "$shim_dir/git" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
+[ "${1:-}" = "-C" ] && shift 2  # tolerate the git -C <dir> prefix
 cmd1=${1:-}
 cmd2=${2:-}
 cmd3=${3:-}
@@ -94,9 +95,9 @@ EOF
 }
 
 model_detected_line=$(render_second_line "Claude Opus 4.6 1M context" 200000 "$tmpdir/model-detected.txt")
-assert_eq '      1K/840K  ·  💧 1 tablespoons  ·  ⏱️ 5m' "$model_detected_line" "statusline should detect 1M context from the model display name when JSON still says 200K"
+assert_eq '     1K/1.00M  ·  ⏱️ 5m' "$model_detected_line" "statusline should detect 1M context from the model display name when JSON still says 200K"
 
 json_detected_line=$(render_second_line "Claude Sonnet 4" 1000000 "$tmpdir/json-detected.txt")
-assert_eq '      1K/840K  ·  💧 1 tablespoons  ·  ⏱️ 5m' "$json_detected_line" "statusline should honor a 1M context window directly from JSON input"
+assert_eq '     1K/1.00M  ·  ⏱️ 5m' "$json_detected_line" "statusline should honor a 1M context window directly from JSON input"
 
 printf 'ok\n'

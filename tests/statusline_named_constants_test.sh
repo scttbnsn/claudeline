@@ -27,12 +27,9 @@ assert_not_contains() {
     fi
 }
 
-assert_contains "$statusline" 'AUTO_COMPACT_THRESHOLD_PCT=${CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:-84}' "statusline should honor CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, defaulting to 84"
-assert_contains "$statusline" 'METRIC_SCOPE_LABELS=("" "📅" "🧱" "📁" "🏆")' "statusline should define sober metric scope labels in one place"
+assert_contains "$statusline" 'METRIC_SCOPE_LABELS=("" "📅" "🧱" "🏆")' "statusline should define sober metric scope labels in one place"
 assert_contains "$statusline" 'METRIC_SCOPE_COUNT=${#METRIC_SCOPE_LABELS[@]}' "statusline should derive the scope count from the scope labels"
 assert_contains "$statusline" 'METRIC_KIND_COUNT=5' "statusline should name the sober metric kind count"
-assert_contains "$statusline" 'AUTO_COMPACT_THRESHOLD=$((CONTEXT_WINDOW_SIZE * AUTO_COMPACT_THRESHOLD_PCT / 100))' "statusline should use the named auto-compact threshold percentage"
-assert_not_contains "$statusline" 'AUTO_COMPACT_THRESHOLD=$((CONTEXT_WINDOW_SIZE * 84 / 100))' "statusline should not inline the auto-compact threshold percentage"
 assert_not_contains "$statusline" 'ALLTIME_COST_ITEMS' "statusline should not reference fun comparison catalogs"
 assert_not_contains "$statusline" 'ALLTIME_NORMAL_FIXED_ITEMS=(' "statusline should not keep old fun comparison cycle state"
 assert_not_contains "$statusline" 'ALLTIME_NORMAL_ITEM_COUNT' "statusline should not keep old fun comparison cycle counts"

@@ -20,12 +20,11 @@ assert_tier() {
     local expected_color=$1
     local expected_icon=$2
     local pct=$3
-    local auto_compact=$4
-    local label=$5
+    local label=$4
 
     CTX_COLOR=""
     CTX_ICON=""
-    if ! set_context_tier "$pct" "$auto_compact"; then
+    if ! set_context_tier "$pct"; then
         printf 'FAIL: %s\nset_context_tier returned non-zero\n' "$label" >&2
         exit 1
     fi
@@ -37,18 +36,11 @@ assert_tier() {
     fi
 }
 
-assert_tier "cyan" "✨" 9 true "compact mode keeps the first tier below 10%"
-assert_tier "lime" "🌱" 10 true "compact mode enters the second tier at 10%"
-assert_tier "orange" "🧠" 35 true "compact mode enters the orange tier at 35%"
-assert_tier "hot-pink" "🌡️" 74 true "compact mode enters hot-pink at 74%"
-assert_tier "white-hot" "💾" 97 true "compact mode enters white-hot at 97%"
-assert_tier "white-hot" "💾" 150 true "compact mode falls back to the hottest tier above the table range"
-
-assert_tier "cyan" "✨" 14 false "full-window mode keeps the first tier below 15%"
-assert_tier "lime" "🌱" 15 false "full-window mode enters the second tier at 15%"
-assert_tier "coral" "🔥" 65 false "full-window mode enters the coral tier at 65%"
-assert_tier "red" "💾" 75 false "full-window mode enters the red save tier at 75%"
-assert_tier "magenta" "💀" 95 false "full-window mode enters the hard-wall tier at 95%"
-assert_tier "magenta" "💀" 150 false "full-window mode falls back to the hottest tier above the table range"
+assert_tier "cyan" "✨" 14 "full-window mode keeps the first tier below 15%"
+assert_tier "lime" "🌱" 15 "full-window mode enters the second tier at 15%"
+assert_tier "coral" "🔥" 65 "full-window mode enters the coral tier at 65%"
+assert_tier "red" "💾" 75 "full-window mode enters the red save tier at 75%"
+assert_tier "magenta" "💀" 95 "full-window mode enters the hard-wall tier at 95%"
+assert_tier "magenta" "💀" 150 "full-window mode falls back to the hottest tier above the table range"
 
 printf 'ok\n'

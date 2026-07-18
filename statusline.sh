@@ -7,7 +7,7 @@ set -euo pipefail
 input=$(</dev/stdin)
 
 # Load config file — env vars take precedence over config values
-CLAUDELINE_CONF="${CLAUDELINE_CONF:-$HOME/.claude/claudeline.conf}"
+CLAUDELINE_CONF="${CLAUDELINE_CONF:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/claudeline.conf}"
 if [ -f "$CLAUDELINE_CONF" ]; then
     while IFS='=' read -r _key _val || [ -n "$_key" ]; do
         # Skip comments and blank lines
@@ -19,6 +19,7 @@ if [ -f "$CLAUDELINE_CONF" ]; then
         case "$_key" in
             theme)                [ -z "${CLAUDELINE_THEME:-}" ]            && CLAUDELINE_THEME="$_val" ;;
             segments)             [ -z "${CLAUDELINE_SEGMENTS:-}" ]         && CLAUDELINE_SEGMENTS="$_val" ;;
+            credit)               [ -z "${CLAUDELINE_CREDIT:-}" ]           && CLAUDELINE_CREDIT="$_val" ;;
             no_network)           [ -z "${CLAUDELINE_NO_NETWORK:-}" ]       && CLAUDELINE_NO_NETWORK="$_val" ;;
             debug)                [ -z "${CLAUDELINE_DEBUG:-}" ]            && CLAUDELINE_DEBUG="$_val" ;;
             debug_log)            [ -z "${CLAUDELINE_DEBUG_LOG:-}" ]        && CLAUDELINE_DEBUG_LOG="$_val" ;;
@@ -58,6 +59,17 @@ fi
 debug_log() {
     [ "$STATUSLINE_DEBUG_ENABLED" -eq 1 ] || return 0
     printf '[%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >> "$STATUSLINE_DEBUG_LOG"
+}
+
+# Neutralize externally-sourced display text (model name, dir, branch) before it
+# reaches a `printf %b` sink. Strip control characters (which include raw ESC and
+# the tab/NUL/unit-separator bytes) so a crafted value cannot inject terminal
+# escape sequences, and strip backslashes so %b cannot expand them into control
+# codes. Only ever applied to values used for DISPLAY — never to paths used for
+# filesystem or git operations.
+sanitize_display_field() {
+    local v=${1//[[:cntrl:]]/}
+    REPLY=${v//\\/}
 }
 
 normalize_scalar_var() {
@@ -110,53 +122,6 @@ round_decimal_to_int_or_default() {
     printf -v REPLY '%s' "${rounded:-$default_value}"
 }
 
-read_auto_compact_setting() {
-    local claude_json=$1
-    local cache_file=$2
-    local cached_value=""
-
-    if ! [ -f "$claude_json" ]; then
-        printf 'true\n'
-        return 0
-    fi
-
-    if [ -f "$cache_file" ] && [ ! "$claude_json" -nt "$cache_file" ]; then
-        if IFS= read -r cached_value < "$cache_file"; then
-            case "$cached_value" in
-                true|false)
-                    printf '%s\n' "$cached_value"
-                    return 0
-                    ;;
-                *)
-                    debug_log "Ignoring invalid Claude config cache value in $cache_file: ${cached_value:-<empty>}"
-                    ;;
-            esac
-        else
-            debug_log "Failed to read Claude config cache at $cache_file"
-        fi
-    fi
-
-    if ! cached_value=$(jq -r 'if has("autoCompactEnabled") then (.autoCompactEnabled | tostring) else "true" end' "$claude_json" 2>>"$STATUSLINE_DEBUG_LOG"); then
-        debug_log "Failed to parse Claude config at $claude_json; defaulting autoCompactEnabled=true"
-        printf 'true\n'
-        return 0
-    fi
-
-    case "$cached_value" in
-        true|false) ;;
-        *)
-            debug_log "Ignoring invalid autoCompactEnabled value in $claude_json: ${cached_value:-<empty>}"
-            cached_value="true"
-            ;;
-    esac
-
-    if ! printf '%s\n' "$cached_value" > "$cache_file" 2>>"$STATUSLINE_DEBUG_LOG"; then
-        debug_log "Failed to write Claude config cache at $cache_file"
-    fi
-
-    printf '%s\n' "$cached_value"
-}
-
 STATUSLINE_DIR=${BASH_SOURCE[0]%/*}
 [ "$STATUSLINE_DIR" = "${BASH_SOURCE[0]}" ] && STATUSLINE_DIR=.
 # shellcheck source=lib/statusline_themes.sh
@@ -173,7 +138,7 @@ if [ -n "${CLAUDELINE_SEGMENTS:-}" ]; then
     _SEG_ALL=0
     _SEG_CONTEXT=0; _SEG_GIT=0; _SEG_LINES=0; _SEG_PACE=0
     _SEG_BURST=0; _SEG_DURATION=0; _SEG_CREDIT=0
-    _SEG_TOKENS=0; _SEG_SPEND=0; _SEG_CACHE=0; _SEG_EFFORT=0
+    _SEG_TOKENS=0; _SEG_SPEND=0; _SEG_EFFORT=0
     _SEG_METRIC=0; _SEG_THROUGHPUT=0; _SEG_MODEL=0
     IFS=',' read -ra _segs <<< "$CLAUDELINE_SEGMENTS"
     for _s in "${_segs[@]}"; do
@@ -187,7 +152,6 @@ if [ -n "${CLAUDELINE_SEGMENTS:-}" ]; then
             credit)     _SEG_CREDIT=1 ;;
             tokens)     _SEG_TOKENS=1 ;;
             spend)      _SEG_SPEND=1 ;;
-            cache)      _SEG_CACHE=1 ;;
             effort)     _SEG_EFFORT=1 ;;
             metric)     _SEG_METRIC=1 ;;
             throughput) _SEG_THROUGHPUT=1 ;;
@@ -197,11 +161,16 @@ if [ -n "${CLAUDELINE_SEGMENTS:-}" ]; then
 else
     _SEG_CONTEXT=1; _SEG_GIT=1; _SEG_LINES=1; _SEG_PACE=1
     _SEG_BURST=1; _SEG_DURATION=1; _SEG_CREDIT=1
-    _SEG_TOKENS=1; _SEG_SPEND=0; _SEG_CACHE=1; _SEG_EFFORT=1
+    _SEG_TOKENS=1; _SEG_SPEND=0; _SEG_EFFORT=1
     _SEG_METRIC=1; _SEG_THROUGHPUT=1; _SEG_MODEL=0
 fi
 
 seg_on() { [ "${_SEG_ALL}" -eq 1 ] || [ "${1:-0}" -eq 1 ]; }
+
+# The credit/overage segment needs OAuth-derived usage data, which requires
+# extra setup — default it OFF and only render it when the user opts in.
+CREDIT_OPT_IN=0
+[ "${CLAUDELINE_CREDIT:-0}" = 1 ] && CREDIT_OPT_IN=1
 
 # Cache directory for API and JSONL data
 CACHE_DIR="$HOME/.claude-usage.d"
@@ -215,22 +184,16 @@ SPEND_LOCK="$CACHE_DIR/.spend-refresh.lock.d"
 USAGE_HISTORY="$CACHE_DIR/.usage-history"
 COST_RATE_HISTORY="$CACHE_DIR/.cost-rate-history"
 COST_RATE_STATE="$CACHE_DIR/.cost-rate-state"
+COST_RATE_LOCK="$CACHE_DIR/.cost-rate.lock.d"
 TREND_WINDOW=${TREND_WINDOW:-900}   # 15 minutes in seconds
-AUTO_COMPACT_THRESHOLD_PCT=${CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:-84}
-[[ "$AUTO_COMPACT_THRESHOLD_PCT" =~ ^[0-9]+$ ]] && [ "$AUTO_COMPACT_THRESHOLD_PCT" -ge 1 ] && [ "$AUTO_COMPACT_THRESHOLD_PCT" -le 100 ] || AUTO_COMPACT_THRESHOLD_PCT=84
-METRIC_SCOPE_LABELS=("" "📅" "🧱" "📁" "🏆")
+METRIC_SCOPE_LABELS=("" "📅" "🧱" "🏆")
 METRIC_SCOPE_COUNT=${#METRIC_SCOPE_LABELS[@]}
 METRIC_KIND_COUNT=5
 (umask 077 && mkdir -p "$CACHE_DIR") 2>>"$STATUSLINE_DEBUG_LOG"
 
-# Read auto-compact setting from Claude Code config
-CLAUDE_JSON="$HOME/.claude.json"
-CLAUDE_CONFIG_CACHE="$CACHE_DIR/.claude-config-auto-compact"
-AUTO_COMPACT_ON=$(read_auto_compact_setting "$CLAUDE_JSON" "$CLAUDE_CONFIG_CACHE")
-[ "$AUTO_COMPACT_ON" != "false" ] && AUTO_COMPACT_ON="true"
-
-# Extract all values in a single jq call (11 calls → 1)
-# Use tab delimiter to handle spaces in values (e.g. "Claude Opus 4.5")
+# Extract all values in a single jq call (11 calls → 1). Each field is stripped
+# of control characters inside jq (gsub) so no field value can contain the 0x1f
+# delimiter or a newline and shift/blank the columns downstream.
 INPUT_FIELDS=""
 if ! INPUT_FIELDS=$(printf '%s\n' "$input" | jq -r '[
         (.model.display_name // "Claude"),
@@ -256,20 +219,28 @@ if ! INPUT_FIELDS=$(printf '%s\n' "$input" | jq -r '[
         (.context_window.current_usage.cache_creation_input_tokens // 0),
         (.context_window.current_usage.cache_read_input_tokens // 0),
         (.effort.level // "_"),
-        (.thinking.enabled // false)
-    ] | @tsv' 2>>"$STATUSLINE_DEBUG_LOG"); then
+        (.thinking.enabled // false),
+        (.context_window.used_percentage // "_")
+    ] | map(tostring) | map(gsub("[[:cntrl:]]";"")) | join("\u001f")' 2>>"$STATUSLINE_DEBUG_LOG"); then
     debug_log "Failed to parse statusline input; using defaults"
-    INPUT_FIELDS=$'Claude\t\t0\t0\t0\t0\t0\t0\t0\t0\t200000\t_\t_\t_\t_\t_\t0\t0\t0\t0\t_\tfalse'
+    INPUT_FIELDS=$'Claude\x1f\x1f0\x1f0\x1f0\x1f0\x1f0\x1f0\x1f0\x1f0\x1f200000\x1f_\x1f_\x1f_\x1f_\x1f_\x1f0\x1f0\x1f0\x1f0\x1f_\x1ffalse\x1f_'
 fi
 
-IFS=$'\t' read -r MODEL CURRENT_DIR LINES_ADDED LINES_REMOVED \
+# Use the ASCII unit separator (0x1f) as the field delimiter, not a tab: `read`
+# with a whitespace IFS collapses adjacent delimiters, so any empty field (e.g. an
+# absent current_dir) would silently shift every later column. 0x1f is
+# non-whitespace, so empty fields are preserved and columns stay aligned.
+IFS=$'\x1f' read -r MODEL CURRENT_DIR LINES_ADDED LINES_REMOVED \
     TOTAL_INPUT TOTAL_OUTPUT DURATION_MS API_DURATION_MS TOTAL_COST CURRENT_TOKENS CONTEXT_WINDOW_SIZE \
     WEEKLY_USAGE RESETS_AT BURST_USAGE BURST_RESETS SESSION_ID \
     CURRENT_INPUT_TOKENS CURRENT_OUTPUT_TOKENS CURRENT_CACHE_WRITE_TOKENS CURRENT_CACHE_READ_TOKENS \
-    EFFORT_LEVEL THINKING_ENABLED <<< "$INPUT_FIELDS"
+    EFFORT_LEVEL THINKING_ENABLED CTX_USED_PCT <<< "$INPUT_FIELDS"
 
 [ "$SESSION_ID" = "_" ] && SESSION_ID=""
 [ "$EFFORT_LEVEL" = "_" ] && EFFORT_LEVEL=""
+
+# Sanitize externally-sourced display text before it can reach a printf %b sink.
+sanitize_display_field "$MODEL"; MODEL=$REPLY
 
 normalize_scalar_var LINES_ADDED int 0 "lines added"
 normalize_scalar_var LINES_REMOVED int 0 "lines removed"
@@ -288,15 +259,19 @@ normalize_scalar_var WEEKLY_USAGE rate "_" "weekly usage"
 normalize_scalar_var BURST_USAGE rate "_" "burst usage"
 normalize_scalar_var RESETS_AT int 0 "weekly reset epoch"
 normalize_scalar_var BURST_RESETS int 0 "burst reset epoch"
+normalize_scalar_var CTX_USED_PCT rate "_" "context used percentage"
 
 # Derived values (pure bash math, no bc)
 SESSION_TOKENS=$((TOTAL_INPUT + TOTAL_OUTPUT))
 CURRENT_TOKENS=$((CURRENT_INPUT_TOKENS + CURRENT_CACHE_WRITE_TOKENS + CURRENT_CACHE_READ_TOKENS))
-if ! decimal_to_scaled "$TOTAL_COST" 2; then
+# Round-half-up to the nearest cent (not floor) for the displayed estimated
+# API list-price equivalent: scale to millicents (3 implied decimals) first so
+# a cost like $0.019 shows as $0.02, not $0.01.
+if ! decimal_to_scaled "$TOTAL_COST" 3; then
     debug_log "Invalid total cost value '${TOTAL_COST:-<empty>}'; defaulting session cost to 0"
     TOTAL_COST_CENTS=0
 else
-    TOTAL_COST_CENTS=$REPLY
+    TOTAL_COST_CENTS=$(( (REPLY + 5) / 10 ))
 fi
 
 # Cache current timestamp (used multiple times - avoid repeated date calls).
@@ -311,15 +286,24 @@ read_git_status_info() {
 
     BRANCH=""
     DIR_NAME="${current_dir##*/}"
+    # Sanitize here, not just at the end: most real dirs are not git repos, so the
+    # early returns below are the common path and must not leak raw control bytes
+    # from the untrusted current_dir payload into the printf %b sink.
+    sanitize_display_field "$DIR_NAME"; DIR_NAME=$REPLY
 
-    if ! git_root=$(git rev-parse --show-toplevel 2>>"$STATUSLINE_DEBUG_LOG"); then
+    # Run git against the payload's working directory, not the status-line
+    # process's cwd (Claude Code does not guarantee they match).
+    [ -n "$current_dir" ] || return 0
+
+    if ! git_root=$(git -C "$current_dir" rev-parse --show-toplevel 2>>"$STATUSLINE_DEBUG_LOG"); then
         return 0
     fi
 
     DIR_NAME="${git_root##*/}"
+    sanitize_display_field "$DIR_NAME"; DIR_NAME=$REPLY
 
     # git status -sb gives: ## branch...upstream [ahead N, behind M] + file status
-    if ! git_status_out=$(git status -sb 2>>"$STATUSLINE_DEBUG_LOG"); then
+    if ! git_status_out=$(git -C "$current_dir" status -sb 2>>"$STATUSLINE_DEBUG_LOG"); then
         debug_log "Failed to read git status for $git_root; omitting branch info"
         return 0
     fi
@@ -350,11 +334,15 @@ read_git_status_info() {
     [[ "$first_line" =~ behind\ ([0-9]+) ]] && git_status+="↓${BASH_REMATCH[1]}"
 
     # Stash check via refs/stash avoids walking the stash reflog.
-    if git rev-parse --verify refs/stash >/dev/null 2>>"$STATUSLINE_DEBUG_LOG"; then
+    if git -C "$current_dir" rev-parse --verify refs/stash >/dev/null 2>>"$STATUSLINE_DEBUG_LOG"; then
         git_status+="\$"
     fi
 
     BRANCH="${branch}${git_status}"
+
+    # Branch is external text rendered through printf %b downstream (DIR_NAME is
+    # already sanitized at each assignment above to cover the early-return paths).
+    sanitize_display_field "$BRANCH"; BRANCH=$REPLY
 }
 
 build_rotating_metric_info() {
@@ -365,10 +353,8 @@ build_rotating_metric_info() {
     local today_cost_cents=$5
     local block_tokens=$6
     local block_cost_cents=$7
-    local project_tokens=$8
-    local project_cost_cents=$9
-    local all_time_tokens=${10}
-    local all_time_cost_cents=${11}
+    local all_time_tokens=$8
+    local all_time_cost_cents=$9
     local metric_kind=$((now_div_10 % METRIC_KIND_COUNT))
     local scope_index=$(((now_div_10 / METRIC_KIND_COUNT) % METRIC_SCOPE_COUNT))
     local attempt=0 selected_scope=0 selected_tokens=0 selected_cost_cents=0
@@ -382,12 +368,19 @@ build_rotating_metric_info() {
             0) selected_tokens=$session_tokens; selected_cost_cents=$session_cost_cents ;;
             1) selected_tokens=$today_tokens; selected_cost_cents=$today_cost_cents ;;
             2) selected_tokens=$block_tokens; selected_cost_cents=$block_cost_cents ;;
-            3) selected_tokens=$project_tokens; selected_cost_cents=$project_cost_cents ;;
-            4) selected_tokens=$all_time_tokens; selected_cost_cents=$all_time_cost_cents ;;
+            3) selected_tokens=$all_time_tokens; selected_cost_cents=$all_time_cost_cents ;;
         esac
 
         case "$metric_kind" in
-            0|1|3|4)
+            0|1|4)
+                # Environmental kinds (water/power/data) never render at the
+                # unlabeled session scope — treat scope 0 as "no data" here so
+                # the rotation falls through to a labeled scope instead.
+                if [ "$selected_scope" -ne 0 ] && [ "$selected_tokens" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
+                    break
+                fi
+                ;;
+            3)
                 [ "$selected_tokens" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG" && break
                 ;;
             2)
@@ -399,7 +392,7 @@ build_rotating_metric_info() {
 
     [ "$attempt" -lt "$METRIC_SCOPE_COUNT" ] || return 0
     scope_label=${METRIC_SCOPE_LABELS[$selected_scope]}
-    if [ "$selected_scope" -eq 4 ]; then
+    if [ "$selected_scope" -eq 3 ]; then
         scope_suffix=" $scope_label"
         scope_label=""
     fi
@@ -426,8 +419,8 @@ build_rotating_metric_info() {
     REPLY="${DIM}${scope_label}${metric_value}${scope_suffix}${RESET}"
 }
 
-# Get all-time totals from JSONL files (cached)
-# Consolidate: 2 echo + 2 tail + 2 awk + 1 bc → 1 read (pure bash)
+# Get all-time token totals and the retained local API-cost estimate from
+# JSONL files (cached). Consolidate: 2 echo + 2 tail + 2 awk + 1 bc → 1 read (pure bash)
 JSONL_DATA=$(get_jsonl_totals "$NOW")
 read -r ALL_TIME_TOKENS ALL_TIME_COST_CENTS _ _ _ _ <<< "${JSONL_DATA##*$'\n'}"
 ALL_TIME_TOKENS=${ALL_TIME_TOKENS:-0}
@@ -439,8 +432,6 @@ ALL_TIME_COST="$((ALL_TIME_COST_CENTS / 100)).$((ALL_TIME_COST_CENTS % 100))"
 
 # Calculate context percentage (scaled to context limit)
 # Detect 1M context from JSON field OR model display name (e.g. "Opus 4.6 1M context")
-# When auto-compact is ON:  ~AUTO_COMPACT_THRESHOLD_PCT% of window (compression trigger)
-# When auto-compact is OFF: full window (user must compact manually)
 if [ "${CONTEXT_WINDOW_SIZE:-0}" -gt 200000 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
     : # Already set from JSON
 elif [[ "$MODEL" == *1[Mm]* ]] || [[ "$MODEL" == *1M* ]]; then
@@ -448,6 +439,11 @@ elif [[ "$MODEL" == *1[Mm]* ]] || [[ "$MODEL" == *1M* ]]; then
 else
     CONTEXT_WINDOW_SIZE=${CONTEXT_WINDOW_SIZE:-200000}
 fi
+# Guard against a payload that literally says context_window_size:0 — the
+# ${VAR:-200000} defaults above only fire when the var is UNSET, not when it's
+# the literal string "0", so a zero would otherwise survive to divide-by-zero
+# below.
+[ "${CONTEXT_WINDOW_SIZE:-0}" -gt 0 ] 2>/dev/null || CONTEXT_WINDOW_SIZE=200000
 # Honor user-configured auto-compact window cap (CLAUDE_CODE_AUTO_COMPACT_WINDOW).
 # When set to a positive integer <= the physical window, treat it as the effective cap.
 EFFECTIVE_WINDOW=$CONTEXT_WINDOW_SIZE
@@ -456,21 +452,23 @@ if [[ "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}" =~ ^[0-9]+$ ]] \
     && [ "$CLAUDE_CODE_AUTO_COMPACT_WINDOW" -le "$CONTEXT_WINDOW_SIZE" ]; then
     EFFECTIVE_WINDOW=$CLAUDE_CODE_AUTO_COMPACT_WINDOW
 fi
-if [ "$AUTO_COMPACT_ON" = "true" ]; then
-    # Auto-compact triggers at ~AUTO_COMPACT_THRESHOLD_PCT% of the context window
-    AUTO_COMPACT_THRESHOLD=$((CONTEXT_WINDOW_SIZE * AUTO_COMPACT_THRESHOLD_PCT / 100))
-    [ "$EFFECTIVE_WINDOW" -lt "$AUTO_COMPACT_THRESHOLD" ] && AUTO_COMPACT_THRESHOLD=$EFFECTIVE_WINDOW
-else
-    AUTO_COMPACT_THRESHOLD=$EFFECTIVE_WINDOW
-fi
-if [ "$CURRENT_TOKENS" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
-    PERCENT_USED=$((CURRENT_TOKENS * 100 / AUTO_COMPACT_THRESHOLD))
+# Prefer the payload's own used_percentage (Claude Code's own accounting of
+# the real context window) over a locally derived ratio. Fall back to the
+# token-ratio computation only when the payload didn't supply one, guarding
+# against a zero denominator either way.
+if ! is_sentinel_value "$CTX_USED_PCT"; then
+    round_decimal_to_int_or_default "$CTX_USED_PCT" 0 "context used percentage"
+    PERCENT_USED=$REPLY
+    [ "$PERCENT_USED" -lt 0 ] 2>>"$STATUSLINE_DEBUG_LOG" && PERCENT_USED=0
+    [ "$PERCENT_USED" -gt 100 ] 2>>"$STATUSLINE_DEBUG_LOG" && PERCENT_USED=100
+elif [ "$CURRENT_TOKENS" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG" && [ "$EFFECTIVE_WINDOW" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
+    PERCENT_USED=$((CURRENT_TOKENS * 100 / EFFECTIVE_WINDOW))
     [ "$PERCENT_USED" -gt 100 ] && PERCENT_USED=100
 else
     PERCENT_USED=0
 fi
 
-set_context_tier "$PERCENT_USED" "$AUTO_COMPACT_ON"
+set_context_tier "$PERCENT_USED"
 
 # Build mini progress bar (10 chars wide)
 BAR_WIDTH=10
@@ -499,12 +497,10 @@ TODAY_TOKENS=0
 TODAY_COST_CENTS=0
 BLOCK_TOKENS=0
 BLOCK_COST_CENTS=0
-PROJECT_TOKENS=0
-PROJECT_COST_CENTS=0
 if seg_on "$_SEG_METRIC" || seg_on "$_SEG_SPEND"; then
     get_spend_window_totals_nonblocking "$NOW" "$CURRENT_DIR"
     if [ -n "$REPLY" ]; then
-        read -r TODAY_TOKENS TODAY_COST_CENTS BLOCK_TOKENS BLOCK_COST_CENTS PROJECT_TOKENS PROJECT_COST_CENTS <<< "$REPLY"
+        read -r TODAY_TOKENS TODAY_COST_CENTS BLOCK_TOKENS BLOCK_COST_CENTS <<< "$REPLY"
     fi
 fi
 
@@ -513,7 +509,6 @@ build_rotating_metric_info "$NOW_DIV_10" \
     "$SESSION_TOKENS" "$TOTAL_COST_CENTS" \
     "$TODAY_TOKENS" "$TODAY_COST_CENTS" \
     "$BLOCK_TOKENS" "$BLOCK_COST_CENTS" \
-    "$PROJECT_TOKENS" "$PROJECT_COST_CENTS" \
     "$ALL_TIME_TOKENS" "$ALL_TIME_COST_CENTS"
 METRIC_INFO=$REPLY
 
@@ -564,7 +559,7 @@ round_decimal_to_int_or_default "$WEEKLY_USAGE" 0 "weekly usage"
 WEEKLY_PCT=$REPLY
 round_decimal_to_int_or_default "$BURST_USAGE" 0 "burst usage"
 BURST_PCT=$REPLY
-if seg_on "$_SEG_CREDIT" && { [ "${WEEKLY_PCT:-0}" -ge 100 ] 2>>"$STATUSLINE_DEBUG_LOG" || [ "${BURST_PCT:-0}" -ge 100 ] 2>>"$STATUSLINE_DEBUG_LOG"; }; then
+if seg_on "$_SEG_CREDIT" && [ "$CREDIT_OPT_IN" -eq 1 ] && { [ "${WEEKLY_PCT:-0}" -ge 100 ] 2>>"$STATUSLINE_DEBUG_LOG" || [ "${BURST_PCT:-0}" -ge 100 ] 2>>"$STATUSLINE_DEBUG_LOG"; }; then
     EXTRA_UTIL=$(get_extra_usage_util_nonblocking "$NOW")
 fi
 
@@ -581,7 +576,7 @@ if seg_on "$_SEG_BURST"; then
 fi
 
 CREDIT_INDICATOR=""
-if seg_on "$_SEG_CREDIT" && ! is_sentinel_value "$EXTRA_UTIL"; then
+if seg_on "$_SEG_CREDIT" && [ "$CREDIT_OPT_IN" -eq 1 ] && ! is_sentinel_value "$EXTRA_UTIL"; then
     round_decimal_to_int_or_default "$EXTRA_UTIL" 0 "extra usage"
     EXTRA_PCT=$REPLY
     if [ "$EXTRA_PCT" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
@@ -666,7 +661,7 @@ if seg_on "$_SEG_THROUGHPUT" && [ "$API_DURATION_MS" -gt 0 ] 2>>"$STATUSLINE_DEB
 fi
 _L1_LINES=""; seg_on "$_SEG_LINES" && _L1_LINES="$LINES_INFO"
 _L1_BURST=""; seg_on "$_SEG_BURST" && [ -n "$BURST_INDICATOR" ] && _L1_BURST="$BURST_INDICATOR"
-_L1_CREDIT=""; seg_on "$_SEG_CREDIT" && [ -n "$CREDIT_INDICATOR" ] && _L1_CREDIT="$CREDIT_INDICATOR"
+_L1_CREDIT=""; seg_on "$_SEG_CREDIT" && [ "$CREDIT_OPT_IN" -eq 1 ] && [ -n "$CREDIT_INDICATOR" ] && _L1_CREDIT="$CREDIT_INDICATOR"
 
 # Priority order: context > git > pace > cost-rate > lines > burst > credit
 printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L1_CONTEXT" "$_L1_GIT" "$_L1_PACE" "$_L1_THROUGHPUT" "$_L1_LINES" "$_L1_BURST" "$_L1_CREDIT")"
@@ -675,20 +670,15 @@ printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L1_CONTEXT" "$_L1_GIT" 
 _L2_TOKENS=""
 if seg_on "$_SEG_TOKENS"; then
     CTX_CURRENT=$(format_number "$CURRENT_TOKENS")
-    CTX_THRESHOLD=$(format_number "$AUTO_COMPACT_THRESHOLD")
+    CTX_THRESHOLD=$(format_number "$EFFECTIVE_WINDOW")
     CTX_STATS="${CTX_CURRENT}/${CTX_THRESHOLD}"
     CTX_PADDED=$(printf "%13s" "$CTX_STATS")
     _L2_TOKENS="${DIM}${CTX_PADDED}${RESET}"
 fi
 _L2_SPEND=""
 if seg_on "$_SEG_SPEND"; then
-    format_spend_indicator "$TODAY_COST_CENTS" "$BLOCK_COST_CENTS" "$PROJECT_COST_CENTS" "$TOTAL_COST_CENTS" "$NOW"
+    format_spend_indicator "$TODAY_COST_CENTS" "$BLOCK_COST_CENTS" "$TOTAL_COST_CENTS" "$NOW"
     _L2_SPEND=$REPLY
-fi
-_L2_CACHE=""
-if seg_on "$_SEG_CACHE"; then
-    format_cache_efficiency_indicator "$CURRENT_INPUT_TOKENS" "$CURRENT_CACHE_WRITE_TOKENS" "$CURRENT_CACHE_READ_TOKENS"
-    _L2_CACHE=$REPLY
 fi
 _L2_EFFORT=""
 if seg_on "$_SEG_EFFORT"; then
@@ -699,5 +689,5 @@ _L2_MODEL=""; seg_on "$_SEG_MODEL" && _L2_MODEL="${DIM}${MODEL}${RESET}"
 _L2_DURATION=""; seg_on "$_SEG_DURATION" && _L2_DURATION="$DURATION_INFO"
 _L2_METRIC=""; seg_on "$_SEG_METRIC" && _L2_METRIC="$METRIC_INFO"
 
-# Priority order: tokens > spend > cache > effort > metric > model > duration
-printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_SPEND" "$_L2_CACHE" "$_L2_EFFORT" "$_L2_METRIC" "$_L2_MODEL" "$_L2_DURATION")"
+# Priority order: tokens > spend > effort > metric > model > duration
+printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_SPEND" "$_L2_EFFORT" "$_L2_METRIC" "$_L2_MODEL" "$_L2_DURATION")"
