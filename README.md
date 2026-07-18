@@ -2,7 +2,7 @@
 
 <h1>claudeline</h1>
 
-**A compact, informative status line for Claude Code with spend, cache, and usage signals.**
+**A compact, informative status line for Claude Code with spend and usage signals.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Bash](https://img.shields.io/badge/bash-3.2+-4EAA25?logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
@@ -15,12 +15,12 @@
 │  └────┬────┘     └─────┬─────┘   └─┬──┘   └─────┬─────┘   └───┬──┘   └─┬┘   └─┬──┘
 │    context          repo/branch    pace      cost rate      lines    burst  credit
 │    bar              + git status   trend   + arrow + fold   changed
-└─ context icon (✨🌱💭🧠⚡🔥🌡️🫠💀💾)
+└─ context icon (✨🌱💭🧠🔥💾🫠💀)
 
-    73.5K/168K  ·  🗄️90%  ·  🔥max  ·  🧱💰 $4.50  ·  ⏱️ 45m
-    └────┬────┘    └─┬──┘    └┬┘      └────┬────┘    └──┬──┘
-      context       cache   effort      scoped       duration
-      tokens        reuse                metric
+    73.5K/200K  ·  🔥max  ·  🧱💰 $4.50  ·  ⏱️ 45m
+    └────┬────┘     └┬┘      └────┬────┘    └──┬──┘
+      context      effort      scoped       duration
+      tokens                   metric
 ```
 
 <div align="center">
@@ -33,7 +33,7 @@
 
 - [🚀 Quick Start](#quick-start)
 - [✨ Features](#features)
-- [💰 Spend, Cache & Effort](#spend-cache-effort)
+- [💰 Spend & Effort](#spend-effort)
 - [📊 Smart Pace Indicator](#smart-pace-indicator)
 - [💥 Burst & Credit Indicators](#burst--credit-indicators)
 - [🌍 Environmental Impact](#environmental-impact)
@@ -65,13 +65,14 @@ Create `~/.claude/claudeline.conf` to customize without env vars:
 ```bash
 # ~/.claude/claudeline.conf
 theme=nord
-segments=context,git,pace,duration,tokens,cache,effort,throughput,metric
+segments=context,git,pace,duration,tokens,effort,throughput,metric
+credit=1
 no_network=0
 ```
 
 Env vars override config file values. All keys are optional.
 
-Available keys: `theme`, `segments`, `no_network`, `no_color`, `debug`, `debug_log`, `jsonl_cache_ttl`, `extra_usage_ttl`, `spend_cache_ttl`, `spend_block_seconds`, `trend_window`, `trend_history_max_age`, and the `cost_rate_*` knobs listed below.
+Available keys: `theme`, `segments`, `credit`, `no_network`, `no_color`, `debug`, `debug_log`, `jsonl_cache_ttl`, `extra_usage_ttl`, `spend_cache_ttl`, `spend_block_seconds`, `trend_window`, `trend_history_max_age`, and the `cost_rate_*` knobs listed below.
 
 </details>
 
@@ -112,8 +113,8 @@ Available keys: `theme`, `segments`, `no_network`, `no_color`, `debug`, `debug_l
 <table>
 <tr>
 <td align="center" width="33%">
-<h3>10-Tier Context Bar</h3>
-Adapts to auto-compact setting — scales to 168K (ON) or 200K (OFF), or 1M on extended context models, with color gradient and emoji icons
+<h3>8-Tier Context Bar</h3>
+Uses the context-window percentage Claude Code reports, scaled to the model's window (200K, or 1M on extended-context models), with color gradient and emoji icons
 </td>
 <td align="center" width="33%">
 <h3>Smart Pace Indicator</h3>
@@ -131,7 +132,7 @@ Rotating display of water, power, cost, tokens, and data with dynamic unit scali
 </td>
 <td align="center">
 <h3>Scoped Usage</h3>
-Session, today, 5-hour block, project, and all-time metrics share one compact rotation
+Session, today, 5-hour block, and all-time metrics share one compact rotation
 </td>
 <td align="center">
 <h3>All-Time Tracking</h3>
@@ -155,11 +156,7 @@ Account-wide cents/min (API-active time) over the current working window, with a
 <tr>
 <td align="center" width="33%">
 <h3>Spend Windows</h3>
-Folds today, 5-hour block, project, and all-time token/cost totals into the metric slot
-</td>
-<td align="center" width="33%">
-<h3>Cache Efficiency</h3>
-Shows cache-read share (<code>🗄️90%</code>) or cache-write spikes (<code>🗄️✍️5K</code>) from the live statusline payload
+Folds today, 5-hour block, and all-time token/cost totals into the metric slot
 </td>
 <td align="center" width="33%">
 <h3>Thinking Effort</h3>
@@ -170,21 +167,18 @@ Shows the active thinking tier with five distinct states: <code>🌱low</code>, 
 
 <hr>
 
-<h2 align="center" id="spend-cache-effort">💰 Spend, Cache & Effort</h2>
+<h2 align="center" id="spend-effort">💰 Spend & Effort</h2>
 
 **Scoped metrics** — line 2 keeps one metric slot and rotates scope + metric:
 
 | Display | Meaning |
 |---------|---------|
-| `💧 1 tablespoons` | Current session water estimate |
-| `📅💰 $18.00` | Today's local-calendar spend |
+| `💰 $2.30` | Current session spend |
+| `📅💧 2 tbsp` | Today's water estimate |
 | `🧱🎟️ 1.2M` | Tokens inside the active rolling block window (5h by default) |
-| `📁📡 4.7MB` | Current project data estimate |
 | `💰 $123.45 🏆` | All-time account spend |
 
-The metric types are fixed and sober: `💧` water, `⚡` power, `💰` cost, `🎟️` tokens, and `📡` data. Window totals are computed from local JSONL transcripts in a background refresh and cached in `.spend-cache`, so the statusline stays fast.
-
-**Cache efficiency** — `🗄️90%` means most prompt/context input came from cache reads. `🗄️✍️5K` means cache writes are currently larger than cache reads, which is usually the interesting cost spike when a new setup, hook, or context load causes fresh cache creation.
+The metric types are fixed and sober: `💧` water, `⚡` power, `💰` cost, `🎟️` tokens, and `📡` data. The environmental kinds (`💧` water, `⚡` power, `📡` data) skip the unlabeled session scope and begin at today (`📅`); cost (`💰`) and tickets (`🎟️`) still show a session total. Window totals are computed from local JSONL transcripts in a background refresh and cached in `.spend-cache`, so the statusline stays fast.
 
 **Thinking effort** — the effort segment maps the current Claude Code effort level to five compact states: `🌱low`, `💭med`, `🧠high`, `⚡xhi`, `🔥max`. If thinking is enabled but no effort level is present, it shows `💭think`.
 
@@ -283,22 +277,7 @@ The `🏆` suffix indicates all-time totals in the scoped metric rotation. The s
 <details>
 <summary><strong>Context bar tiers</strong></summary>
 
-**Auto-compact ON** (10 tiers, scaled to 168K):
-
-| Range | Color | Icon | Meaning |
-|-------|-------|------|---------|
-| 0-9% | Cyan | ✨ | Fresh |
-| 10-19% | Lime | 🌱 | Growing |
-| 20-34% | Yellow | 💭 | Thinking |
-| 35-49% | Orange | 🧠 | Working hard |
-| 50-61% | Coral | ⚡ | Heating up |
-| 62-73% | Red | 🔥 | Hot |
-| 74-83% | Hot Pink | 🌡️ | Running hot |
-| 84-91% | Magenta | 🫠 | Melting — compact soon |
-| 92-96% | Violet | 💀 | Critical |
-| 97%+ | White Hot | 💾 | About to auto-compact |
-
-**Auto-compact OFF** (8 tiers, scaled to 200K):
+The bar maps the context-window percentage Claude Code reports to 8 color/emoji tiers:
 
 | Range | Color | Icon | Meaning |
 |-------|-------|------|---------|
@@ -310,6 +289,8 @@ The `🏆` suffix indicates all-time totals in the scoped metric rotation. The s
 | 75-84% | Red | 💾 | Compact zone |
 | 85-94% | Hot Pink | 🫠 | Past compact zone |
 | 95%+ | Magenta | 💀 | Near hard wall |
+
+The token count under the bar is measured against the effective window (the model's context size, or `CLAUDE_CODE_AUTO_COMPACT_WINDOW` when you cap it lower).
 
 </details>
 
@@ -341,20 +322,19 @@ Rate limit data comes directly from the Claude Code status line JSON — zero ne
 
 <h2 align="center" id="privacy--network-access">🔒 Privacy & Network Access</h2>
 
-claudeline makes **one optional API call** to `https://api.anthropic.com/api/oauth/usage` — a `GET` request with only an `Authorization` header. No telemetry, no tracking, no data sent in the request body. This call only triggers when weekly or burst rate limits reach 100%, to fetch overage/credit utilization.
+claudeline makes **one optional API call** to `https://api.anthropic.com/api/oauth/usage` — a `GET` request with only an `Authorization` header. No telemetry, no tracking, no data sent in the request body. This call is off by default. It only triggers when you opt into the credit indicator (`CLAUDELINE_CREDIT=1`) *and* weekly or burst rate limits reach 100%, to fetch overage/credit utilization.
 
 The OAuth token is read from:
 - **macOS:** macOS Keychain via `security find-generic-password`
 - **Linux:** `~/.config/claude/credentials.json`
-
-claudeline also reads `~/.claude.json` to detect the auto-compact setting (controls context bar scaling).
 
 The API call runs in a **non-blocking background subshell** so it never stalls the status line.
 
 | Variable | Effect |
 |----------|--------|
 | `CLAUDELINE_THEME=nord` | Theme: `vibey` (default), `dark`, `light`, `nord`, `gruvbox` |
-| `CLAUDELINE_SEGMENTS=context,git,pace` | Show only listed segments. Default keeps `model` and standalone `spend` off for a shorter line. Available: `context`, `git`, `lines`, `pace`, `burst`, `duration`, `credit`, `tokens`, `spend`, `cache`, `effort`, `metric`, `throughput`, `model` |
+| `CLAUDELINE_SEGMENTS=context,git,pace` | Show only listed segments. Default keeps `model` and standalone `spend` off for a shorter line. Available: `context`, `git`, `lines`, `pace`, `burst`, `duration`, `credit`, `tokens`, `spend`, `effort`, `metric`, `throughput`, `model` |
+| `CLAUDELINE_CREDIT=1` | Enable the `💳` overage-credit indicator and its optional usage API call (default: off) |
 | `NO_COLOR=1` | Disables all color output ([spec](https://no-color.org)) |
 | `CLAUDELINE_NO_NETWORK=1` | Disables all network access — the API call is skipped entirely |
 | `CLAUDELINE_DEBUG=1` | Enables debug logging to `$TMPDIR/claudeline-statusline-debug.log` |
@@ -383,14 +363,13 @@ The API call runs in a **non-blocking background subshell** so it never stalls t
 | `.jsonl-cache` | Cached all-time token/cost totals (5-min TTL; stale values are served immediately while a background refresh runs) |
 | `.jsonl-state` | Per-file JSONL scan state for incremental refreshes |
 | `.refresh.lock.d/` | Lock directory to prevent concurrent background JSONL refreshes |
-| `.spend-cache` | Cached today, rolling-block, and current-project token/cost totals |
+| `.spend-cache` | Cached today and rolling-block token/cost totals |
 | `.spend-refresh.lock.d/` | Lock directory to prevent concurrent spend scans |
 | `.usage-history` | Rolling 24h usage samples for trend arrows |
 | `.cost-rate-history` | Account-wide `(bucket_epoch, cost_delta_cents, api_delta_ms)` buckets for the cost-rate slot, pruned to 7d |
 | `.cost-rate-state` | Last-seen per-session cumulative totals used to turn session counters into account-wide cost-rate buckets |
 | `.extra-usage-cache` | Cached overage/credit data |
 | `.extra-usage-fetch.lock/` | Lock directory to prevent concurrent API calls |
-| `.claude-config-auto-compact` | Cached auto-compact setting |
 
 <hr>
 

@@ -1,8 +1,11 @@
 #!/usr/bin/env perl
 use strict;
 use warnings;
-use JSON::PP qw(decode_json);
+use JSON::PP qw(decode_json encode_json);
 use FindBin qw($Bin);
+use Fcntl qw(O_CREAT O_RDWR);
+use File::Temp qw(tempdir);
+use SDBM_File;
 use Time::Local qw(timegm timelocal);
 
 my $PRICING_MANIFEST_PATH = $ENV{STATUSLINE_PRICING_MANIFEST} // "$Bin/anthropic_pricing.json";
@@ -10,6 +13,7 @@ my %PRICING_BY_KEY;
 my @PRICING_RULES;
 my %FALLBACK_PRICING_KEYS;
 my %WARNED_UNKNOWN_MODELS;
+my $DEDUP_RETENTION_SECONDS = 86_400;
 
 sub usage {
     die "usage: $0 cold-scan | refresh-state <state_path> <now> <out_path> | window-scan <now> <current_dir> [block_seconds]\n";
@@ -197,14 +201,53 @@ sub summarize_handle {
     return ($total_tokens, $total_cost_units, $total_input, $total_output, $total_cw, $total_cr);
 }
 
-sub parse_usage_file {
-    my ($path, $start_pos) = @_;
+sub parse_complete_usage_file {
+    my ($path, $start_pos, $seen_message_ids, $now) = @_;
     open my $fh, '<', $path or die "open $path: $!";
     binmode $fh;
-    seek($fh, $start_pos, 0) if $start_pos;
-    my @summary = summarize_handle($fh);
+    seek($fh, $start_pos, 0) or die "seek $path to $start_pos: $!" if $start_pos;
+
+    my @summary = zero_summary();
+    my $parsed_pos = $start_pos;
+    while (my $line = <$fh>) {
+        last unless $line =~ /\n\z/;
+        $parsed_pos = tell($fh);
+
+        my $record = usage_record_from_line($line);
+        next unless $record;
+        if (defined $record->{id}) {
+            my $record_epoch = timestamp_epoch($record->{timestamp}) // $now;
+            if (exists $seen_message_ids->{$record->{id}}) {
+                $seen_message_ids->{$record->{id}} = $record_epoch
+                    if $record_epoch > $seen_message_ids->{$record->{id}};
+                next;
+            }
+            $seen_message_ids->{$record->{id}} = $record_epoch;
+        }
+
+        for my $index (0 .. 5) {
+            $summary[$index] += $record->{fields}[$index];
+        }
+    }
+
     close $fh;
-    return @summary;
+    return (@summary, $parsed_pos);
+}
+
+sub has_record_boundary_at {
+    my ($path, $parsed_pos) = @_;
+    return 1 unless $parsed_pos;
+
+    open my $fh, '<', $path or die "open $path: $!";
+    binmode $fh;
+    my $at_boundary = 0;
+    if (seek($fh, $parsed_pos - 1, 0)) {
+        my $byte = '';
+        my $read = read($fh, $byte, 1);
+        $at_boundary = defined $read && $read == 1 && $byte eq "\n";
+    }
+    close $fh;
+    return $at_boundary;
 }
 
 sub print_summary {
@@ -238,20 +281,38 @@ sub read_nul_paths {
 }
 
 sub load_prior_state {
-    my ($state_path) = @_;
+    my ($state_path, $seen_message_ids, $now) = @_;
     my %old;
+    my $needs_dedup_rebuild = 0;
 
     if (open my $state_fh, '<', $state_path) {
         scalar <$state_fh>;
         scalar <$state_fh>;
         while (my $line = <$state_fh>) {
             chomp $line;
-            my ($mtime, $size, $tokens, $cost_units, $input, $output, $cw, $cr, $path) =
-                split /\t/, $line, 9;
+            if ($line =~ /\AI\t(?:(\d+)\t)?(.*)\z/) {
+                my ($seen_epoch, $encoded_id) = ($1, $2);
+                my $message_id = eval { decode_json($encoded_id) };
+                $seen_message_ids->{$message_id} = defined $seen_epoch ? $seen_epoch : $now
+                    if defined $message_id && !ref($message_id) && length $message_id;
+                next;
+            }
+
+            my @fields = split /\t/, $line, 10;
+            my ($mtime, $size, $parsed_pos, $tokens, $cost_units, $input, $output, $cw, $cr, $path);
+            if (@fields == 10) {
+                ($mtime, $size, $parsed_pos, $tokens, $cost_units, $input, $output, $cw, $cr, $path) = @fields;
+            } else {
+                ($mtime, $size, $tokens, $cost_units, $input, $output, $cw, $cr, $path) =
+                    split /\t/, $line, 9;
+                $parsed_pos = $size;
+                $needs_dedup_rebuild = 1;
+            }
             next unless defined $path;
             $old{$path} = {
                 mtime => $mtime + 0,
                 size => $size + 0,
+                parsed_pos => $parsed_pos + 0,
                 tokens => $tokens + 0,
                 cost_units => $cost_units + 0,
                 input => $input + 0,
@@ -263,7 +324,7 @@ sub load_prior_state {
         close $state_fh;
     }
 
-    return \%old;
+    return (\%old, $needs_dedup_rebuild);
 }
 
 sub run_cold_scan {
@@ -315,35 +376,64 @@ sub run_refresh_state {
     my ($state_path, $now, $out_path) = @_;
     usage() unless defined $state_path && defined $now && defined $out_path;
 
-    my $old = load_prior_state($state_path);
+    my $dedup_dir = tempdir(CLEANUP => 1);
+    my %seen_message_ids;
+    tie %seen_message_ids, 'SDBM_File', "$dedup_dir/message-ids", O_RDWR | O_CREAT, 0600
+        or die "create refresh dedup index: $!";
+
+    my ($old, $needs_dedup_rebuild) = load_prior_state($state_path, \%seen_message_ids, $now);
     my @paths = read_nul_paths();
     my @records;
     my ($total_tokens, $total_cost_units, $total_input, $total_output, $total_cw, $total_cr) = zero_summary();
 
+    my %current_stats;
     for my $path (@paths) {
         my @stat = stat($path);
-        next unless @stat;
+        $current_stats{$path} = [$stat[9], $stat[7]] if @stat;
+    }
 
-        my ($mtime, $size) = ($stat[9], $stat[7]);
-        my ($tokens, $cost_units, $input, $output, $cw, $cr);
+    my $full_reparse = $needs_dedup_rebuild || grep { !exists $current_stats{$_} } keys %{$old};
+    if (!$full_reparse) {
+        for my $path (@paths) {
+            next unless exists $current_stats{$path} && exists $old->{$path};
+            my ($mtime, $size) = @{$current_stats{$path}};
+            my $prev = $old->{$path};
+            if ($size < $prev->{size}
+                    || ($size == $prev->{size} && $mtime != $prev->{mtime})
+                    || ($size > $prev->{size} && !has_record_boundary_at($path, $prev->{parsed_pos}))) {
+                $full_reparse = 1;
+                last;
+            }
+        }
+    }
+    %seen_message_ids = () if $full_reparse;
+
+    for my $path (@paths) {
+        next unless exists $current_stats{$path};
+
+        my ($mtime, $size) = @{$current_stats{$path}};
+        my ($tokens, $cost_units, $input, $output, $cw, $cr, $parsed_pos);
         my $prev = $old->{$path};
 
-        if ($prev && $size == $prev->{size} && $mtime == $prev->{mtime}) {
+        if (!$full_reparse && $prev && $size == $prev->{size} && $mtime == $prev->{mtime}) {
             ($tokens, $cost_units, $input, $output, $cw, $cr) =
                 @{$prev}{qw(tokens cost_units input output cw cr)};
-        } elsif ($prev && $size >= $prev->{size}) {
-            my @delta = parse_usage_file($path, $prev->{size});
+            $parsed_pos = $prev->{parsed_pos};
+        } elsif (!$full_reparse && $prev && $size >= $prev->{size}) {
+            my @delta = parse_complete_usage_file($path, $prev->{parsed_pos}, \%seen_message_ids, $now);
             $tokens = $prev->{tokens} + $delta[0];
             $cost_units = $prev->{cost_units} + $delta[1];
             $input = $prev->{input} + $delta[2];
             $output = $prev->{output} + $delta[3];
             $cw = $prev->{cw} + $delta[4];
             $cr = $prev->{cr} + $delta[5];
+            $parsed_pos = $delta[6];
         } else {
-            ($tokens, $cost_units, $input, $output, $cw, $cr) = parse_usage_file($path, 0);
+            ($tokens, $cost_units, $input, $output, $cw, $cr, $parsed_pos) =
+                parse_complete_usage_file($path, 0, \%seen_message_ids, $now);
         }
 
-        push @records, join("\t", $mtime, $size, $tokens, $cost_units, $input, $output, $cw, $cr, $path);
+        push @records, join("\t", $mtime, $size, $parsed_pos, $tokens, $cost_units, $input, $output, $cw, $cr, $path);
         $total_tokens += $tokens;
         $total_cost_units += $cost_units;
         $total_input += $input;
@@ -353,10 +443,23 @@ sub run_refresh_state {
     }
 
     open my $out_fh, '>', $out_path or die "open $out_path: $!";
-    print {$out_fh} "$now\n";
-    print {$out_fh} "$total_tokens $total_cost_units $total_input $total_output $total_cw $total_cr\n";
-    print {$out_fh} "$_\n" for @records;
-    close $out_fh;
+    my $write_ok = print {$out_fh} "$now\n";
+    $write_ok = 0 unless print {$out_fh} "$total_tokens $total_cost_units $total_input $total_output $total_cw $total_cr\n";
+    for my $record (@records) {
+        $write_ok = 0, last unless print {$out_fh} "$record\n";
+    }
+    my $dedup_cutoff = $now - $DEDUP_RETENTION_SECONDS;
+    if ($write_ok) {
+        while (my ($message_id, $seen_epoch) = each %seen_message_ids) {
+            next if $seen_epoch < $dedup_cutoff;
+            $write_ok = 0, last
+                unless print {$out_fh} "I\t$seen_epoch\t", encode_json($message_id), "\n";
+        }
+    }
+    my $close_ok = close $out_fh;
+
+    untie %seen_message_ids;
+    die "write $out_path: $!\n" unless $write_ok && $close_ok;
 
     print_summary($total_tokens, $total_cost_units, $total_input, $total_output, $total_cw, $total_cr);
     return 0;

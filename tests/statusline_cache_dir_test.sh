@@ -24,7 +24,7 @@ get_perm() {
 }
 
 cache_bootstrap="$tmpdir/cache_bootstrap.sh"
-sed -n '/^# Cache directory for API and JSONL data/,/^# Read auto-compact setting/p' \
+sed -n '/^# Cache directory for API and JSONL data/,/^# Extract all values in a single jq call/p' \
     "$repo_root/statusline.sh" > "$cache_bootstrap"
 
 shim_dir="$tmpdir/shim"

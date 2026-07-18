@@ -34,6 +34,7 @@ cat > "$shim_dir/git" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
+[ "${1:-}" = "-C" ] && shift 2  # tolerate the git -C <dir> prefix
 cmd1=${1:-}
 cmd2=${2:-}
 cmd3=${3:-}
@@ -94,6 +95,6 @@ done < "$tmpdir/rendered.txt"
 
 assert_eq 2 "${#lines[@]}" "statusline integration emits exactly two lines"
 assert_eq "✨ ░░░░░░░░░░  ·  demo/main*↑2  ·  +12/-3" "${lines[0]}" "statusline integration renders the first line deterministically"
-assert_eq '      1K/168K  ·  💧 1 tablespoons  ·  ⏱️ 5m' "${lines[1]}" "statusline integration renders the second line deterministically"
+assert_eq '      1K/200K  ·  ⏱️ 5m' "${lines[1]}" "statusline integration renders the second line deterministically"
 
 printf 'ok\n'

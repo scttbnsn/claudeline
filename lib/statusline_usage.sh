@@ -33,6 +33,41 @@ is_decimal_value() {
     [[ "$value" =~ ^-?([0-9]+([.][0-9]+)?|[.][0-9]+)$ ]]
 }
 
+# Write $2 to path $1 atomically (temp file in the same dir, then rename) so a
+# concurrent reader never observes a half-written file.
+atomic_write() {
+    local dest=$1 content=$2 tmp
+    tmp=$(mktemp "${dest}.XXXXXX" 2>>"${STATUSLINE_DEBUG_LOG:-/dev/null}") || return 1
+    if printf '%s' "$content" > "$tmp" 2>>"${STATUSLINE_DEBUG_LOG:-/dev/null}"; then
+        mv "$tmp" "$dest" 2>>"${STATUSLINE_DEBUG_LOG:-/dev/null}" || { rm -f "$tmp" 2>/dev/null; return 1; }
+    else
+        rm -f "$tmp" 2>/dev/null
+        return 1
+    fi
+}
+
+# Non-blocking mkdir lock with stale reclaim. Returns 0 only when the lock is
+# newly held by this caller. A lock directory older than 2 minutes is treated as
+# abandoned (a status-line render finishes in well under a second).
+try_lock_dir() {
+    local lock_dir=$1
+    [ -n "$lock_dir" ] || return 1
+    if [ -d "$lock_dir" ]; then
+        local stale
+        stale=$(find "$lock_dir" -maxdepth 0 -mmin +2 -print 2>/dev/null)
+        if [ -n "$stale" ]; then
+            # Steal by atomic rename, not a bare rmdir: only one racer can rename
+            # the stale dir aside (the rest see "source gone"), so we never remove
+            # a lock a different racer just freshly re-acquired (ABA).
+            local aside="${lock_dir}.stale.$$"
+            if mv "$lock_dir" "$aside" 2>/dev/null; then
+                rm -rf "$aside" 2>/dev/null || true
+            fi
+        fi
+    fi
+    mkdir "$lock_dir" 2>/dev/null
+}
+
 detect_stat_mtime_reader() {
     local probe_path=${1:-$STATUSLINE_USAGE_DIR}
     local debug_log_path=${STATUSLINE_DEBUG_LOG:-/dev/null}
@@ -64,8 +99,9 @@ detect_stat_mtime_reader() {
 
 detect_stat_mtime_reader "$STATUSLINE_USAGE_DIR" || true
 
-# Calculate all-time usage from JSONL files (cached for 5 minutes)
-# Uses persistent per-file running sums so cache misses do not trigger full rescans.
+# Calculate all-time usage (retained local API-cost estimate) from JSONL files
+# (cached for 5 minutes). Uses persistent per-file running sums so cache misses
+# do not trigger full rescans.
 write_jsonl_cache() {
     local now=$1
     local summary=$2
@@ -128,30 +164,9 @@ restore_jsonl_cache_from_state() {
 # Populates the caller-supplied array via nameref-style eval (bash 3.2 compat).
 collect_jsonl_search_roots() {
     JSONL_SEARCH_ROOTS=()
-    [ -d "$HOME/.claude/projects" ] && JSONL_SEARCH_ROOTS+=("$HOME/.claude/projects")
+    [ -d "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects" ] && JSONL_SEARCH_ROOTS+=("${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects")
     [ -d "$HOME/.config/claude/projects" ] && JSONL_SEARCH_ROOTS+=("$HOME/.config/claude/projects")
     [ "${#JSONL_SEARCH_ROOTS[@]}" -gt 0 ]
-}
-
-encode_claude_project_dir() {
-    local current_dir=$1
-    local out_var=$2
-    local encoded=${current_dir//\//-}
-
-    printf -v "$out_var" '%s' "$encoded"
-}
-
-collect_project_jsonl_search_roots() {
-    local current_dir=$1
-    local encoded_dir=""
-
-    PROJECT_JSONL_SEARCH_ROOTS=()
-    [ -n "$current_dir" ] || return 1
-    encode_claude_project_dir "$current_dir" encoded_dir
-
-    [ -d "$HOME/.claude/projects/$encoded_dir" ] && PROJECT_JSONL_SEARCH_ROOTS+=("$HOME/.claude/projects/$encoded_dir")
-    [ -d "$HOME/.config/claude/projects/$encoded_dir" ] && PROJECT_JSONL_SEARCH_ROOTS+=("$HOME/.config/claude/projects/$encoded_dir")
-    [ "${#PROJECT_JSONL_SEARCH_ROOTS[@]}" -gt 0 ]
 }
 
 # Fast streaming scan for cold start (no per-file state, just global totals).
@@ -352,25 +367,21 @@ get_jsonl_totals() {
 write_spend_cache() {
     local now=$1
     local summary=$2
-    local today_tokens today_cost_cents block_tokens block_cost_cents project_tokens project_cost_cents tmp_cache
+    local today_tokens today_cost_cents block_tokens block_cost_cents tmp_cache
 
-    read -r today_tokens today_cost_cents block_tokens block_cost_cents project_tokens project_cost_cents <<< "$summary"
+    read -r today_tokens today_cost_cents block_tokens block_cost_cents <<< "$summary"
     today_tokens=${today_tokens:-0}
     today_cost_cents=${today_cost_cents:-0}
     block_tokens=${block_tokens:-0}
     block_cost_cents=${block_cost_cents:-0}
-    project_tokens=${project_tokens:-0}
-    project_cost_cents=${project_cost_cents:-0}
     [[ "$today_tokens" =~ ^[0-9]+$ ]] || today_tokens=0
     [[ "$today_cost_cents" =~ ^[0-9]+$ ]] || today_cost_cents=0
     [[ "$block_tokens" =~ ^[0-9]+$ ]] || block_tokens=0
     [[ "$block_cost_cents" =~ ^[0-9]+$ ]] || block_cost_cents=0
-    [[ "$project_tokens" =~ ^[0-9]+$ ]] || project_tokens=0
-    [[ "$project_cost_cents" =~ ^[0-9]+$ ]] || project_cost_cents=0
 
     tmp_cache=$(mktemp "${CACHE_DIR}/.spend-cache-XXXXXX") || return 1
-    printf '%s\n%s %s %s %s %s %s\n' \
-        "$now" "$today_tokens" "$today_cost_cents" "$block_tokens" "$block_cost_cents" "$project_tokens" "$project_cost_cents" > "$tmp_cache" || {
+    printf '%s\n%s %s %s %s\n' \
+        "$now" "$today_tokens" "$today_cost_cents" "$block_tokens" "$block_cost_cents" > "$tmp_cache" || {
         rm -f "$tmp_cache"
         return 1
     }
@@ -384,7 +395,8 @@ write_spend_cache() {
 read_spend_cache() {
     local now=$1
     local max_age=${2:-600}
-    local cache_time cache_summary cache_age _today_cost _block_cost _project_cost
+    local cache_time cache_summary cache_age
+    local _today_cost _block_cost _today_tokens _block_tokens
 
     SPEND_CACHE_VALUE=""
     SPEND_CACHE_IS_FRESH=0
@@ -400,9 +412,16 @@ read_spend_cache() {
         return 1
     fi
     if [[ "$cache_summary" =~ ^[0-9]+[[:space:]][0-9]+[[:space:]][0-9]+$ ]]; then
-        read -r _today_cost _block_cost _project_cost <<< "$cache_summary"
-        cache_summary="0 ${_today_cost:-0} 0 ${_block_cost:-0} 0 ${_project_cost:-0}"
-    elif ! [[ "$cache_summary" =~ ^[0-9]+[[:space:]][0-9]+[[:space:]][0-9]+[[:space:]][0-9]+[[:space:]][0-9]+[[:space:]][0-9]+$ ]]; then
+        # Legacy 3-field cost-only format: today_cost block_cost project_cost.
+        # Project cost is dropped (the feature is removed); tokens default to 0.
+        read -r _today_cost _block_cost _ <<< "$cache_summary"
+        cache_summary="0 ${_today_cost:-0} 0 ${_block_cost:-0}"
+    elif [[ "$cache_summary" =~ ^[0-9]+[[:space:]][0-9]+[[:space:]][0-9]+[[:space:]][0-9]+[[:space:]][0-9]+[[:space:]][0-9]+$ ]]; then
+        # Prior-version 6-field format: today_tokens today_cost block_tokens
+        # block_cost project_tokens project_cost. Drop the trailing project pair.
+        read -r _today_tokens _today_cost _block_tokens _block_cost _ _ <<< "$cache_summary"
+        cache_summary="${_today_tokens:-0} ${_today_cost:-0} ${_block_tokens:-0} ${_block_cost:-0}"
+    elif ! [[ "$cache_summary" =~ ^[0-9]+[[:space:]][0-9]+[[:space:]][0-9]+[[:space:]][0-9]+$ ]]; then
         debug_log "Ignoring invalid spend cache value in $SPEND_CACHE: ${cache_summary:-<empty>}"
         return 1
     fi
@@ -417,10 +436,9 @@ refresh_spend_cache_now() {
     local now=$1
     local current_dir=$2
     local summary="0 0 0 0"
-    local today_tokens=0 today_cost_cents=0 block_tokens=0 block_cost_cents=0 project_tokens=0 project_cost_cents=0
+    local today_tokens=0 today_cost_cents=0 block_tokens=0 block_cost_cents=0
     local recent_mins=$((SECONDS_PER_DAY / 60 + 120))
-    local first_recent="" first_project="" project_summary=""
-    local _project_tokens project_cost_units _project_input _project_output _project_cw _project_cr
+    local first_recent=""
 
     collect_jsonl_search_roots || {
         debug_log "No JSONL search roots found for spend scan"
@@ -447,24 +465,7 @@ refresh_spend_cache_now() {
     block_tokens=${block_tokens:-0}
     block_cost_cents=${block_cost_cents:-0}
 
-    if collect_project_jsonl_search_roots "$current_dir"; then
-        first_project=$(find "${PROJECT_JSONL_SEARCH_ROOTS[@]}" \
-            -name "*.jsonl" -type f -not -type l -print -quit 2>>"$STATUSLINE_DEBUG_LOG" || true)
-        if [ -n "$first_project" ]; then
-            project_summary=$(find "${PROJECT_JSONL_SEARCH_ROOTS[@]}" \
-                -name "*.jsonl" -type f -not -type l -print0 2>>"$STATUSLINE_DEBUG_LOG" \
-                | xargs -0 cat 2>/dev/null \
-                | perl "$STATUSLINE_JSONL_PARSER" cold-scan 2>>"$STATUSLINE_DEBUG_LOG") || project_summary=""
-            read -r project_tokens project_cost_units _project_input _project_output _project_cw _project_cr <<< "$project_summary"
-            project_tokens=${project_tokens:-0}
-            project_cost_units=${project_cost_units:-0}
-            if [[ "$project_cost_units" =~ ^[0-9]+$ ]]; then
-                project_cost_cents=$(( (project_cost_units + 500000) / 1000000 ))
-            fi
-        fi
-    fi
-
-    write_spend_cache "$now" "$today_tokens $today_cost_cents $block_tokens $block_cost_cents $project_tokens $project_cost_cents"
+    write_spend_cache "$now" "$today_tokens $today_cost_cents $block_tokens $block_cost_cents"
 }
 
 start_spend_refresh() {
@@ -820,20 +821,24 @@ get_trend_arrow() {
                     *"|$block|"*) continue ;;
                 esac
                 seen_blocks="${seen_blocks}${block}|"
-            fi
-
-            if [ "$first_time" -eq 0 ] || [ "$sample_time" -lt "$first_time" ]; then
-                first_time=$sample_time
-                first_usage=$sample_usage
-            fi
-            if [ "$sample_time" -gt "$last_time" ]; then
-                last_time=$sample_time
-                last_usage=$sample_usage
+            else
+                # Only samples within TREND_WINDOW of `now` may seed the
+                # trend baseline (first/last/count) — older samples are kept
+                # in history (below) for dedup/retention but must not skew
+                # the 15-minute trend comparison.
+                if [ "$first_time" -eq 0 ] || [ "$sample_time" -lt "$first_time" ]; then
+                    first_time=$sample_time
+                    first_usage=$sample_usage
+                fi
+                if [ "$sample_time" -gt "$last_time" ]; then
+                    last_time=$sample_time
+                    last_usage=$sample_usage
+                fi
+                count=$((count + 1))
             fi
             if [ "$sample_time" -gt "$most_recent_time" ]; then
                 most_recent_time=$sample_time
             fi
-            count=$((count + 1))
             printf -v kept_history '%s%s%s,%s' "$kept_history" "$kept_sep" "$sample_time" "$sample_usage"
             kept_sep=$'\n'
         done < "$USAGE_HISTORY"
@@ -887,8 +892,8 @@ get_trend_arrow() {
     esac
 }
 
-# Account-wide cost-rate indicator (cents per minute of API-active time).
-# The displayed number is the current account-wide active-work rate over
+# Locally observed API-cost-rate indicator (cents per minute of API-active time).
+# The displayed number is the current locally observed active-work rate over
 # COST_RATE_CURRENT_WINDOW (1h by default). Idle wall-clock time never enters
 # the denominator: every rate is cost_delta / api_duration_delta.
 #
@@ -899,7 +904,7 @@ get_trend_arrow() {
 # the signal responsive to real setup changes while letting a new setup become
 # normal after it has dominated the lookback.
 #
-# History lives in $COST_RATE_HISTORY as account-wide minute buckets:
+# History lives in $COST_RATE_HISTORY as locally observed minute buckets:
 #     bucket_epoch,total_cost_delta_cents,total_api_delta_ms
 # Last-seen per-session cumulative totals live in $COST_RATE_STATE:
 #     session_id,wall_epoch,total_cost_cents,api_duration_ms
@@ -920,6 +925,8 @@ get_cost_rate_indicator() {
     local warm_x100=${COST_RATE_TREND_WARM_X100}
     local cool_x100=${COST_RATE_TREND_COOL_X100}
     local cold_x100=${COST_RATE_TREND_COLD_X100}
+    local lock_dir=${COST_RATE_LOCK:-}
+    local have_lock=0
 
     REPLY=""
 
@@ -947,6 +954,15 @@ get_cost_rate_indicator() {
     [ "$session_rate_milli" -gt 0 ] || return 0
 
     [ -z "$state_file" ] && [ -n "$history_file" ] && state_file="${history_file}.state"
+    [ -z "$lock_dir" ] && [ -n "$history_file" ] && lock_dir="${history_file}.lock.d"
+
+    # Serialize the shared state/history read-modify-write across concurrent
+    # status-line renders (multiple terminals) so an update is never lost. If the
+    # lock is contended, skip persistence this tick and fall back to the
+    # session-only display rate; the next render re-derives the delta.
+    if [ -n "$lock_dir" ] && try_lock_dir "$lock_dir"; then
+        have_lock=1
+    fi
 
     local prune_cutoff=$((now - max_age))
     local current_cutoff=$((now - current_window))
@@ -955,7 +971,7 @@ get_cost_rate_indicator() {
     local delta_cost=0
     local delta_api_ms=0
 
-    # First convert this session's cumulative totals into one account-wide
+    # First convert this session's cumulative totals into one locally observed
     # delta. State is separate from bucket history so the render path only has
     # to aggregate bounded minute buckets.
     if [ -n "$session_id" ] && [ -n "$state_file" ]; then
@@ -994,16 +1010,16 @@ get_cost_rate_indicator() {
             delta_api_ms=$((api_duration_ms - prev_api))
         fi
 
+        # Defer the state write until after history persists (see the coupled
+        # write block below) so the per-session checkpoint never advances ahead
+        # of the locally observed history it feeds.
         printf -v kept_state '%s%s%s,%s,%s,%s' \
             "$kept_state" "$kept_state_sep" "$session_id" "$now" "$total_cost_cents" "$api_duration_ms"
-        if ! printf '%s' "$kept_state" > "$state_file" 2>>"$STATUSLINE_DEBUG_LOG"; then
-            debug_log "Cost-rate state update failed"
-        fi
     fi
 
-    # Bucket history is account-wide, so every session contributes to the same
-    # current window and baseline. Buckets make seven-day retention cheap enough
-    # for statusline rendering.
+    # Bucket history is locally observed, so every session contributes to the
+    # same current window and baseline. Buckets make seven-day retention cheap
+    # enough for statusline rendering.
     local current_cost=0 current_api=0
     local baseline_cost=0 baseline_api=0
     local fallback_cost=0 fallback_api=0
@@ -1053,10 +1069,34 @@ get_cost_rate_indicator() {
         current_api=$((current_api + delta_api_ms))
     fi
 
-    if [ -n "$history_file" ]; then
-        if ! printf '%s' "$kept_history" > "$history_file" 2>>"$STATUSLINE_DEBUG_LOG"; then
-            debug_log "Cost-rate history update failed"
+    # Persist history + per-session state as a coupled pair, staged then committed:
+    # write BOTH temp files first, and only rename them into place once both are
+    # staged. mktemp/write is where an out-of-space or I/O error surfaces; if
+    # either stage fails, nothing is committed and the same delta is recomputed
+    # next render (self-healing, no lost or duplicated accounting). rename() is
+    # metadata-only and won't fail on a full disk, so the two commits can't tear
+    # the pair the way two independent atomic writes could. Release the lock last.
+    if [ "$have_lock" = 1 ]; then
+        local hist_tmp="" state_tmp="" stage_ok=1
+        if [ -n "$history_file" ]; then
+            hist_tmp=$(mktemp "${history_file}.XXXXXX" 2>>"$STATUSLINE_DEBUG_LOG") \
+                && printf '%s' "$kept_history" > "$hist_tmp" 2>>"$STATUSLINE_DEBUG_LOG" \
+                || { stage_ok=0; debug_log "Cost-rate history staging failed"; }
         fi
+        if [ "$stage_ok" = 1 ] && [ -n "$session_id" ] && [ -n "$state_file" ]; then
+            state_tmp=$(mktemp "${state_file}.XXXXXX" 2>>"$STATUSLINE_DEBUG_LOG") \
+                && printf '%s' "$kept_state" > "$state_tmp" 2>>"$STATUSLINE_DEBUG_LOG" \
+                || { stage_ok=0; debug_log "Cost-rate state staging failed"; }
+        fi
+        if [ "$stage_ok" = 1 ]; then
+            [ -n "$hist_tmp" ] && { mv "$hist_tmp" "$history_file" 2>>"$STATUSLINE_DEBUG_LOG" || true; }
+            [ -n "$state_tmp" ] && { mv "$state_tmp" "$state_file" 2>>"$STATUSLINE_DEBUG_LOG" || true; }
+        else
+            [ -n "$hist_tmp" ] && rm -f "$hist_tmp" 2>/dev/null
+            [ -n "$state_tmp" ] && rm -f "$state_tmp" 2>/dev/null
+        fi
+        rmdir "$lock_dir" 2>>"$STATUSLINE_DEBUG_LOG" || true
+        have_lock=0
     fi
 
     local display_rate_milli=$session_rate_milli

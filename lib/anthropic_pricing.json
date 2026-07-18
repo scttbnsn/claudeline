@@ -1,16 +1,25 @@
 {
    "fallback_pricing_keys" : {
-      "default" : "claude-sonnet-4-6",
+      "default" : "claude-sonnet-5",
       "haiku" : "claude-haiku-4-5",
-      "opus" : "claude-opus-4-6",
-      "sonnet" : "claude-sonnet-4-6"
+      "opus" : "claude-opus-4-8",
+      "sonnet" : "claude-sonnet-5"
    },
-   "generated_at" : "2026-04-05T00:00:00Z",
+   "generated_at" : "2026-07-18T00:00:00Z",
    "jsonl_usage_notes" : {
       "cache_creation_input_tokens" : "Mapped to the 5-minute prompt cache write rate because Claude Code JSONL usage does not expose cache duration.",
-      "cache_read_input_tokens" : "Mapped to the prompt cache hit/refresh rate from Anthropic pricing docs."
+      "cache_read_input_tokens" : "Mapped to the prompt cache hit/refresh rate from Anthropic pricing docs.",
+      "sonnet_5_introductory_pricing" : "Claude Sonnet 5 listed at standard $3/$15 per MTok. Introductory pricing of $2/$10 applied through 2026-08-31."
    },
    "pricing" : {
+      "claude-fable-5" : {
+         "cache_read_cost_units" : 100,
+         "cache_write_1h_cost_units" : 2000,
+         "cache_write_cost_units" : 1250,
+         "display_name" : "Claude Fable 5",
+         "input_cost_units" : 1000,
+         "output_cost_units" : 5000
+      },
       "claude-haiku-3" : {
          "cache_read_cost_units" : 3,
          "cache_write_1h_cost_units" : 50,
@@ -75,6 +84,22 @@
          "input_cost_units" : 500,
          "output_cost_units" : 2500
       },
+      "claude-opus-4-7" : {
+         "cache_read_cost_units" : 50,
+         "cache_write_1h_cost_units" : 1000,
+         "cache_write_cost_units" : 625,
+         "display_name" : "Claude Opus 4.7",
+         "input_cost_units" : 500,
+         "output_cost_units" : 2500
+      },
+      "claude-opus-4-8" : {
+         "cache_read_cost_units" : 50,
+         "cache_write_1h_cost_units" : 1000,
+         "cache_write_cost_units" : 625,
+         "display_name" : "Claude Opus 4.8",
+         "input_cost_units" : 500,
+         "output_cost_units" : 2500
+      },
       "claude-sonnet-3-7" : {
          "cache_read_cost_units" : 30,
          "cache_write_1h_cost_units" : 600,
@@ -106,10 +131,58 @@
          "display_name" : "Claude Sonnet 4.6",
          "input_cost_units" : 300,
          "output_cost_units" : 1500
+      },
+      "claude-sonnet-5" : {
+         "cache_read_cost_units" : 30,
+         "cache_write_1h_cost_units" : 600,
+         "cache_write_cost_units" : 375,
+         "display_name" : "Claude Sonnet 5",
+         "input_cost_units" : 300,
+         "output_cost_units" : 1500
       }
    },
    "pricing_source_url" : "https://platform.claude.com/docs/en/about-claude/pricing",
    "rules" : [
+      {
+         "match_kind" : "exact",
+         "match_value" : "claude-opus-4-8",
+         "pricing_key" : "claude-opus-4-8"
+      },
+      {
+         "match_kind" : "regex",
+         "match_value" : "^claude-opus-4-8-\\d{8}$",
+         "pricing_key" : "claude-opus-4-8"
+      },
+      {
+         "match_kind" : "exact",
+         "match_value" : "claude-opus-4-7",
+         "pricing_key" : "claude-opus-4-7"
+      },
+      {
+         "match_kind" : "regex",
+         "match_value" : "^claude-opus-4-7-\\d{8}$",
+         "pricing_key" : "claude-opus-4-7"
+      },
+      {
+         "match_kind" : "exact",
+         "match_value" : "claude-sonnet-5",
+         "pricing_key" : "claude-sonnet-5"
+      },
+      {
+         "match_kind" : "regex",
+         "match_value" : "^claude-sonnet-5-\\d{8}$",
+         "pricing_key" : "claude-sonnet-5"
+      },
+      {
+         "match_kind" : "exact",
+         "match_value" : "claude-fable-5",
+         "pricing_key" : "claude-fable-5"
+      },
+      {
+         "match_kind" : "regex",
+         "match_value" : "^claude-fable-5-\\d{8}$",
+         "pricing_key" : "claude-fable-5"
+      },
       {
          "match_kind" : "exact",
          "match_value" : "claude-opus-4-6",

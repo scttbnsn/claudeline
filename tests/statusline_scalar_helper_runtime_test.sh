@@ -17,8 +17,24 @@ assert_eq() {
 }
 
 helper_file="$tmpdir/statusline_scalar_helpers.sh"
-sed -n '/^normalize_scalar_var() {/,/^read_auto_compact_setting() {/p' \
-    "$repo_root/statusline.sh" | sed '$d' > "$helper_file"
+
+extract_function() {
+    local function_name=$1
+
+    perl -0ne "print \$1 if /(^${function_name}\\(\\) \\{.*?^\\})/ms" \
+        "$repo_root/statusline.sh"
+}
+
+{
+    extract_function "normalize_scalar_var"
+    printf '\n'
+    extract_function "round_decimal_to_int_or_default"
+} > "$helper_file"
+
+[ -s "$helper_file" ] || {
+    printf 'FAIL: failed to extract scalar helper functions from statusline.sh\n' >&2
+    exit 1
+}
 
 STATUSLINE_DEBUG_LOG=/dev/null
 debug_log() { :; }
