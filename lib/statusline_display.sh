@@ -11,6 +11,7 @@ fi
 # Environmental impact rates (per million tokens)
 # Sources: arxiv:2304.03271 (water), arxiv:2505.09598 (energy), updated 2026
 # Water: 1gal=760k tokens (see format_water for full conversion table)
+# NOTE: these figures are rough/illustrative estimates, not precise measurements.
 MICRO_WH_PER_TOKEN=4170     # Exact fixed-point form of 4.17 kWh / 1M tokens
 BYTES_PER_TOKEN=4           # ~4 chars/token for English text (BPE tokenizer avg)
 
@@ -28,19 +29,7 @@ ALLTIME_COST_ITEMS=(
     "equinox" "soulcycle" "razor" "magic-mouse" "iphone"
 )
 
-# Context tier lookup tables
-CONTEXT_TIERS_AUTO_COMPACT=(
-    "10|CTX_CYAN|✨"
-    "20|CTX_LIME|🌱"
-    "35|CTX_YELLOW|💭"
-    "50|CTX_ORANGE|🧠"
-    "62|CTX_CORAL|⚡"
-    "74|CTX_RED|🔥"
-    "84|CTX_HOT_PINK|🌡️"
-    "92|CTX_MAGENTA|🫠"
-    "97|CTX_VIOLET|💀"
-    "101|CTX_WHITE_HOT|💾"
-)
+# Context tier lookup table
 CONTEXT_TIERS_FULL_WINDOW=(
     "15|CTX_CYAN|✨"
     "30|CTX_LIME|🌱"
@@ -71,15 +60,8 @@ BURST_COUNTDOWN_SOON_MINS=60
 
 set_context_tier() {
     local percent_used=$1
-    local auto_compact=${2:-$AUTO_COMPACT_ON}
     local entry threshold color_var icon
-    local -a tiers
-
-    if [ "$auto_compact" = "true" ]; then
-        tiers=("${CONTEXT_TIERS_AUTO_COMPACT[@]}")
-    else
-        tiers=("${CONTEXT_TIERS_FULL_WINDOW[@]}")
-    fi
+    local -a tiers=("${CONTEXT_TIERS_FULL_WINDOW[@]}")
 
     for entry in "${tiers[@]}"; do
         IFS='|' read -r threshold color_var icon <<< "$entry"
@@ -838,59 +820,29 @@ format_effort_indicator() {
     fi
 }
 
-format_cache_efficiency_indicator() {
-    local input_tokens=$1
-    local cache_write_tokens=$2
-    local cache_read_tokens=$3
-
-    [[ "$input_tokens" =~ ^[0-9]+$ ]] || input_tokens=0
-    [[ "$cache_write_tokens" =~ ^[0-9]+$ ]] || cache_write_tokens=0
-    [[ "$cache_read_tokens" =~ ^[0-9]+$ ]] || cache_read_tokens=0
-
-    if [ "$cache_write_tokens" -gt "$cache_read_tokens" ] && [ "$cache_write_tokens" -gt 0 ]; then
-        REPLY="${DIM}🗄️✍️$(format_number "$cache_write_tokens")${RESET}"
-        return
-    fi
-
-    if [ "$cache_read_tokens" -gt 0 ]; then
-        local total_tokens=$((input_tokens + cache_write_tokens + cache_read_tokens))
-        local pct=0
-        if [ "$total_tokens" -gt 0 ]; then
-            pct=$(( (cache_read_tokens * 100 + total_tokens / 2) / total_tokens ))
-        fi
-        REPLY="${DIM}🗄️${pct}%${RESET}"
-        return
-    fi
-
-    REPLY=""
-}
-
+# Rotates between today's cost, the rolling 5h API cost (block), and the
+# session's estimated API list-price-equivalent cost.
 format_spend_indicator() {
     local today_cost_cents=$1
     local block_cost_cents=$2
-    local project_cost_cents=$3
-    local session_cost_cents=$4
-    local now=${5:-${NOW:-$(date +%s)}}
+    local session_cost_cents=$3
+    local now=${4:-${NOW:-$(date +%s)}}
     local cycle=$(( (now / 10) % 10 ))
     local selected_cents=0
     local prefix="" suffix=""
 
     [[ "$today_cost_cents" =~ ^[0-9]+$ ]] || today_cost_cents=0
     [[ "$block_cost_cents" =~ ^[0-9]+$ ]] || block_cost_cents=0
-    [[ "$project_cost_cents" =~ ^[0-9]+$ ]] || project_cost_cents=0
     [[ "$session_cost_cents" =~ ^[0-9]+$ ]] || session_cost_cents=0
 
-    if [ "$cycle" -le 2 ]; then
+    if [ "$cycle" -le 3 ]; then
         selected_cents=$today_cost_cents
         prefix="💰"
         suffix="d"
-    elif [ "$cycle" -le 5 ]; then
+    elif [ "$cycle" -le 6 ]; then
         selected_cents=$block_cost_cents
         prefix="🧱"
         suffix="/5h"
-    elif [ "$cycle" -le 8 ]; then
-        selected_cents=$project_cost_cents
-        prefix="📁"
     else
         selected_cents=$session_cost_cents
         prefix="💬"
