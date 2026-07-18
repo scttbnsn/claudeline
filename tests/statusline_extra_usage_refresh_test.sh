@@ -84,6 +84,7 @@ run_refresh_case() {
     mkdir -p "$home_dir/.config/claude" "$cache_dir" "$shim_dir"
     : > "$DEBUG_LOG"
     "$jq_bin" -n --arg token "$oauth_token" '{claudeAiOauth:{accessToken:$token}}' > "$cfg"
+    chmod 600 "$cfg"
     if [ -n "$seed_cache" ]; then
         printf '%s' "$seed_cache" > "$cache_dir/.extra-usage-cache"
     else
@@ -106,10 +107,15 @@ exec "$jq_bin" "\$@"
 EOF
     chmod +x "$shim_dir/jq"
 
+    cat > "$shim_dir/security" <<'EOF'
+#!/usr/bin/env bash
+cat "$HOME/.config/claude/credentials.json"
+EOF
+    chmod +x "$shim_dir/security"
+
     (
         export HOME="$home_dir"
         export PATH="$shim_dir:$orig_path"
-        export OSTYPE="linux-gnu"
         export CACHE_DIR="$cache_dir"
         export EXTRA_USAGE_CACHE="$cache_dir/.extra-usage-cache"
         export TEST_CURL_ARGS="$case_dir/curl-args.txt"

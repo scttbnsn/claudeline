@@ -44,15 +44,19 @@ wait_for_signal() {
 home_dir="$tmpdir/home"
 shim_dir="$tmpdir/shim"
 extra_usage_cache="$home_dir/.claude-usage.d/.extra-usage-cache"
-mkdir -p "$home_dir" "$shim_dir"
+mkdir -p "$home_dir/.config/claude" "$shim_dir"
 started_pipe="$tmpdir/curl-started.pipe"
 render_done_pipe="$tmpdir/statusline-done.pipe"
 async_done_pipe="$tmpdir/extra-usage-done.pipe"
 mkfifo "$started_pipe" "$render_done_pipe" "$async_done_pipe"
 
+printf '%s\n' '{"claudeAiOauth":{"accessToken":"test-oauth-token-1234567890"}}' \
+    > "$home_dir/.config/claude/credentials.json"
+chmod 600 "$home_dir/.config/claude/credentials.json"
+
 cat > "$shim_dir/security" <<'EOF'
 #!/usr/bin/env bash
-printf '{"claudeAiOauth":{"accessToken":"test-token"}}\n'
+cat "$HOME/.config/claude/credentials.json"
 EOF
 chmod +x "$shim_dir/security"
 

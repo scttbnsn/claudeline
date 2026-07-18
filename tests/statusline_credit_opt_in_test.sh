@@ -54,8 +54,12 @@ run_case() {
     local fetch_marker="$case_dir/fetch-attempted"
     local done_marker="$case_dir/fetch-done"
 
-    mkdir -p "$home_dir/.claude-usage.d" "$shim_dir"
+    mkdir -p "$home_dir/.claude-usage.d" "$home_dir/.config/claude" "$shim_dir"
     printf '0\n42\n' > "$home_dir/.claude-usage.d/.extra-usage-cache"
+
+    printf '%s\n' '{"claudeAiOauth":{"accessToken":"test-oauth-token-1234567890"}}' \
+        > "$home_dir/.config/claude/credentials.json"
+    chmod 600 "$home_dir/.config/claude/credentials.json"
 
     printf '%s\n' '#!/usr/bin/env bash' \
         'printf '\''{"claudeAiOauth":{"accessToken":"test-oauth-token-1234567890"}}\n'\''' > "$shim_dir/security"
