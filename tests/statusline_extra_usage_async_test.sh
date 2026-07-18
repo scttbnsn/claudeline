@@ -96,6 +96,7 @@ export TEST_CURL_STARTED_PIPE="$started_pipe"
 export TEST_STATUSLINE_DONE_PIPE="$render_done_pipe"
 export STATUSLINE_EXTRA_USAGE_ASYNC_DONE_SIGNAL="$async_done_pipe"
 export PATH="$shim_dir:$PATH"
+export CLAUDELINE_CREDIT=1
 
 (
     bash "$repo_root/statusline.sh" <<< "$input_json" > "$tmpdir/output.txt"

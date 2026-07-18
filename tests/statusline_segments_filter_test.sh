@@ -34,6 +34,7 @@ cat > "$shim_dir/git" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
+[ "${1:-}" = "-C" ] && shift 2  # tolerate the git -C <dir> prefix
 cmd1=${1:-}
 cmd2=${2:-}
 cmd3=${3:-}

@@ -74,7 +74,7 @@ run_refresh_case() {
     local curl_body=$2
     local curl_exit=$3
     local seed_cache=$4
-    local oauth_token=${5:-secret-token}
+    local oauth_token=${5:-secret-token-1234567}
     local case_dir="$tmpdir/$name"
     local home_dir="$case_dir/home"
     local cache_dir="$case_dir/cache"
