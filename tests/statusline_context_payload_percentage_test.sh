@@ -16,16 +16,12 @@ assert_eq() {
     fi
 }
 
-render_context() {
+build_payload() {
     local used_percentage=$1
     local current_tokens=$2
     local context_window_size=$3
-    local case_name=$4
-    local home_dir="$tmpdir/$case_name/home"
-    local payload
 
-    mkdir -p "$home_dir"
-    payload=$(jq -n \
+    jq -n \
         --arg used_percentage "$used_percentage" \
         --argjson current_tokens "$current_tokens" \
         --argjson context_window_size "$context_window_size" '
@@ -49,11 +45,35 @@ render_context() {
             seven_day: {used_percentage: "_", resets_at: "_"},
             five_hour: {used_percentage: "_", resets_at: "_"}
           }
-        }')
+        }'
+}
 
+render_context() {
+    local used_percentage=$1
+    local current_tokens=$2
+    local context_window_size=$3
+    local case_name=$4
+    local home_dir="$tmpdir/$case_name/home"
+
+    mkdir -p "$home_dir"
     env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW -u CLAUDE_AUTOCOMPACT_PCT_OVERRIDE \
         HOME="$home_dir" NO_COLOR=1 NOW=1000000 CLAUDELINE_SEGMENTS="context,tokens" \
-        bash "$repo_root/statusline.sh" <<< "$payload"
+        bash "$repo_root/statusline.sh" <<< "$(build_payload "$used_percentage" "$current_tokens" "$context_window_size")"
+}
+
+render_context_capped() {
+    local used_percentage=$1
+    local current_tokens=$2
+    local context_window_size=$3
+    local cap=$4
+    local case_name=$5
+    local home_dir="$tmpdir/$case_name/home"
+
+    mkdir -p "$home_dir"
+    env -u CLAUDE_AUTOCOMPACT_PCT_OVERRIDE \
+        CLAUDE_CODE_AUTO_COMPACT_WINDOW="$cap" \
+        HOME="$home_dir" NO_COLOR=1 NOW=1000000 CLAUDELINE_SEGMENTS="context,tokens" \
+        bash "$repo_root/statusline.sh" <<< "$(build_payload "$used_percentage" "$current_tokens" "$context_window_size")"
 }
 
 payload_pct=$(render_context 73 1000 200000 payload-pct)
@@ -63,6 +83,22 @@ assert_eq '🔥 ███████░░░' "$(sed -n '1p' <<< "$payload_pct
 fallback_pct=$(render_context _ 50000 200000 fallback-pct)
 assert_eq '🌱 ██░░░░░░░░' "$(sed -n '1p' <<< "$fallback_pct")" \
     "sentinel used_percentage falls back to the current-token ratio"
+
+# When CLAUDE_CODE_AUTO_COMPACT_WINDOW caps the window below the physical size, the
+# payload's used_percentage (relative to the full 1M window) must NOT drive the bar,
+# or it under-fills against the capped token count shown below it. The bar must track
+# CURRENT_TOKENS/effective-window instead: 90840/400000 = 22% -> two filled cells,
+# matching the 90.8K/400K count. (Payload said 9% of 1M, which would show an empty bar.)
+capped=$(render_context_capped 9 90840 1000000 400000 capped-window)
+assert_eq '🌱 ██░░░░░░░░' "$(sed -n '1p' <<< "$capped")" \
+    "capped effective window fills the bar from the token count, not the full-window payload %"
+assert_eq '   90.8K/400K' "$(sed -n '2p' <<< "$capped")" \
+    "capped effective window shows the count against the cap"
+
+# The same payload with no cap keeps honoring the payload percentage (9% of 1M -> empty bar).
+uncapped=$(render_context 9 90840 1000000 uncapped-window)
+assert_eq '✨ ░░░░░░░░░░' "$(sed -n '1p' <<< "$uncapped")" \
+    "uncapped window still honors the payload used_percentage"
 
 zero_window=$(render_context _ 50000 0 zero-window)
 assert_eq '🌱 ██░░░░░░░░' "$(sed -n '1p' <<< "$zero_window")" \

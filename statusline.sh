@@ -452,11 +452,17 @@ if [[ "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}" =~ ^[0-9]+$ ]] \
     && [ "$CLAUDE_CODE_AUTO_COMPACT_WINDOW" -le "$CONTEXT_WINDOW_SIZE" ]; then
     EFFECTIVE_WINDOW=$CLAUDE_CODE_AUTO_COMPACT_WINDOW
 fi
-# Prefer the payload's own used_percentage (Claude Code's own accounting of
-# the real context window) over a locally derived ratio. Fall back to the
-# token-ratio computation only when the payload didn't supply one, guarding
-# against a zero denominator either way.
-if ! is_sentinel_value "$CTX_USED_PCT"; then
+# The payload's used_percentage is Claude Code's own accounting, but it is
+# measured against the physical context_window_size. Prefer it for the bar UNLESS
+# the effective window is capped below the physical window
+# (CLAUDE_CODE_AUTO_COMPACT_WINDOW): there the payload percentage is relative to
+# the full window while the token count under the bar is shown against the capped
+# window, so the two disagree and the bar under-fills. In that case — and when the
+# payload gives no percentage at all — derive the percentage from the same
+# CURRENT_TOKENS/EFFECTIVE_WINDOW pair the token count uses, so the bar always
+# tracks the number shown. Guard against a zero denominator either way.
+if ! is_sentinel_value "$CTX_USED_PCT" \
+    && [ "$EFFECTIVE_WINDOW" -ge "$CONTEXT_WINDOW_SIZE" ] 2>>"$STATUSLINE_DEBUG_LOG"; then
     round_decimal_to_int_or_default "$CTX_USED_PCT" 0 "context used percentage"
     PERCENT_USED=$REPLY
     [ "$PERCENT_USED" -lt 0 ] 2>>"$STATUSLINE_DEBUG_LOG" && PERCENT_USED=0
