@@ -196,7 +196,7 @@ Compares your actual weekly usage against where you *should* be based on time el
 
 Both signals agree on over/under pace (`> 1.0` = over, `< 1.0` = under), but pressure amplifies urgency when budget is thin. For example, at 91% on Monday 8pm with reset Thursday 1pm: burn rate is 1.48 (🥵) but pressure is 4.29 — you have 9% left for 2.7 days (🚨).
 
-Combined display: `👌→` (on pace, stable) or `🔥↑` (hot, getting hotter). At 100%, shows reset countdown: `🚨 -1.2d`. Alternates with raw % every 10th update.
+Combined display: `👌→` (on pace, stable) or `🔥↑` (hot, getting hotter). At 100%, shows reset countdown: `🚨 -1.2d`. Alternates with the raw % on half its updates (5 of every 10).
 
 <details>
 <summary><strong>Pace emoji tiers</strong></summary>
@@ -235,7 +235,7 @@ Tracks **usage% velocity** — how fast you're burning tokens compared to the su
 
 <h2 align="center" id="burst--credit-indicators">💥 Burst & Credit Indicators</h2>
 
-**💥 Burst** (5-hour rate limit) — colored bar mapped directly to API utilization %, only shown when > 0%. Alternates to raw percent (`💥25%`) on the same cycle style as the pace indicator.
+**💥 Burst** (5-hour rate limit) — colored bar mapped directly to API utilization %, only shown when > 0%. Alternates to raw percent (`💥25%`) on its own 10-tick rotation cycle.
 
 | Range | Bar | Color |
 |-------|-----|-------|

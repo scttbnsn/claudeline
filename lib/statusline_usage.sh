@@ -1204,7 +1204,7 @@ get_cost_rate_indicator() {
 # Uses 8-tier emoji scale: ❄️ → 🧊 → 🙂 → 👌 → ♨️ → 🥵 → 🔥 → 🚨
 # Trend arrows: ↑ (heating fast), ↗ (warming), → (stable), ↘ (cooling), ↓ (cooling fast)
 # If at limit (>=100%), shows time until reset: 🚨 -1.2d
-# Alternates: emoji+arrow 9 times, then raw % once
+# Alternates: emoji+arrow 5 times, then raw % 5 times
 normalize_pace_usage_pct() {
     local usage=$1
     local out_var=$2
@@ -1332,10 +1332,10 @@ get_smart_pace_indicator() {
     local reset_suffix="" week_start=0 burn_rate_x10k=10000 pressure_x10k=10000
     calculate_pace_signals "$pct" "$resets_at" "$now" week_start burn_rate_x10k pressure_x10k reset_suffix
 
-    # Alternate display: emoji+arrow 7 times, then raw % 3 times (every 10 sec update)
+    # Alternate display: emoji+arrow 5 times, then raw % 5 times (every 10 sec update)
     # Check cycle FIRST so raw % always shows on its cycles, regardless of alarm state
     local cycle=$(( (now / 10) % 10 ))
-    if [ "$cycle" -ge 7 ]; then
+    if [ "$cycle" -ge 5 ]; then
         REPLY="${DIM}${pct}%${RESET}"
         return
     fi
