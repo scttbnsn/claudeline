@@ -277,7 +277,7 @@ The `🏆` suffix indicates all-time totals in the scoped metric rotation. The s
 <details>
 <summary><strong>Context bar tiers</strong></summary>
 
-The bar maps the context-window percentage Claude Code reports to 8 color/emoji tiers:
+The bar maps the context-window percentage to 8 color/emoji tiers. Normally that's the percentage Claude Code reports directly; when you cap the window with `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, the bar is measured against that cap instead (Claude Code's own percentage is relative to the full physical window), so the bar and the token count below it always agree:
 
 | Range | Color | Icon | Meaning |
 |-------|-------|------|---------|
