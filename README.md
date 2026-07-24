@@ -17,10 +17,10 @@
 │    bar              + git status   trend   + arrow + fold   changed
 └─ context icon (✨🌱💭🧠🔥💾🫠💀)
 
-    73.5K/200K  ·  🔥max  ·  🧱💰 $4.50  ·  ⏱️ 45m
-    └────┬────┘     └┬┘      └────┬────┘    └──┬──┘
-      context      effort      scoped       duration
-      tokens                   metric
+    73.5K/200K  ·  Fable 5  ·  🔥max  ·  🧱💰 $4.50  ·  ⏱️ 45m
+    └────┬────┘     └──┬──┘     └┬┘      └────┬────┘    └──┬──┘
+      context        model     effort      scoped       duration
+      tokens                               metric
 ```
 
 <div align="center">
@@ -333,7 +333,7 @@ The API call runs in a **non-blocking background subshell** so it never stalls t
 | Variable | Effect |
 |----------|--------|
 | `CLAUDELINE_THEME=nord` | Theme: `vibey` (default), `dark`, `light`, `nord`, `gruvbox` |
-| `CLAUDELINE_SEGMENTS=context,git,pace` | Show only listed segments. Default keeps `model` and standalone `spend` off for a shorter line. Available: `context`, `git`, `lines`, `pace`, `burst`, `duration`, `credit`, `tokens`, `spend`, `effort`, `metric`, `throughput`, `model` |
+| `CLAUDELINE_SEGMENTS=context,git,pace` | Show only listed segments. Default keeps standalone `spend` off for a shorter line. Available: `context`, `git`, `lines`, `pace`, `burst`, `duration`, `credit`, `tokens`, `spend`, `effort`, `metric`, `throughput`, `model` |
 | `CLAUDELINE_CREDIT=1` | Enable the `💳` overage-credit indicator and its optional usage API call (default: off) |
 | `NO_COLOR=1` | Disables all color output ([spec](https://no-color.org)) |
 | `CLAUDELINE_NO_NETWORK=1` | Disables all network access — the API call is skipped entirely |

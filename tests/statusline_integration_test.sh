@@ -95,6 +95,6 @@ done < "$tmpdir/rendered.txt"
 
 assert_eq 2 "${#lines[@]}" "statusline integration emits exactly two lines"
 assert_eq "✨ ░░░░░░░░░░  ·  demo/main*↑2  ·  +12/-3" "${lines[0]}" "statusline integration renders the first line deterministically"
-assert_eq '      1K/200K  ·  ⏱️ 5m' "${lines[1]}" "statusline integration renders the second line deterministically"
+assert_eq '      1K/200K  ·  Claude Sonnet 4  ·  ⏱️ 5m' "${lines[1]}" "statusline integration renders the second line deterministically"
 
 printf 'ok\n'

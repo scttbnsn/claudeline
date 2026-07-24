@@ -162,7 +162,7 @@ else
     _SEG_CONTEXT=1; _SEG_GIT=1; _SEG_LINES=1; _SEG_PACE=1
     _SEG_BURST=1; _SEG_DURATION=1; _SEG_CREDIT=1
     _SEG_TOKENS=1; _SEG_SPEND=0; _SEG_EFFORT=1
-    _SEG_METRIC=1; _SEG_THROUGHPUT=1; _SEG_MODEL=0
+    _SEG_METRIC=1; _SEG_THROUGHPUT=1; _SEG_MODEL=1
 fi
 
 seg_on() { [ "${_SEG_ALL}" -eq 1 ] || [ "${1:-0}" -eq 1 ]; }
@@ -686,14 +686,14 @@ if seg_on "$_SEG_SPEND"; then
     format_spend_indicator "$TODAY_COST_CENTS" "$BLOCK_COST_CENTS" "$TOTAL_COST_CENTS" "$NOW"
     _L2_SPEND=$REPLY
 fi
+_L2_MODEL=""; seg_on "$_SEG_MODEL" && _L2_MODEL="${DIM}${MODEL}${RESET}"
 _L2_EFFORT=""
 if seg_on "$_SEG_EFFORT"; then
     format_effort_indicator "$EFFORT_LEVEL" "$THINKING_ENABLED"
     _L2_EFFORT=$REPLY
 fi
-_L2_MODEL=""; seg_on "$_SEG_MODEL" && _L2_MODEL="${DIM}${MODEL}${RESET}"
 _L2_DURATION=""; seg_on "$_SEG_DURATION" && _L2_DURATION="$DURATION_INFO"
 _L2_METRIC=""; seg_on "$_SEG_METRIC" && _L2_METRIC="$METRIC_INFO"
 
-# Priority order: tokens > spend > effort > metric > model > duration
-printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_SPEND" "$_L2_EFFORT" "$_L2_METRIC" "$_L2_MODEL" "$_L2_DURATION")"
+# Priority order: tokens > spend > model > effort > metric > duration
+printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_SPEND" "$_L2_MODEL" "$_L2_EFFORT" "$_L2_METRIC" "$_L2_DURATION")"
