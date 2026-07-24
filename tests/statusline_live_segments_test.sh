@@ -107,6 +107,6 @@ env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW -u CLAUDE_AUTOCOMPACT_PCT_OVERRIDE \
     bash "$repo_root/statusline.sh" <<< "$input_json" > "$tmpdir/rendered.txt"
 
 second_line=$(sed -n '2p' "$tmpdir/rendered.txt")
-assert_eq '      1K/200K  ·  🔥max  ·  📅💧 1.3 gallons  ·  ⏱️ 5m' "$second_line" "statusline renders compact effort and sober metric segments"
+assert_eq '      1K/200K  ·  Claude Sonnet 4  ·  🔥max  ·  📅💧 1.3 gallons  ·  ⏱️ 5m' "$second_line" "statusline renders model before effort with sober metric segments"
 
 printf 'ok\n'
