@@ -686,7 +686,7 @@ if seg_on "$_SEG_SPEND"; then
     format_spend_indicator "$TODAY_COST_CENTS" "$BLOCK_COST_CENTS" "$TOTAL_COST_CENTS" "$NOW"
     _L2_SPEND=$REPLY
 fi
-_L2_MODEL=""; seg_on "$_SEG_MODEL" && _L2_MODEL="${DIM}${MODEL}${RESET}"
+_L2_MODEL=""; seg_on "$_SEG_MODEL" && [ -n "$MODEL" ] && _L2_MODEL="${DIM}${MODEL}${RESET}"
 _L2_EFFORT=""
 if seg_on "$_SEG_EFFORT"; then
     format_effort_indicator "$EFFORT_LEVEL" "$THINKING_ENABLED"
