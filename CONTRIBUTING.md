@@ -35,16 +35,20 @@ perl scripts/check_anthropic_model_coverage.pl  # verify all models are covered
 
 ## Commit Style
 
-Emoji conventional commits: `<emoji> <type>(scope): <description>`
+Conventional Commits, no emoji: `<type>(scope): <description>`
 
-| Emoji | Type |
-|-------|------|
-| ✨ | feat |
-| 🐛 | fix |
-| 🔄 | refactor |
-| ⚡ | perf |
-| 📝 | docs |
-| 🧪 | test |
-| 🔧 | config |
-| 🔒 | security fix |
-| 🗑️ | remove |
+Scope is optional. Mark breaking changes with `!` before the colon (e.g. `feat(cli)!: drop legacy flag`) or a `BREAKING CHANGE:` footer.
+
+| Type | Usage |
+|------|-------|
+| feat | New features |
+| fix | Bug fixes (including security fixes) |
+| refactor | Refactoring |
+| perf | Performance improvements |
+| docs | Documentation |
+| test | Tests |
+| build | Dependency/build changes |
+| ci | CI/deploy changes |
+| chore | Config and other maintenance |
+| style | Formatting |
+| revert | Reverting a previous commit |
