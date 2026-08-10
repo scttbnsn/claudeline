@@ -24,6 +24,13 @@ printf '%s\n' '{"claudeAiOauth":{"accessToken":"test-oauth-token-1234567890","ex
 EOF
 chmod +x "$shim_dir/security"
 
+# On non-darwin the keychain branch is skipped entirely, so the credentials
+# file is the only token source. Provide both so this runs the same on Linux.
+export CLAUDE_CONFIG_DIR="$tmpdir/claude"
+mkdir -p "$CLAUDE_CONFIG_DIR"
+printf '%s\n' '{"claudeAiOauth":{"accessToken":"test-oauth-token-1234567890","expiresAt":9999999999999}}' \
+    > "$CLAUDE_CONFIG_DIR/.credentials.json"
+
 cat > "$shim_dir/curl" <<EOF
 #!/usr/bin/env bash
 printf 'attempted\n' > "$fetch_marker"
