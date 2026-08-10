@@ -20,15 +20,11 @@ SCRIPT_PATH="$CLAUDE_DIR/statusline.sh"
 THEMES_LIB_PATH="$CLAUDE_LIB_DIR/statusline_themes.sh"
 DISPLAY_LIB_PATH="$CLAUDE_LIB_DIR/statusline_display.sh"
 USAGE_LIB_PATH="$CLAUDE_LIB_DIR/statusline_usage.sh"
-JSONL_PARSER_PATH="$CLAUDE_LIB_DIR/jsonl_parser.pl"
-PRICING_MANIFEST_PATH="$CLAUDE_LIB_DIR/anthropic_pricing.json"
 SETTINGS_PATH="$CLAUDE_DIR/settings.json"
-STATUSLINE_SHA256="fe8eb83f43b47e6176047a30392845aa940d07dbf50e1a5fa4c2ae4d3a9170f6"
-DISPLAY_LIB_SHA256="fc4cc5d6532ec96a1b0b36338b7099eb3bf235b34888a7d54384550d4663c5e7"
-USAGE_LIB_SHA256="0f2c6265e364d4379af6424d6270a2c4c00dc5842a1cd3ea5be6db0003207e42"
-JSONL_PARSER_SHA256="08fc2683487c577538bf127b48f626dcc6d115dff8868bd4e93e1576d6c82fee"
+STATUSLINE_SHA256="3dad2356619a5fbfe81129e635e11b17a35fc391816e26bbaad94d0d8e9eaab2"
+DISPLAY_LIB_SHA256="0540e9da12cfadb3f684fce27cb2bf9ce1c270bfba1689d87359e782b0b2c685"
+USAGE_LIB_SHA256="c2e66e2dd97f583f9a9554b39a23149a24449b90e3b5135915686c0172b0ccd0"
 THEMES_LIB_SHA256="f21602fa7efc871559503d668ebf2df20de395e6560ca56beb918b6fb631c4c9"
-PRICING_MANIFEST_SHA256="6e1e48f06fc1b8b7efeac3610d664b304f9dad95586354f003a38428c433a894"
 
 echo -e "${CYAN}${BOLD}"
 echo "  ╭──────────────────────────────────────╮"
@@ -114,21 +110,15 @@ echo -e "${DIM}Downloading statusline runtime...${NC}"
 if download_stage_file "statusline.sh" 700 "$STATUSLINE_SHA256" \
     && download_stage_file "lib/statusline_themes.sh" 600 "$THEMES_LIB_SHA256" \
     && download_stage_file "lib/statusline_display.sh" 600 "$DISPLAY_LIB_SHA256" \
-    && download_stage_file "lib/statusline_usage.sh" 600 "$USAGE_LIB_SHA256" \
-    && download_stage_file "lib/jsonl_parser.pl" 600 "$JSONL_PARSER_SHA256" \
-    && download_stage_file "lib/anthropic_pricing.json" 600 "$PRICING_MANIFEST_SHA256"; then
+    && download_stage_file "lib/statusline_usage.sh" 600 "$USAGE_LIB_SHA256"; then
     mv "$stage_dir/statusline.sh" "$SCRIPT_PATH"
     mv "$stage_dir/lib/statusline_themes.sh" "$THEMES_LIB_PATH"
     mv "$stage_dir/lib/statusline_display.sh" "$DISPLAY_LIB_PATH"
     mv "$stage_dir/lib/statusline_usage.sh" "$USAGE_LIB_PATH"
-    mv "$stage_dir/lib/jsonl_parser.pl" "$JSONL_PARSER_PATH"
-    mv "$stage_dir/lib/anthropic_pricing.json" "$PRICING_MANIFEST_PATH"
     echo -e "${GREEN}✓${NC} Installed $SCRIPT_PATH"
     echo -e "${GREEN}✓${NC} Installed $THEMES_LIB_PATH"
     echo -e "${GREEN}✓${NC} Installed $DISPLAY_LIB_PATH"
     echo -e "${GREEN}✓${NC} Installed $USAGE_LIB_PATH"
-    echo -e "${GREEN}✓${NC} Installed $JSONL_PARSER_PATH"
-    echo -e "${GREEN}✓${NC} Installed $PRICING_MANIFEST_PATH"
 else
     echo -e "${RED}✗ Failed to download statusline runtime files${NC}"
     exit 1
@@ -166,6 +156,6 @@ echo -e "${GREEN}${BOLD}✓ Installation complete!${NC}"
 echo ""
 echo -e "  ${DIM}Restart Claude Code to see your new statusline.${NC}"
 echo ""
-echo -e "  ${CYAN}✨ ████░░░░░░  ·  repo/main*  ·  👌→  ·  42¢/m ↗ 1.3x  ·  +50/-20${NC}"
-echo -e "  ${DIM}    5K/200K  ·  🔥max  ·  💰 \$0.23  ·  ⏱️ 5m${NC}"
+echo -e "  ${CYAN}🌱 ████░░░░░░  ·  repo/main*  ·  🔥↓  ·  💥▁${NC}"
+echo -e "  ${DIM}    5K/200K  ·  Opus 5  ·  🧠max  ·  ⏱️ 5m${NC}"
 echo ""

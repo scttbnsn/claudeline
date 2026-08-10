@@ -31,11 +31,9 @@ extract_function() {
 
 helpers_file="$tmpdir/statusline_helpers.sh"
 git_helper_file="$tmpdir/read_git_status_info.sh"
-metric_helper_file="$tmpdir/build_rotating_metric_info.sh"
 sanitize_helper_file="$tmpdir/sanitize_display_field.sh"
 
 extract_function "read_git_status_info" "$git_helper_file"
-extract_function "build_rotating_metric_info" "$metric_helper_file"
 extract_function "sanitize_display_field" "$sanitize_helper_file"
 
 cat > "$helpers_file" <<EOF
@@ -45,24 +43,9 @@ set -euo pipefail
 STATUSLINE_DEBUG_LOG=/dev/null
 debug_log() { :; }
 
-DIM='<dim>'
-RESET='<reset>'
-ALLTIME_NORMAL_FIXED_ITEMS=("coal" "reactor" "tokens" "cost" "data")
-ALLTIME_NORMAL_FIXED_ITEM_COUNT=\${#ALLTIME_NORMAL_FIXED_ITEMS[@]}
-METRIC_SCOPE_LABELS=("" "📅" "🧱" "🏆")
-METRIC_SCOPE_COUNT=\${#METRIC_SCOPE_LABELS[@]}
-METRIC_KIND_COUNT=5
-
-source "$repo_root/lib/statusline_display.sh"
-
 $(cat "$sanitize_helper_file")
 
 $(cat "$git_helper_file")
-
-ALLTIME_NORMAL_CATALOG_ITEM_COUNT=\${#ALLTIME_COST_ITEMS[@]}
-ALLTIME_NORMAL_ITEM_COUNT=\$((ALLTIME_NORMAL_CATALOG_ITEM_COUNT + ALLTIME_NORMAL_FIXED_ITEM_COUNT))
-
-$(cat "$metric_helper_file")
 EOF
 
 # shellcheck disable=SC1090
@@ -107,45 +90,5 @@ git() {
 read_git_status_info "/tmp/local-only"
 assert_eq 'local-only' "$DIR_NAME" "git helper falls back to current directory name outside a repo"
 assert_eq '' "$BRANCH" "git helper omits branch text outside a repo"
-
-# New signature (CHANGE 1 dropped the project scope; CHANGE 2 forces
-# environmental kinds off the unlabeled session scope):
-#   build_rotating_metric_info now_div_10 \
-#       session_tokens session_cost_cents \
-#       today_tokens today_cost_cents \
-#       block_tokens block_cost_cents \
-#       all_time_tokens all_time_cost_cents
-# Scopes: 0=session(unlabeled) 1=today(📅) 2=block(🧱) 3=all-time(🏆)
-# Kinds (now_div_10 % 5): 0=water 1=power 2=cost 3=tickets 4=data
-
-build_rotating_metric_info 0 760000 0 0 0 500000 0 0 0
-assert_eq "<dim>🧱💧 $(format_water "500000")<reset>" "$REPLY" "metric helper skips the unlabeled session scope for environmental kinds, falling through to block"
-
-build_rotating_metric_info 0 760000 0 0 0 0 0 5000000 0
-assert_eq "<dim>💧 $(format_water "5000000") 🏆<reset>" "$REPLY" "metric helper falls all the way through to all-time (with trophy suffix) when only all-time environmental data exists"
-
-build_rotating_metric_info 10 1000 1 0 0 500000 450 0 0
-assert_eq "<dim>🧱💧 $(format_water "500000")<reset>" "$REPLY" "metric helper renders block water directly when the rotation lands on block scope"
-
-build_rotating_metric_info 2 1000 1 0 0 0 0 0 0
-assert_eq "<dim>💰 \$0.01<reset>" "$REPLY" "metric helper renders session cost on session cost cycles (cost kind is unaffected by the environmental session-scope skip)"
-
-build_rotating_metric_info 2 0 0 1234000 12345 0 0 0 0
-format_cost_cents 12345
-today_cost=$REPLY
-build_rotating_metric_info 2 0 0 1234000 12345 0 0 0 0
-assert_eq "<dim>📅💰 $today_cost<reset>" "$REPLY" "metric helper can fall forward to today's cost when session cost is empty (project-scope fallback removed by CHANGE 1)"
-
-build_rotating_metric_info 2 0 0 0 0 0 0 5000000 98765
-format_cost_cents 98765
-all_time_cost=$REPLY
-build_rotating_metric_info 2 0 0 0 0 0 0 5000000 98765
-assert_eq "<dim>💰 $all_time_cost 🏆<reset>" "$REPLY" "metric helper renders all-time cost with trophy suffix"
-
-build_rotating_metric_info 4 0 0 0 0 0 0 5000000 98765
-assert_eq "<dim>📡 $(format_data "5000000") 🏆<reset>" "$REPLY" "metric helper keeps all-time data without stacked trophy prefix"
-
-build_rotating_metric_info 0 0 0 0 0 0 0 0 0
-assert_eq '' "$REPLY" "metric helper returns empty output when no session or all-time metrics exist"
 
 printf 'ok\n'

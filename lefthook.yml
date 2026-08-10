@@ -5,21 +5,25 @@ pre-commit:
       run: shellcheck -x -e SC2034 -S warning statusline.sh lib/statusline_themes.sh lib/statusline_display.sh lib/statusline_usage.sh
     syntax-bash:
       run: bash -n statusline.sh && bash -n lib/statusline_themes.sh && bash -n lib/statusline_display.sh && bash -n lib/statusline_usage.sh
-    syntax-perl:
-      run: perl -c lib/jsonl_parser.pl
     sha256-check:
       run: |
         for pair in \
           "statusline.sh:STATUSLINE_SHA256" \
           "lib/statusline_themes.sh:THEMES_LIB_SHA256" \
           "lib/statusline_display.sh:DISPLAY_LIB_SHA256" \
-          "lib/statusline_usage.sh:USAGE_LIB_SHA256" \
-          "lib/jsonl_parser.pl:JSONL_PARSER_SHA256" \
-          "lib/anthropic_pricing.json:PRICING_MANIFEST_SHA256"; do
+          "lib/statusline_usage.sh:USAGE_LIB_SHA256"; do
           file="${pair%%:*}"
           var="${pair##*:}"
+          if [ ! -f "$file" ]; then
+            echo "missing shipped file: $file (drop it from lefthook.yml and install.sh)"
+            exit 1
+          fi
           actual=$(shasum -a 256 "$file" | cut -d' ' -f1)
           expected=$(grep "${var}=" install.sh | cut -d'"' -f2)
+          if [ -z "$expected" ]; then
+            echo "no $var in install.sh for $file"
+            exit 1
+          fi
           if [ "$actual" != "$expected" ]; then
             echo "SHA-256 mismatch: $file (update $var in install.sh)"
             exit 1
@@ -32,9 +36,6 @@ pre-push:
       run: |
         failed=0
         for f in tests/*.sh; do
-          case "$(basename "$f")" in
-            *extra_usage_async*|*extra_usage_lock*|*extra_usage_refresh*|*no_network*) continue ;;
-          esac
           if ! bash "$f" >/dev/null 2>&1; then
             echo "FAIL: $(basename $f)"
             bash "$f" 2>&1 | tail -3

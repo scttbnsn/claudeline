@@ -40,15 +40,6 @@ assert_eq "💭think" "$REPLY" "thinking without effort still renders"
 format_effort_indicator "" false
 assert_eq "" "$REPLY" "missing thinking and effort renders empty"
 
-format_spend_indicator 1800 450 23 1000000
-assert_eq '💰$18.00d' "$REPLY" "spend cycle starts with today cost"
-format_spend_indicator 1800 450 23 1000040
-assert_eq '🧱$4.50/5h' "$REPLY" "spend cycle includes the rolling five-hour block"
-format_spend_indicator 1800 450 23 1000070
-assert_eq '💬$0.23' "$REPLY" "spend cycle rotates to session cost (project scope removed by CHANGE 1)"
-format_spend_indicator 0 0 23 1000000
-assert_eq '💬$0.23' "$REPLY" "spend cycle falls back to session cost when the selected scope has none"
-
 home_dir="$tmpdir/home"
 shim_dir="$tmpdir/shim"
 mkdir -p "$home_dir/.claude-usage.d" "$shim_dir"
@@ -69,22 +60,13 @@ exit 1
 SH
 chmod +x "$shim_dir/git"
 
-printf '1000000\n0 0 0 0 0 0\n' > "$home_dir/.claude-usage.d/.jsonl-cache"
-printf '1000000\n1000000 1800 500000 450\n' > "$home_dir/.claude-usage.d/.spend-cache"
-
 input_json='{
   "model": {"display_name": "Claude Sonnet 4"},
   "workspace": {"current_dir": "/tmp/demo"},
   "cost": {
-    "total_lines_added": 0,
-    "total_lines_removed": 0,
-    "total_duration_ms": 300000,
-    "total_api_duration_ms": 120000,
-    "total_cost_usd": 0.23
+    "total_duration_ms": 300000
   },
   "context_window": {
-    "total_input_tokens": 1000,
-    "total_output_tokens": 2000,
     "current_usage": {
       "input_tokens": 100,
       "output_tokens": 0,
@@ -98,16 +80,15 @@ input_json='{
   "rate_limits": {
     "seven_day": {"used_percentage": "_", "resets_at": "_"},
     "five_hour": {"used_percentage": "_", "resets_at": "_"}
-  },
-  "session_id": "live-segments"
+  }
 }'
 
 env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW -u CLAUDE_AUTOCOMPACT_PCT_OVERRIDE \
-    CLAUDELINE_SEGMENTS="context,git,lines,pace,burst,duration,tokens,effort,throughput,model,metric,stale" \
+    CLAUDELINE_SEGMENTS="context,git,pace,burst,duration,tokens,effort,model,stale" \
     PATH="$shim_dir:$PATH" HOME="$home_dir" NO_COLOR=1 NOW=1000000 \
     bash "$repo_root/statusline.sh" <<< "$input_json" > "$tmpdir/rendered.txt"
 
 second_line=$(sed -n '2p' "$tmpdir/rendered.txt")
-assert_eq '      1K/200K  ·  Claude Sonnet 4  ·  🔥max  ·  📅💧 1.3 gallons  ·  ⏱️ 5m' "$second_line" "statusline renders model before effort with sober metric segments"
+assert_eq '      1K/200K  ·  Claude Sonnet 4  ·  🔥max  ·  ⏱️ 5m' "$second_line" "statusline renders tokens, model, effort, and duration with the surviving segments"
 
 printf 'ok\n'

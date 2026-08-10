@@ -23,21 +23,14 @@ perl -0ne 'print $1 if /(# Extract all values.*?<<< "\$INPUT_FIELDS")/ms' \
 
 input=$(jq -n \
     --arg model $'Claude\nName\tTabbed\x1fUnit' \
-    --arg session $'sess\nion\tid\x1fvalue' \
     --arg effort $'xh\nigh\tlevel\x1fvalue' '
     {
       model: {display_name: $model},
       workspace: {current_dir: ""},
       cost: {
-        total_lines_added: 12,
-        total_lines_removed: 3,
-        total_duration_ms: 4000,
-        total_api_duration_ms: 2000,
-        total_cost_usd: 1.25
+        total_duration_ms: 4000
       },
       context_window: {
-        total_input_tokens: 101,
-        total_output_tokens: 202,
         current_usage: {
           input_tokens: 303,
           output_tokens: 404,
@@ -51,7 +44,6 @@ input=$(jq -n \
         seven_day: {used_percentage: 81, resets_at: 123456},
         five_hour: {used_percentage: 62, resets_at: 234567}
       },
-      session_id: $session,
       effort: {level: $effort},
       thinking: {enabled: true}
     }')
@@ -61,15 +53,17 @@ source "$extraction"
 
 assert_eq 'ClaudeNameTabbedUnit' "$MODEL" "control characters are removed from the model field"
 assert_eq '' "$CURRENT_DIR" "an empty field remains empty without shifting columns"
-assert_eq 12 "$LINES_ADDED" "field after an empty column stays aligned"
-assert_eq 3 "$LINES_REMOVED" "subsequent numeric field stays aligned"
-assert_eq 101 "$TOTAL_INPUT" "total input tokens stay aligned"
-assert_eq 202 "$TOTAL_OUTPUT" "total output tokens stay aligned"
+assert_eq 4000 "$DURATION_MS" "duration stays aligned"
+assert_eq 1414 "$CURRENT_TOKENS" "raw current-tokens sum (input+cache write+cache read) stays aligned"
+assert_eq 200000 "$CONTEXT_WINDOW_SIZE" "context window size stays aligned"
+assert_eq 81 "$WEEKLY_USAGE" "weekly usage stays aligned"
+assert_eq 123456 "$RESETS_AT" "weekly reset epoch stays aligned"
+assert_eq 62 "$BURST_USAGE" "burst usage stays aligned"
+assert_eq 234567 "$BURST_RESETS" "burst reset epoch stays aligned"
 assert_eq 303 "$CURRENT_INPUT_TOKENS" "current input tokens stay aligned"
 assert_eq 404 "$CURRENT_OUTPUT_TOKENS" "current output tokens stay aligned"
 assert_eq 505 "$CURRENT_CACHE_WRITE_TOKENS" "cache-write tokens stay aligned"
 assert_eq 606 "$CURRENT_CACHE_READ_TOKENS" "cache-read tokens stay aligned"
-assert_eq 'sessionidvalue' "$SESSION_ID" "newlines tabs and unit separators cannot smuggle a new field"
 assert_eq 'xhighlevelvalue' "$EFFORT_LEVEL" "later string field remains aligned after control stripping"
 assert_eq true "$THINKING_ENABLED" "boolean field after hostile strings remains aligned"
 assert_eq 73 "$CTX_USED_PCT" "payload percentage stays aligned"
@@ -77,6 +71,6 @@ assert_eq '' "$PROJECT_DIR" "an absent project dir stays empty without shifting 
 assert_eq '' "$CC_VERSION" "an absent version remains empty in the final column"
 
 separator_count=$(LC_ALL=C awk -F $'\x1f' '{print NF - 1}' <<< "$INPUT_FIELDS")
-assert_eq 24 "$separator_count" "the extracted record retains exactly 25 fixed fields"
+assert_eq 17 "$separator_count" "the extracted record retains exactly 18 fixed fields"
 
 printf 'ok\n'

@@ -90,15 +90,6 @@ get_trend_arrow() {
 get_smart_pace_indicator "_" "_" 1000000
 assert_eq "" "$REPLY" "get_smart_pace_indicator omits missing usage"
 
-get_smart_pace_indicator 42 1502400 1000070
-assert_eq "<dim>42%<reset>" "$REPLY" "get_smart_pace_indicator shows raw percent on raw-display cycles"
-
-get_smart_pace_indicator 42 1502400 1000050
-assert_eq "<dim>42%<reset>" "$REPLY" "get_smart_pace_indicator shows raw percent from cycle 5 (raw-% window widened to 5/10)"
-
-get_smart_pace_indicator 1 1502400 1000040
-assert_eq "🙂<arrow>" "$REPLY" "get_smart_pace_indicator still shows the emoji tier just below the raw-% window (cycle 4)"
-
 get_smart_pace_indicator 100 1108000 1000000
 assert_eq "🚨 -1.2d" "$REPLY" "get_smart_pace_indicator shows reset countdown at the limit"
 

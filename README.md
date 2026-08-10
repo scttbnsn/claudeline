@@ -2,7 +2,7 @@
 
 <h1>claudeline</h1>
 
-**A compact, informative status line for Claude Code with spend and usage signals.**
+**A compact, informative status line for Claude Code with git, pace, and burst signals.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Bash](https://img.shields.io/badge/bash-3.2+-4EAA25?logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
@@ -11,16 +11,16 @@
 </div>
 
 ```
-✨ ████░░░░░░  ·  myrepo/main*  ·  👌→  ·  42¢/m ↗ 1.3x  ·  +50/-20  ·  💥▃  ·  💳25%
-│  └────┬────┘     └─────┬─────┘   └─┬──┘   └─────┬─────┘   └───┬──┘   └─┬┘   └─┬──┘
-│    context          repo/branch    pace      cost rate      lines    burst  credit
-│    bar              + git status   trend   + arrow + fold   changed
+🌱 ████░░░░░░  ·  myrepo/main*  ·  🔥↓  ·  💥▁
+│  └────┬────┘     └─────┬─────┘   └┬─┘   └┬┘
+│    context          repo/branch  pace   burst
+│    bar              + git status trend
 └─ context icon (✨🌱💭🧠🔥💾🫠💀)
 
-    73.5K/200K  ·  Fable 5  ·  🔥max  ·  🧱💰 $4.50  ·  ⏱️ 45m
-    └────┬────┘     └──┬──┘     └┬┘      └────┬────┘    └──┬──┘
-      context        model     effort      scoped       duration
-      tokens                               metric
+    73.5K/200K  ·  Opus 5  ·  🧠high  ·  ⏱️ 45m
+    └────┬────┘     └──┬──┘     └┬┘      └──┬──┘
+      context        model     effort    duration
+      tokens
 ```
 
 <div align="center">
@@ -33,13 +33,10 @@
 
 - [🚀 Quick Start](#quick-start)
 - [✨ Features](#features)
-- [💰 Spend & Effort](#spend-effort)
 - [📊 Smart Pace Indicator](#smart-pace-indicator)
-- [💥 Burst & Credit Indicators](#burst--credit-indicators)
-- [🌍 Environmental Impact](#environmental-impact)
-- [🏆 All-Time Tracking](#all-time-tracking)
+- [💥 Burst Indicator](#burst-indicator)
 - [⚡ Performance](#performance)
-- [🔒 Privacy & Network Access](#privacy--network-access)
+- [⚙️ Configuration](#configuration)
 - [🔧 Requirements](#requirements)
 - [🗑 Uninstall](#uninstall)
 
@@ -65,14 +62,12 @@ Create `~/.claude/claudeline.conf` to customize without env vars:
 ```bash
 # ~/.claude/claudeline.conf
 theme=nord
-segments=context,git,pace,duration,tokens,effort,throughput,metric
-credit=1
-no_network=0
+segments=context,git,pace,burst,duration,tokens,effort,model,stale
 ```
 
 Env vars override config file values. All keys are optional.
 
-Available keys: `theme`, `segments`, `credit`, `no_network`, `no_color`, `debug`, `debug_log`, `jsonl_cache_ttl`, `extra_usage_ttl`, `spend_cache_ttl`, `spend_block_seconds`, `trend_window`, `trend_history_max_age`, and the `cost_rate_*` knobs listed below.
+Available keys: `theme`, `segments`, `no_color`, `debug`, `debug_log`, `trend_window`, `trend_history_max_age`.
 
 </details>
 
@@ -86,8 +81,6 @@ Available keys: `theme`, `segments`, `credit`, `no_network`, `no_color`, `debug`
    curl -fsSL https://raw.githubusercontent.com/scttbnsn/claudeline/main/lib/statusline_themes.sh -o ~/.claude/lib/statusline_themes.sh
    curl -fsSL https://raw.githubusercontent.com/scttbnsn/claudeline/main/lib/statusline_display.sh -o ~/.claude/lib/statusline_display.sh
    curl -fsSL https://raw.githubusercontent.com/scttbnsn/claudeline/main/lib/statusline_usage.sh -o ~/.claude/lib/statusline_usage.sh
-   curl -fsSL https://raw.githubusercontent.com/scttbnsn/claudeline/main/lib/jsonl_parser.pl -o ~/.claude/lib/jsonl_parser.pl
-   curl -fsSL https://raw.githubusercontent.com/scttbnsn/claudeline/main/lib/anthropic_pricing.json -o ~/.claude/lib/anthropic_pricing.json
    chmod 700 ~/.claude/statusline.sh
    ```
 
@@ -121,22 +114,8 @@ Uses the context-window percentage Claude Code reports, scaled to the model's wi
 Dual-signal weekly pace (burn rate + pressure) with 8-tier emoji scale and velocity-based trend arrows
 </td>
 <td align="center" width="33%">
-<h3>Burst & Credit</h3>
-8-level colored bar for 5-hour rate limit with reset countdown, plus overage credit tracking
-</td>
-</tr>
-<tr>
-<td align="center">
-<h3>Environmental Metrics</h3>
-Rotating display of water, power, cost, tokens, and data with dynamic unit scaling
-</td>
-<td align="center">
-<h3>Scoped Usage</h3>
-Session, today, 5-hour block, and all-time metrics share one compact rotation
-</td>
-<td align="center">
-<h3>All-Time Tracking</h3>
-Cumulative usage across all sessions from JSONL files, shown with the 🏆 scope marker
+<h3>Burst Indicator</h3>
+8-level colored bar for 5-hour rate limit with reset countdown
 </td>
 </tr>
 <tr>
@@ -149,38 +128,11 @@ Repo/branch with status indicators — unstaged, staged, ahead/behind, stash cou
 Vibey (default), Dark, Light, Nord, and Gruvbox — plus NO_COLOR support
 </td>
 <td align="center" width="33%">
-<h3>Cost-Rate Indicator</h3>
-Account-wide cents/min (API-active time) over the current working window, with a red/dim/green arrow and symmetric fold change (e.g. <code>↑ 3.2x</code> for 3.2× faster, <code>↓ 2.0x</code> for half-speed) against your recent baseline. Shows <code>◌</code> while current/baseline data is still warming.
-</td>
-</tr>
-<tr>
-<td align="center" width="33%">
-<h3>Spend Windows</h3>
-Folds today, 5-hour block, and all-time token/cost totals into the metric slot
-</td>
-<td align="center" width="33%">
 <h3>Thinking Effort</h3>
 Shows the active thinking tier with five distinct states: <code>🌱low</code>, <code>💭med</code>, <code>🧠high</code>, <code>⚡xhi</code>, <code>🔥max</code>
 </td>
 </tr>
 </table>
-
-<hr>
-
-<h2 align="center" id="spend-effort">💰 Spend & Effort</h2>
-
-**Scoped metrics** — line 2 keeps one metric slot and rotates scope + metric:
-
-| Display | Meaning |
-|---------|---------|
-| `💰 $2.30` | Current session spend |
-| `📅💧 2 tbsp` | Today's water estimate |
-| `🧱🎟️ 1.2M` | Tokens inside the active rolling block window (5h by default) |
-| `💰 $123.45 🏆` | All-time account spend |
-
-The metric types are fixed and sober: `💧` water, `⚡` power, `💰` cost, `🎟️` tokens, and `📡` data. The environmental kinds (`💧` water, `⚡` power, `📡` data) skip the unlabeled session scope and begin at today (`📅`); cost (`💰`) and tickets (`🎟️`) still show a session total. Window totals are computed from local JSONL transcripts in a background refresh and cached in `.spend-cache`, so the statusline stays fast.
-
-**Thinking effort** — the effort segment maps the current Claude Code effort level to five compact states: `🌱low`, `💭med`, `🧠high`, `⚡xhi`, `🔥max`. If thinking is enabled but no effort level is present, it shows `💭think`.
 
 <hr>
 
@@ -196,7 +148,7 @@ Compares your actual weekly usage against where you *should* be based on time el
 
 Both signals agree on over/under pace (`> 1.0` = over, `< 1.0` = under), but pressure amplifies urgency when budget is thin. For example, at 91% on Monday 8pm with reset Thursday 1pm: burn rate is 1.48 (🥵) but pressure is 4.29 — you have 9% left for 2.7 days (🚨).
 
-Combined display: `👌→` (on pace, stable) or `🔥↑` (hot, getting hotter). At 100%, shows reset countdown: `🚨 -1.2d`. Alternates with the raw % on half its updates (5 of every 10).
+Combined display: `👌→` (on pace, stable) or `🔥↑` (hot, getting hotter). At 100%, shows reset countdown: `🚨 -1.2d`.
 
 <details>
 <summary><strong>Pace emoji tiers</strong></summary>
@@ -233,7 +185,7 @@ Tracks **usage% velocity** — how fast you're burning tokens compared to the su
 
 <hr>
 
-<h2 align="center" id="burst--credit-indicators">💥 Burst & Credit Indicators</h2>
+<h2 align="center" id="burst-indicator">💥 Burst Indicator</h2>
 
 **💥 Burst** (5-hour rate limit) — colored bar mapped directly to API utilization %, only shown when > 0%. Alternates to raw percent (`💥25%`) on its own 10-tick rotation cycle.
 
@@ -250,29 +202,25 @@ Tracks **usage% velocity** — how fast you're burning tokens compared to the su
 
 A dimmed countdown shows minutes until the 5-hour window resets whenever usage is 75%+ *or* the reset is under an hour away.
 
-**💳 Credit** (overage balance) — only shown when weekly or burst usage hits 100% with active credit spend.
-
 <hr>
 
-<h2 align="center" id="environmental-impact">🌍 Environmental Impact</h2>
+<h2 align="center" id="performance">⚡ Performance</h2>
 
-The rotating metrics visualize the environmental cost of AI inference:
+| Scenario | Time |
+|----------|------|
+| Typical | ~30ms |
 
-| Metric | Rate | Source |
-|--------|------|--------|
-| 💧 Water | 1 gal = 760k tokens | [arxiv:2304.03271](https://arxiv.org/pdf/2304.03271) |
-| ⚡ Power | 1 kWh = 240k tokens | [arxiv:2505.09598](https://arxiv.org/html/2505.09598v1) |
-| 💰 Cost | Built-in | Claude Code API |
+**Cost breakdown** (typical, ~30ms total):
 
-**Dynamic units:** Water scales drops → tsp → tbsp → oz → cups → pints → quarts → gallons. Power scales Wh → kWh → MWh.
+| Phase | Time | Tool |
+|-------|------|------|
+| Git status | ~90ms | 3 git calls (parallelized with jq parse) |
+| jq parse | ~16ms | 1 jq call |
+| Trend/pace | ~20ms | 1 awk call |
+| Formatting | ~22ms | 1 awk + bash math |
+| Source libs + rest | ~27ms | bash |
 
-<hr>
-
-<h2 align="center" id="all-time-tracking">🏆 All-Time Tracking</h2>
-
-Cumulative usage across all sessions by scanning JSONL files in `~/.claude/projects/` and `~/.config/claude/projects/`.
-
-The `🏆` suffix indicates all-time totals in the scoped metric rotation. The same five metrics are used for every scope: water, power, cost, tokens, and data.
+Rate limit data comes directly from the Claude Code status line JSON — zero network calls, ever.
 
 <details>
 <summary><strong>Context bar tiers</strong></summary>
@@ -301,80 +249,23 @@ Whichever is found is clamped to 100K–1M and then capped at the physical windo
 
 <hr>
 
-<h2 align="center" id="performance">⚡ Performance</h2>
-
-| Scenario | Time |
-|----------|------|
-| Fully warm (typical) | ~180ms |
-| Stale cache (async refresh in background) | ~180ms |
-| Best case | ~175ms |
-| First-ever run, no state file | ~6s (10K+ files, 1.2GB) |
-
-**Cost breakdown** (warm, ~180ms total):
-
-| Phase | Time | Tool |
-|-------|------|------|
-| Git status | ~90ms | 3 git calls |
-| jq parse | ~16ms | 1 jq call |
-| Trend/pace | ~20ms | 1 awk call |
-| JSONL cache read | ~5ms | bash read |
-| Formatting | ~22ms | 1 awk + bash math |
-| Source libs + rest | ~27ms | bash |
-
-Rate limit data comes directly from the Claude Code status line JSON — zero network calls during normal operation. The first-ever run uses a fast streaming pipeline (`xargs cat | perl`) to build initial state, then subsequent refreshes only process appended bytes per file. Once state exists, stale caches are served immediately and the refresh runs in a **disowned background subshell** (guarded by `.refresh.lock.d`) so the render path never blocks on a rescan — even on a multi-gigabyte transcript backlog.
-
-<hr>
-
-<h2 align="center" id="privacy--network-access">🔒 Privacy & Network Access</h2>
-
-claudeline makes **one optional API call** to `https://api.anthropic.com/api/oauth/usage` — a `GET` request with only an `Authorization` header. No telemetry, no tracking, no data sent in the request body. This call is off by default. It only triggers when you opt into the credit indicator (`CLAUDELINE_CREDIT=1`) *and* weekly or burst rate limits reach 100%, to fetch overage/credit utilization.
-
-The OAuth token is read from:
-- **macOS:** macOS Keychain via `security find-generic-password`
-- **Linux:** `~/.config/claude/credentials.json`
-
-The API call runs in a **non-blocking background subshell** so it never stalls the status line.
+<h2 align="center" id="configuration">⚙️ Configuration</h2>
 
 | Variable | Effect |
 |----------|--------|
 | `CLAUDELINE_THEME=nord` | Theme: `vibey` (default), `dark`, `light`, `nord`, `gruvbox` |
-| `CLAUDELINE_SEGMENTS=context,git,pace` | Show only listed segments. Default keeps standalone `spend` off for a shorter line. Available: `context`, `git`, `lines`, `pace`, `burst`, `duration`, `credit`, `tokens`, `spend`, `effort`, `metric`, `throughput`, `model` |
-| `CLAUDELINE_CREDIT=1` | Enable the `💳` overage-credit indicator and its optional usage API call (default: off) |
+| `CLAUDELINE_SEGMENTS=context,git,pace` | Show only listed segments. Available: `context`, `git`, `pace`, `burst`, `duration`, `tokens`, `effort`, `model`, `stale` |
 | `NO_COLOR=1` | Disables all color output ([spec](https://no-color.org)) |
-| `CLAUDELINE_NO_NETWORK=1` | Disables all network access — the API call is skipped entirely |
 | `CLAUDELINE_DEBUG=1` | Enables debug logging to `$TMPDIR/claudeline-statusline-debug.log` |
 | `CLAUDELINE_DEBUG_LOG=/path` | Custom debug log path (requires `CLAUDELINE_DEBUG=1`) |
-| `JSONL_CACHE_TTL=300` | JSONL cache lifetime in seconds (default: 300) |
-| `EXTRA_USAGE_TTL=600` | Extra usage / credit cache lifetime in seconds (default: 600) |
-| `SPEND_CACHE_TTL=600` | Spend window cache lifetime in seconds (default: 600). Stale values render immediately while a background refresh runs. |
-| `SPEND_BLOCK_SECONDS=18000` | Rolling active block spend window in seconds (default: 5h). |
 | `TREND_WINDOW=900` | Trend arrow sample window in seconds (default: 900) |
 | `TREND_HISTORY_MAX_AGE=86400` | Max age for trend history entries in seconds (default: 86400) |
-| `COST_RATE_CURRENT_WINDOW=3600` | Current account-wide cost-rate window, in wall-clock seconds (default: 1h). Rates divide only by API-active time inside the window, so idle time does not lower the pace. `COST_RATE_WINDOW` is still accepted as a legacy alias. |
-| `COST_RATE_BASELINE_WINDOW=86400` | Baseline lookback before the current window, in wall-clock seconds (default: 24h). If this is thin, retained history up to `COST_RATE_HISTORY_MAX_AGE` is used. |
-| `COST_RATE_BUCKET_SECONDS=60` | Account-wide cost-rate bucket size, in seconds (default: 60). |
-| `COST_RATE_MIN_CURRENT_API_MS=300000` | Minimum active API time in the current window before the arrow leaves the warming marker (default: 5 min). |
-| `COST_RATE_MIN_BASELINE_API_MS=1800000` | Minimum active API time in the baseline before the arrow leaves the warming marker (default: 30 min). |
-| `COST_RATE_HISTORY_MAX_AGE=604800` | How long `.cost-rate-history` buckets and `.cost-rate-state` rows are retained before pruning, in seconds (default: 7d). |
-| `COST_RATE_TREND_HOT_X100=150` | Hot threshold: current active rate ≥1.50× baseline (default: 150) |
-| `COST_RATE_TREND_WARM_X100=115` | Warm threshold: current active rate ≥1.15× baseline (default: 115) |
-| `COST_RATE_TREND_COOL_X100=85` | Cool threshold: current active rate ≤0.85× baseline (default: 85) |
-| `COST_RATE_TREND_COLD_X100=50` | Cold threshold: current active rate ≤0.50× baseline (default: 50) |
 
 **Local data stored** in `~/.claude-usage.d/` (created with `chmod 700`):
 
 | File | Purpose |
 |------|---------|
-| `.jsonl-cache` | Cached all-time token/cost totals (5-min TTL; stale values are served immediately while a background refresh runs) |
-| `.jsonl-state` | Per-file JSONL scan state for incremental refreshes |
-| `.refresh.lock.d/` | Lock directory to prevent concurrent background JSONL refreshes |
-| `.spend-cache` | Cached today and rolling-block token/cost totals |
-| `.spend-refresh.lock.d/` | Lock directory to prevent concurrent spend scans |
 | `.usage-history` | Rolling 24h usage samples for trend arrows |
-| `.cost-rate-history` | Account-wide `(bucket_epoch, cost_delta_cents, api_delta_ms)` buckets for the cost-rate slot, pruned to 7d |
-| `.cost-rate-state` | Last-seen per-session cumulative totals used to turn session counters into account-wide cost-rate buckets |
-| `.extra-usage-cache` | Cached overage/credit data |
-| `.extra-usage-fetch.lock/` | Lock directory to prevent concurrent API calls |
 
 <hr>
 
@@ -384,8 +275,8 @@ The API call runs in a **non-blocking background subshell** so it never stalls t
 
 [![jq](https://img.shields.io/badge/jq-JSON_parsing-C9A227)](https://jqlang.github.io/jq/)
 [![git](https://img.shields.io/badge/git-branch_detection-F05032?logo=git&logoColor=white)](https://git-scm.com/)
-[![perl](https://img.shields.io/badge/perl-JSONL_parsing-39457E?logo=perl&logoColor=white)](https://www.perl.org/)
-[![curl](https://img.shields.io/badge/curl-install_%2B_API-073551?logo=curl&logoColor=white)](https://curl.se/)
+[![perl](https://img.shields.io/badge/perl-install_checksums-39457E?logo=perl&logoColor=white)](https://www.perl.org/)
+[![curl](https://img.shields.io/badge/curl-install-073551?logo=curl&logoColor=white)](https://curl.se/)
 
 </div>
 
@@ -396,7 +287,7 @@ The API call runs in a **non-blocking background subshell** so it never stalls t
 ```bash
 # Remove statusline files
 rm -f ~/.claude/statusline.sh
-rm -rf ~/.claude/lib/statusline_themes.sh ~/.claude/lib/statusline_display.sh ~/.claude/lib/statusline_usage.sh ~/.claude/lib/jsonl_parser.pl ~/.claude/lib/anthropic_pricing.json
+rm -rf ~/.claude/lib/statusline_themes.sh ~/.claude/lib/statusline_display.sh ~/.claude/lib/statusline_usage.sh
 
 # Remove the statusLine key from settings.json
 jq 'del(.statusLine)' ~/.claude/settings.json > ~/.claude/settings.json.tmp && mv ~/.claude/settings.json.tmp ~/.claude/settings.json

@@ -24,7 +24,7 @@ get_perm() {
 }
 
 cache_bootstrap="$tmpdir/cache_bootstrap.sh"
-sed -n '/^# Cache directory for API and JSONL data/,/^# Extract all values in a single jq call/p' \
+sed -n '/^# Cache directory for locally observed usage-trend data/,/^# Extract all values in a single jq call/p' \
     "$repo_root/statusline.sh" > "$cache_bootstrap"
 
 shim_dir="$tmpdir/shim"
@@ -42,7 +42,6 @@ export HOME="$home_dir"
 export STATUSLINE_DEBUG_LOG=/dev/null
 export TEST_CHMOD_MARKER="$tmpdir/chmod-called"
 export PATH="$shim_dir:$PATH"
-ALLTIME_COST_ITEMS=()
 
 umask 022
 

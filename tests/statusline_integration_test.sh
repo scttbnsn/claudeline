@@ -63,8 +63,7 @@ input_json='{
   "model": {"display_name": "Claude Sonnet 4"},
   "workspace": {"current_dir": "/tmp/demo"},
   "cost": {
-    "total_lines_added": 12,
-    "total_lines_removed": 3,
+
     "total_duration_ms": 300000,
     "total_cost_usd": 5.50
   },
@@ -94,7 +93,7 @@ while IFS= read -r line; do
 done < "$tmpdir/rendered.txt"
 
 assert_eq 2 "${#lines[@]}" "statusline integration emits exactly two lines"
-assert_eq "✨ ░░░░░░░░░░  ·  demo/main*↑2  ·  +12/-3" "${lines[0]}" "statusline integration renders the first line deterministically"
+assert_eq "✨ ░░░░░░░░░░  ·  demo/main*↑2" "${lines[0]}" "statusline integration renders the first line deterministically"
 assert_eq '      1K/200K  ·  Claude Sonnet 4  ·  ⏱️ 5m' "${lines[1]}" "statusline integration renders the second line deterministically"
 
 printf 'ok\n'

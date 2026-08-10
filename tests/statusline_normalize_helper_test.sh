@@ -26,8 +26,7 @@ assert_not_contains() {
 
 assert_contains 'normalize_scalar_var() {' "statusline should define a single shared scalar normalizer"
 assert_contains 'case "$mode" in' "shared scalar normalizer should switch on a mode parameter"
-assert_contains 'normalize_scalar_var LINES_ADDED int 0 "lines added"' "integer fields should use the shared normalizer in int mode"
-assert_contains 'normalize_scalar_var TOTAL_COST decimal 0 "total cost usd"' "decimal fields should use the shared normalizer in decimal mode"
+assert_contains 'normalize_scalar_var CURRENT_TOKENS int 0 "current tokens"' "integer fields should use the shared normalizer in int mode"
 assert_contains 'normalize_scalar_var WEEKLY_USAGE rate "_" "weekly usage"' "rate fields should use the shared normalizer in rate mode"
 assert_not_contains 'normalize_int_var() {' "statusline should not keep a dedicated int normalizer"
 assert_not_contains 'normalize_decimal_var() {' "statusline should not keep a dedicated decimal normalizer"

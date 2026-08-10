@@ -9,7 +9,7 @@ git clone https://github.com/scttbnsn/claudeline.git
 cd claudeline
 ```
 
-Dependencies: `bash` (5.x), `jq`, `git`, `perl` (5.14+ with JSON::PP).
+Dependencies: `bash` (5.x), `jq`, `git`, `perl` (5.14+).
 
 ## Running Tests
 
@@ -21,16 +21,6 @@ for f in tests/*.sh; do bash "$f" || exit 1; done
 
 ```bash
 shellcheck -x statusline.sh lib/statusline_display.sh lib/statusline_usage.sh
-perl -c lib/jsonl_parser.pl
-```
-
-## Updating Pricing
-
-When Anthropic releases new models or changes pricing:
-
-```bash
-perl scripts/update_anthropic_pricing.pl    # regenerate lib/anthropic_pricing.json
-perl scripts/check_anthropic_model_coverage.pl  # verify all models are covered
 ```
 
 ## Commit Style

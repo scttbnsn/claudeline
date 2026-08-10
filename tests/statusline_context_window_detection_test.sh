@@ -69,8 +69,7 @@ render_second_line() {
   "model": {"display_name": "$model"},
   "workspace": {"current_dir": "/tmp/demo"},
   "cost": {
-    "total_lines_added": 12,
-    "total_lines_removed": 3,
+
     "total_duration_ms": 300000,
     "total_cost_usd": 5.50
   },

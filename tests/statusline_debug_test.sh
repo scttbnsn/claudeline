@@ -27,7 +27,6 @@ run_case() {
     local log_file="$case_dir/debug.log"
 
     mkdir -p "$cache_dir" "$case_dir"
-    printf 'not-a-timestamp\n0 0 0 0 0 0\n' > "$cache_dir/.jsonl-cache"
 
     if [ "$debug_enabled" = "1" ]; then
         CLAUDELINE_DEBUG=1 \
@@ -55,6 +54,5 @@ debug_log=$(run_case debug 1)
 }
 
 assert_contains "Failed to parse statusline input" "$debug_log" "stdin jq parse fallback is logged"
-assert_contains "Ignoring invalid JSONL cache timestamp" "$debug_log" "cache corruption is logged"
 
 printf 'ok\n'

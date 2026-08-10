@@ -6,8 +6,6 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 required_files=(
     "$repo_root/lib/statusline_display.sh"
     "$repo_root/lib/statusline_usage.sh"
-    "$repo_root/lib/jsonl_parser.pl"
-    "$repo_root/lib/anthropic_pricing.json"
 )
 
 for path in "${required_files[@]}"; do

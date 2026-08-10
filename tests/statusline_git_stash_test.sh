@@ -63,8 +63,7 @@ input_json='{
   "model": {"display_name": "Claude Sonnet 4"},
   "workspace": {"current_dir": "/tmp/demo"},
   "cost": {
-    "total_lines_added": 12,
-    "total_lines_removed": 3,
+
     "total_duration_ms": 300000,
     "total_cost_usd": 5.50
   },
@@ -88,6 +87,6 @@ PATH="$shim_dir:$PATH" HOME="$home_dir" NOW=1000000 \
     bash "$repo_root/statusline.sh" <<< "$input_json" | perl -pe 's/\e\[[0-9;]*m//g' > "$tmpdir/rendered.txt"
 
 first_line=$(sed -n '1p' "$tmpdir/rendered.txt")
-assert_eq '✨ ░░░░░░░░░░  ·  demo/main*↑2$  ·  +12/-3' "$first_line" "stash marker uses refs/stash probe"
+assert_eq '✨ ░░░░░░░░░░  ·  demo/main*↑2$' "$first_line" "stash marker uses refs/stash probe"
 
 printf 'ok\n'

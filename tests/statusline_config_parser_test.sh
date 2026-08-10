@@ -27,24 +27,22 @@ cat > "$config_file" <<'EOF'
 # comment
  theme = nord
 segments = git,model
-credit = 1
-no_network = yes
 no_color = 1
 debug = true
 EOF
 
 config_case=$(HOME="$home_dir" bash -c '
     source "$1"
-    printf "%s|%s|%s|%s|%s|%s\n" \
-        "${CLAUDELINE_THEME-}" "${CLAUDELINE_SEGMENTS-}" "${CLAUDELINE_CREDIT-}" "${CLAUDELINE_NO_NETWORK-}" "${NO_COLOR-}" "${CLAUDELINE_DEBUG-}"
+    printf "%s|%s|%s|%s\n" \
+        "${CLAUDELINE_THEME-}" "${CLAUDELINE_SEGMENTS-}" "${NO_COLOR-}" "${CLAUDELINE_DEBUG-}"
 ' bash "$helper_file")
-assert_eq 'nord|git,model|1|yes|1|true' "$config_case" "config parser loads default ~/.claude/claudeline.conf settings"
+assert_eq 'nord|git,model|1|true' "$config_case" "config parser loads default ~/.claude/claudeline.conf settings"
 
-override_case=$(HOME="$home_dir" CLAUDELINE_THEME=dark CLAUDELINE_SEGMENTS=pace CLAUDELINE_CREDIT=0 CLAUDELINE_NO_NETWORK=on NO_COLOR=keep CLAUDELINE_DEBUG=0 bash -c '
+override_case=$(HOME="$home_dir" CLAUDELINE_THEME=dark CLAUDELINE_SEGMENTS=pace NO_COLOR=keep CLAUDELINE_DEBUG=0 bash -c '
     source "$1"
-    printf "%s|%s|%s|%s|%s|%s\n" \
-        "${CLAUDELINE_THEME-}" "${CLAUDELINE_SEGMENTS-}" "${CLAUDELINE_CREDIT-}" "${CLAUDELINE_NO_NETWORK-}" "${NO_COLOR-}" "${CLAUDELINE_DEBUG-}"
+    printf "%s|%s|%s|%s\n" \
+        "${CLAUDELINE_THEME-}" "${CLAUDELINE_SEGMENTS-}" "${NO_COLOR-}" "${CLAUDELINE_DEBUG-}"
 ' bash "$helper_file")
-assert_eq 'dark|pace|0|on|keep|0' "$override_case" "environment variables take precedence over config values"
+assert_eq 'dark|pace|keep|0' "$override_case" "environment variables take precedence over config values"
 
 printf 'ok\n'

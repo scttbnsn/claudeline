@@ -19,27 +19,11 @@ if [ -f "$CLAUDELINE_CONF" ]; then
         case "$_key" in
             theme)                [ -z "${CLAUDELINE_THEME:-}" ]            && CLAUDELINE_THEME="$_val" ;;
             segments)             [ -z "${CLAUDELINE_SEGMENTS:-}" ]         && CLAUDELINE_SEGMENTS="$_val" ;;
-            credit)               [ -z "${CLAUDELINE_CREDIT:-}" ]           && CLAUDELINE_CREDIT="$_val" ;;
-            no_network)           [ -z "${CLAUDELINE_NO_NETWORK:-}" ]       && CLAUDELINE_NO_NETWORK="$_val" ;;
             debug)                [ -z "${CLAUDELINE_DEBUG:-}" ]            && CLAUDELINE_DEBUG="$_val" ;;
             debug_log)            [ -z "${CLAUDELINE_DEBUG_LOG:-}" ]        && CLAUDELINE_DEBUG_LOG="$_val" ;;
             no_color)             [ -z "${NO_COLOR:-}" ]                    && NO_COLOR="$_val" ;;
-            jsonl_cache_ttl)      [ -z "${JSONL_CACHE_TTL:-}" ]             && JSONL_CACHE_TTL="$_val" ;;
-            extra_usage_ttl)      [ -z "${EXTRA_USAGE_TTL:-}" ]             && EXTRA_USAGE_TTL="$_val" ;;
-            spend_cache_ttl)      [ -z "${SPEND_CACHE_TTL:-}" ]             && SPEND_CACHE_TTL="$_val" ;;
-            spend_block_seconds)  [ -z "${SPEND_BLOCK_SECONDS:-}" ]         && SPEND_BLOCK_SECONDS="$_val" ;;
             trend_window)         [ -z "${TREND_WINDOW:-}" ]                && TREND_WINDOW="$_val" ;;
             trend_history_max_age) [ -z "${TREND_HISTORY_MAX_AGE:-}" ]      && TREND_HISTORY_MAX_AGE="$_val" ;;
-            cost_rate_current_window) [ -z "${COST_RATE_CURRENT_WINDOW:-}" ] && COST_RATE_CURRENT_WINDOW="$_val" ;;
-            cost_rate_baseline_window) [ -z "${COST_RATE_BASELINE_WINDOW:-}" ] && COST_RATE_BASELINE_WINDOW="$_val" ;;
-            cost_rate_bucket_seconds) [ -z "${COST_RATE_BUCKET_SECONDS:-}" ] && COST_RATE_BUCKET_SECONDS="$_val" ;;
-            cost_rate_min_current_api_ms) [ -z "${COST_RATE_MIN_CURRENT_API_MS:-}" ] && COST_RATE_MIN_CURRENT_API_MS="$_val" ;;
-            cost_rate_min_baseline_api_ms) [ -z "${COST_RATE_MIN_BASELINE_API_MS:-}" ] && COST_RATE_MIN_BASELINE_API_MS="$_val" ;;
-            cost_rate_history_max_age) [ -z "${COST_RATE_HISTORY_MAX_AGE:-}" ] && COST_RATE_HISTORY_MAX_AGE="$_val" ;;
-            cost_rate_trend_hot_x100) [ -z "${COST_RATE_TREND_HOT_X100:-}" ] && COST_RATE_TREND_HOT_X100="$_val" ;;
-            cost_rate_trend_warm_x100) [ -z "${COST_RATE_TREND_WARM_X100:-}" ] && COST_RATE_TREND_WARM_X100="$_val" ;;
-            cost_rate_trend_cool_x100) [ -z "${COST_RATE_TREND_COOL_X100:-}" ] && COST_RATE_TREND_COOL_X100="$_val" ;;
-            cost_rate_trend_cold_x100) [ -z "${COST_RATE_TREND_COLD_X100:-}" ] && COST_RATE_TREND_COLD_X100="$_val" ;;
         esac
     done < "$CLAUDELINE_CONF"
 fi
@@ -267,63 +251,37 @@ source "$STATUSLINE_DIR/lib/statusline_usage.sh"
 _SEG_ALL=0
 if [ -n "${CLAUDELINE_SEGMENTS:-}" ]; then
     _SEG_ALL=0
-    _SEG_CONTEXT=0; _SEG_GIT=0; _SEG_LINES=0; _SEG_PACE=0
-    _SEG_BURST=0; _SEG_DURATION=0; _SEG_CREDIT=0
-    _SEG_TOKENS=0; _SEG_SPEND=0; _SEG_EFFORT=0
-    _SEG_METRIC=0; _SEG_THROUGHPUT=0; _SEG_MODEL=0; _SEG_STALE=0
+    _SEG_CONTEXT=0; _SEG_GIT=0; _SEG_PACE=0
+    _SEG_BURST=0; _SEG_DURATION=0
+    _SEG_TOKENS=0; _SEG_EFFORT=0
+    _SEG_MODEL=0; _SEG_STALE=0
     IFS=',' read -ra _segs <<< "$CLAUDELINE_SEGMENTS"
     for _s in "${_segs[@]}"; do
         case "${_s## }" in  # trim leading space
             context)  _SEG_CONTEXT=1 ;;
             git)      _SEG_GIT=1 ;;
-            lines)    _SEG_LINES=1 ;;
             pace)     _SEG_PACE=1 ;;
             burst)    _SEG_BURST=1 ;;
             duration)   _SEG_DURATION=1 ;;
-            credit)     _SEG_CREDIT=1 ;;
             tokens)     _SEG_TOKENS=1 ;;
-            spend)      _SEG_SPEND=1 ;;
             effort)     _SEG_EFFORT=1 ;;
-            metric)     _SEG_METRIC=1 ;;
-            throughput) _SEG_THROUGHPUT=1 ;;
             model)      _SEG_MODEL=1 ;;
             stale)      _SEG_STALE=1 ;;
         esac
     done
 else
-    _SEG_CONTEXT=1; _SEG_GIT=1; _SEG_LINES=1; _SEG_PACE=1
-    _SEG_BURST=1; _SEG_DURATION=1; _SEG_CREDIT=1
-    _SEG_TOKENS=1; _SEG_SPEND=0; _SEG_EFFORT=1
-    # The rotating 🎟️/📅/🧱/🏆 metric conversions are opt-in: they're a novelty
-    # next to the live signals, and they push more useful segments off narrow
-    # terminals. Set CLAUDELINE_SEGMENTS to include `metric` to bring them back.
-    _SEG_METRIC=0; _SEG_THROUGHPUT=1; _SEG_MODEL=1; _SEG_STALE=1
+    _SEG_CONTEXT=1; _SEG_GIT=1; _SEG_PACE=1
+    _SEG_BURST=1; _SEG_DURATION=1
+    _SEG_TOKENS=1; _SEG_EFFORT=1
+    _SEG_MODEL=1; _SEG_STALE=1
 fi
 
 seg_on() { [ "${_SEG_ALL}" -eq 1 ] || [ "${1:-0}" -eq 1 ]; }
 
-# The credit/overage segment needs OAuth-derived usage data, which requires
-# extra setup — default it OFF and only render it when the user opts in.
-CREDIT_OPT_IN=0
-[ "${CLAUDELINE_CREDIT:-0}" = 1 ] && CREDIT_OPT_IN=1
-
-# Cache directory for API and JSONL data
+# Cache directory for locally observed usage-trend data
 CACHE_DIR="$HOME/.claude-usage.d"
-JSONL_CACHE="$CACHE_DIR/.jsonl-cache"
-JSONL_STATE="$CACHE_DIR/.jsonl-state"
-EXTRA_USAGE_CACHE="$CACHE_DIR/.extra-usage-cache"
-EXTRA_USAGE_LOCK="$CACHE_DIR/.extra-usage-fetch.lock"
-EXTRA_USAGE_TTL=${EXTRA_USAGE_TTL:-600}
-SPEND_CACHE="$CACHE_DIR/.spend-cache"
-SPEND_LOCK="$CACHE_DIR/.spend-refresh.lock.d"
 USAGE_HISTORY="$CACHE_DIR/.usage-history"
-COST_RATE_HISTORY="$CACHE_DIR/.cost-rate-history"
-COST_RATE_STATE="$CACHE_DIR/.cost-rate-state"
-COST_RATE_LOCK="$CACHE_DIR/.cost-rate.lock.d"
 TREND_WINDOW=${TREND_WINDOW:-900}   # 15 minutes in seconds
-METRIC_SCOPE_LABELS=("" "📅" "🧱" "🏆")
-METRIC_SCOPE_COUNT=${#METRIC_SCOPE_LABELS[@]}
-METRIC_KIND_COUNT=5
 (umask 077 && mkdir -p "$CACHE_DIR") 2>>"$STATUSLINE_DEBUG_LOG"
 
 # Extract all values in a single jq call (11 calls → 1). Each field is stripped
@@ -333,13 +291,7 @@ INPUT_FIELDS=""
 if ! INPUT_FIELDS=$(printf '%s\n' "$input" | jq -r '[
         (.model.display_name // "Claude"),
         (.workspace.current_dir // ""),
-        (.cost.total_lines_added // 0),
-        (.cost.total_lines_removed // 0),
-        (.context_window.total_input_tokens // 0),
-        (.context_window.total_output_tokens // 0),
         (.cost.total_duration_ms // 0),
-        (.cost.total_api_duration_ms // 0),
-        (.cost.total_cost_usd // 0),
         ((.context_window.current_usage.input_tokens // 0) +
          (.context_window.current_usage.cache_creation_input_tokens // 0) +
          (.context_window.current_usage.cache_read_input_tokens // 0)),
@@ -348,7 +300,6 @@ if ! INPUT_FIELDS=$(printf '%s\n' "$input" | jq -r '[
         (.rate_limits.seven_day.resets_at // "_"),
         (.rate_limits.five_hour.used_percentage // "_"),
         (.rate_limits.five_hour.resets_at // "_"),
-        (.session_id // "_"),
         (.context_window.current_usage.input_tokens // 0),
         (.context_window.current_usage.output_tokens // 0),
         (.context_window.current_usage.cache_creation_input_tokens // 0),
@@ -360,32 +311,24 @@ if ! INPUT_FIELDS=$(printf '%s\n' "$input" | jq -r '[
         (.version // "")
     ] | map(tostring) | map(gsub("[[:cntrl:]]";"")) | join("\u001f")' 2>>"$STATUSLINE_DEBUG_LOG"); then
     debug_log "Failed to parse statusline input; using defaults"
-    INPUT_FIELDS=$'Claude\x1f\x1f0\x1f0\x1f0\x1f0\x1f0\x1f0\x1f0\x1f0\x1f200000\x1f_\x1f_\x1f_\x1f_\x1f_\x1f0\x1f0\x1f0\x1f0\x1f_\x1ffalse\x1f_\x1f\x1f'
+    INPUT_FIELDS=$'Claude\x1f\x1f0\x1f0\x1f200000\x1f_\x1f_\x1f_\x1f_\x1f0\x1f0\x1f0\x1f0\x1f_\x1ffalse\x1f_\x1f\x1f'
 fi
 
 # Use the ASCII unit separator (0x1f) as the field delimiter, not a tab: `read`
 # with a whitespace IFS collapses adjacent delimiters, so any empty field (e.g. an
 # absent current_dir) would silently shift every later column. 0x1f is
 # non-whitespace, so empty fields are preserved and columns stay aligned.
-IFS=$'\x1f' read -r MODEL CURRENT_DIR LINES_ADDED LINES_REMOVED \
-    TOTAL_INPUT TOTAL_OUTPUT DURATION_MS API_DURATION_MS TOTAL_COST CURRENT_TOKENS CONTEXT_WINDOW_SIZE \
-    WEEKLY_USAGE RESETS_AT BURST_USAGE BURST_RESETS SESSION_ID \
+IFS=$'\x1f' read -r MODEL CURRENT_DIR DURATION_MS CURRENT_TOKENS CONTEXT_WINDOW_SIZE \
+    WEEKLY_USAGE RESETS_AT BURST_USAGE BURST_RESETS \
     CURRENT_INPUT_TOKENS CURRENT_OUTPUT_TOKENS CURRENT_CACHE_WRITE_TOKENS CURRENT_CACHE_READ_TOKENS \
     EFFORT_LEVEL THINKING_ENABLED CTX_USED_PCT PROJECT_DIR CC_VERSION <<< "$INPUT_FIELDS"
 
-[ "$SESSION_ID" = "_" ] && SESSION_ID=""
 [ "$EFFORT_LEVEL" = "_" ] && EFFORT_LEVEL=""
 
 # Sanitize externally-sourced display text before it can reach a printf %b sink.
 sanitize_display_field "$MODEL"; MODEL=$REPLY
 
-normalize_scalar_var LINES_ADDED int 0 "lines added"
-normalize_scalar_var LINES_REMOVED int 0 "lines removed"
-normalize_scalar_var TOTAL_INPUT int 0 "total input tokens"
-normalize_scalar_var TOTAL_OUTPUT int 0 "total output tokens"
 normalize_scalar_var DURATION_MS int 0 "duration ms"
-normalize_scalar_var API_DURATION_MS int 0 "api duration ms"
-normalize_scalar_var TOTAL_COST decimal 0 "total cost usd"
 normalize_scalar_var CURRENT_TOKENS int 0 "current tokens"
 normalize_scalar_var CURRENT_INPUT_TOKENS int 0 "current input tokens"
 normalize_scalar_var CURRENT_OUTPUT_TOKENS int 0 "current output tokens"
@@ -399,17 +342,7 @@ normalize_scalar_var BURST_RESETS int 0 "burst reset epoch"
 normalize_scalar_var CTX_USED_PCT rate "_" "context used percentage"
 
 # Derived values (pure bash math, no bc)
-SESSION_TOKENS=$((TOTAL_INPUT + TOTAL_OUTPUT))
 CURRENT_TOKENS=$((CURRENT_INPUT_TOKENS + CURRENT_CACHE_WRITE_TOKENS + CURRENT_CACHE_READ_TOKENS))
-# Round-half-up to the nearest cent (not floor) for the displayed estimated
-# API list-price equivalent: scale to millicents (3 implied decimals) first so
-# a cost like $0.019 shows as $0.02, not $0.01.
-if ! decimal_to_scaled "$TOTAL_COST" 3; then
-    debug_log "Invalid total cost value '${TOTAL_COST:-<empty>}'; defaulting session cost to 0"
-    TOTAL_COST_CENTS=0
-else
-    TOTAL_COST_CENTS=$(( (REPLY + 5) / 10 ))
-fi
 
 # Cache current timestamp (used multiple times - avoid repeated date calls).
 # EPOCHSECONDS is unavailable on Bash 3.2, so keep date as a compatibility fallback.
@@ -482,91 +415,6 @@ read_git_status_info() {
     sanitize_display_field "$BRANCH"; BRANCH=$REPLY
 }
 
-build_rotating_metric_info() {
-    local now_div_10=$1
-    local session_tokens=$2
-    local session_cost_cents=$3
-    local today_tokens=$4
-    local today_cost_cents=$5
-    local block_tokens=$6
-    local block_cost_cents=$7
-    local all_time_tokens=$8
-    local all_time_cost_cents=$9
-    local metric_kind=$((now_div_10 % METRIC_KIND_COUNT))
-    local scope_index=$(((now_div_10 / METRIC_KIND_COUNT) % METRIC_SCOPE_COUNT))
-    local attempt=0 selected_scope=0 selected_tokens=0 selected_cost_cents=0
-    local scope_label="" scope_suffix="" metric_value=""
-
-    REPLY=""
-
-    while [ "$attempt" -lt "$METRIC_SCOPE_COUNT" ]; do
-        selected_scope=$(((scope_index + attempt) % METRIC_SCOPE_COUNT))
-        case "$selected_scope" in
-            0) selected_tokens=$session_tokens; selected_cost_cents=$session_cost_cents ;;
-            1) selected_tokens=$today_tokens; selected_cost_cents=$today_cost_cents ;;
-            2) selected_tokens=$block_tokens; selected_cost_cents=$block_cost_cents ;;
-            3) selected_tokens=$all_time_tokens; selected_cost_cents=$all_time_cost_cents ;;
-        esac
-
-        case "$metric_kind" in
-            0|1|4)
-                # Environmental kinds (water/power/data) never render at the
-                # unlabeled session scope — treat scope 0 as "no data" here so
-                # the rotation falls through to a labeled scope instead.
-                if [ "$selected_scope" -ne 0 ] && [ "$selected_tokens" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
-                    break
-                fi
-                ;;
-            3)
-                [ "$selected_tokens" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG" && break
-                ;;
-            2)
-                [ "$selected_cost_cents" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG" && break
-                ;;
-        esac
-        attempt=$((attempt + 1))
-    done
-
-    [ "$attempt" -lt "$METRIC_SCOPE_COUNT" ] || return 0
-    scope_label=${METRIC_SCOPE_LABELS[$selected_scope]}
-    if [ "$selected_scope" -eq 3 ]; then
-        scope_suffix=" $scope_label"
-        scope_label=""
-    fi
-
-    case "$metric_kind" in
-        0)
-            metric_value="💧 $(format_water "$selected_tokens")"
-            ;;
-        1)
-            metric_value="⚡ $(format_power "$selected_tokens")"
-            ;;
-        2)
-            format_cost_cents "$selected_cost_cents"
-            metric_value="💰 $REPLY"
-            ;;
-        3)
-            metric_value="🎟️ $(format_number "$selected_tokens")"
-            ;;
-        4)
-            metric_value="📡 $(format_data "$selected_tokens")"
-            ;;
-    esac
-
-    REPLY="${DIM}${scope_label}${metric_value}${scope_suffix}${RESET}"
-}
-
-# Get all-time token totals and the retained local API-cost estimate from
-# JSONL files (cached). Consolidate: 2 echo + 2 tail + 2 awk + 1 bc → 1 read (pure bash)
-JSONL_DATA=$(get_jsonl_totals "$NOW")
-read -r ALL_TIME_TOKENS ALL_TIME_COST_CENTS _ _ _ _ <<< "${JSONL_DATA##*$'\n'}"
-ALL_TIME_TOKENS=${ALL_TIME_TOKENS:-0}
-ALL_TIME_COST_CENTS=${ALL_TIME_COST_CENTS:-0}
-# Convert cents to dollars using bash (avoid bc): 247 → "2.47"
-ALL_TIME_COST="$((ALL_TIME_COST_CENTS / 100)).$((ALL_TIME_COST_CENTS % 100))"
-# Pad single-digit cents: "2.7" → "2.07"
-[[ "$ALL_TIME_COST" =~ \.([0-9])$ ]] && ALL_TIME_COST="${ALL_TIME_COST%.*}.0${BASH_REMATCH[1]}"
-
 # Calculate context percentage (scaled to context limit)
 # Detect 1M context from JSON field OR model display name (e.g. "Opus 4.6 1M context")
 if [ "${CONTEXT_WINDOW_SIZE:-0}" -gt 200000 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
@@ -637,25 +485,6 @@ if seg_on "$_SEG_GIT"; then
     read_git_status_info "$CURRENT_DIR"
 fi
 
-TODAY_TOKENS=0
-TODAY_COST_CENTS=0
-BLOCK_TOKENS=0
-BLOCK_COST_CENTS=0
-if seg_on "$_SEG_METRIC" || seg_on "$_SEG_SPEND"; then
-    get_spend_window_totals_nonblocking "$NOW" "$CURRENT_DIR"
-    if [ -n "$REPLY" ]; then
-        read -r TODAY_TOKENS TODAY_COST_CENTS BLOCK_TOKENS BLOCK_COST_CENTS <<< "$REPLY"
-    fi
-fi
-
-METRIC_INFO=""
-build_rotating_metric_info "$NOW_DIV_10" \
-    "$SESSION_TOKENS" "$TOTAL_COST_CENTS" \
-    "$TODAY_TOKENS" "$TODAY_COST_CENTS" \
-    "$BLOCK_TOKENS" "$BLOCK_COST_CENTS" \
-    "$ALL_TIME_TOKENS" "$ALL_TIME_COST_CENTS"
-METRIC_INFO=$REPLY
-
 # Separator
 SEP="${DIM}  ·  ${RESET}"
 
@@ -678,15 +507,6 @@ if seg_on "$_SEG_DURATION" && [ "$DURATION_MS" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG
     DURATION_INFO="${DIM}⏱️ $(format_duration "$DURATION_MS")${RESET}"
 fi
 
-LINES_INFO=""
-if seg_on "$_SEG_LINES"; then
-    if [ "$LINES_ADDED" != "0" ] || [ "$LINES_REMOVED" != "0" ]; then
-        LINES_INFO="${GREEN}+${LINES_ADDED}${DIM}/${RESET}${RED}-${LINES_REMOVED}${RESET}"
-    else
-        LINES_INFO="${DIM}—/—${RESET}"
-    fi
-fi
-
 REPO_BRANCH=""
 if seg_on "$_SEG_GIT"; then
     if [ -n "$BRANCH" ]; then
@@ -694,17 +514,6 @@ if seg_on "$_SEG_GIT"; then
     elif [ -n "$DIR_NAME" ]; then
         REPO_BRANCH="${SKY}${DIR_NAME}${RESET}"
     fi
-fi
-
-# Rate limit data extracted from stdin (rate_limits.seven_day / five_hour)
-# Read extra_usage (credit overage) from cache and refresh it asynchronously when stale.
-EXTRA_UTIL=""
-round_decimal_to_int_or_default "$WEEKLY_USAGE" 0 "weekly usage"
-WEEKLY_PCT=$REPLY
-round_decimal_to_int_or_default "$BURST_USAGE" 0 "burst usage"
-BURST_PCT=$REPLY
-if seg_on "$_SEG_CREDIT" && [ "$CREDIT_OPT_IN" -eq 1 ] && { [ "${WEEKLY_PCT:-0}" -ge 100 ] 2>>"$STATUSLINE_DEBUG_LOG" || [ "${BURST_PCT:-0}" -ge 100 ] 2>>"$STATUSLINE_DEBUG_LOG"; }; then
-    EXTRA_UTIL=$(get_extra_usage_util_nonblocking "$NOW")
 fi
 
 PACE_INDICATOR=""
@@ -717,17 +526,6 @@ BURST_INDICATOR=""
 if seg_on "$_SEG_BURST"; then
     format_burst_indicator "$BURST_USAGE" "$BURST_RESETS" "$NOW"
     BURST_INDICATOR=$REPLY
-fi
-
-CREDIT_INDICATOR=""
-if seg_on "$_SEG_CREDIT" && [ "$CREDIT_OPT_IN" -eq 1 ] && ! is_sentinel_value "$EXTRA_UTIL"; then
-    round_decimal_to_int_or_default "$EXTRA_UTIL" 0 "extra usage"
-    EXTRA_PCT=$REPLY
-    if [ "$EXTRA_PCT" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
-        if [ "${WEEKLY_PCT:-0}" -ge 100 ] 2>>"$STATUSLINE_DEBUG_LOG" || [ "${BURST_PCT:-0}" -ge 100 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
-            CREDIT_INDICATOR="${DIM}💳${EXTRA_PCT}%${RESET}"
-        fi
-    fi
 fi
 
 # Terminal width for responsive layout (drop low-priority segments to prevent wrapping)
@@ -797,18 +595,10 @@ _build_responsive_line() {
 _L1_CONTEXT=""; seg_on "$_SEG_CONTEXT" && _L1_CONTEXT="${CTX_ICON} ${PROGRESS_BAR}"
 _L1_GIT=""; seg_on "$_SEG_GIT" && _L1_GIT="$REPO_BRANCH"
 _L1_PACE=""; seg_on "$_SEG_PACE" && [ -n "$PACE_INDICATOR" ] && _L1_PACE="$PACE_INDICATOR"
-_L1_THROUGHPUT=""
-if seg_on "$_SEG_THROUGHPUT" && [ "$API_DURATION_MS" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG" && [ "$TOTAL_COST_CENTS" -gt 0 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
-    REPLY=""
-    get_cost_rate_indicator "$SESSION_ID" "$TOTAL_COST_CENTS" "$API_DURATION_MS" "$NOW"
-    _L1_THROUGHPUT="$REPLY"
-fi
-_L1_LINES=""; seg_on "$_SEG_LINES" && _L1_LINES="$LINES_INFO"
 _L1_BURST=""; seg_on "$_SEG_BURST" && [ -n "$BURST_INDICATOR" ] && _L1_BURST="$BURST_INDICATOR"
-_L1_CREDIT=""; seg_on "$_SEG_CREDIT" && [ "$CREDIT_OPT_IN" -eq 1 ] && [ -n "$CREDIT_INDICATOR" ] && _L1_CREDIT="$CREDIT_INDICATOR"
 
-# Priority order: context > git > pace > cost-rate > lines > burst > credit
-printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L1_CONTEXT" "$_L1_GIT" "$_L1_PACE" "$_L1_THROUGHPUT" "$_L1_LINES" "$_L1_BURST" "$_L1_CREDIT")"
+# Priority order: context > git > pace > burst
+printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L1_CONTEXT" "$_L1_GIT" "$_L1_PACE" "$_L1_BURST")"
 
 # Prepare line 2 segments in priority order
 _L2_TOKENS=""
@@ -818,11 +608,6 @@ if seg_on "$_SEG_TOKENS"; then
     CTX_STATS="${CTX_CURRENT}/${CTX_THRESHOLD}"
     CTX_PADDED=$(printf "%13s" "$CTX_STATS")
     _L2_TOKENS="${DIM}${CTX_PADDED}${RESET}"
-fi
-_L2_SPEND=""
-if seg_on "$_SEG_SPEND"; then
-    format_spend_indicator "$TODAY_COST_CENTS" "$BLOCK_COST_CENTS" "$TOTAL_COST_CENTS" "$NOW"
-    _L2_SPEND=$REPLY
 fi
 _L2_MODEL=""
 if seg_on "$_SEG_MODEL" && [ -n "$MODEL" ]; then
@@ -836,7 +621,6 @@ if seg_on "$_SEG_EFFORT"; then
     _L2_EFFORT=$REPLY
 fi
 _L2_DURATION=""; seg_on "$_SEG_DURATION" && _L2_DURATION="$DURATION_INFO"
-_L2_METRIC=""; seg_on "$_SEG_METRIC" && _L2_METRIC="$METRIC_INFO"
 
 # Only rendered when the running build and the on-disk build actually differ, so
 # it costs one readlink and stays invisible the rest of the time. Both versions
@@ -852,5 +636,5 @@ if seg_on "$_SEG_STALE" && [[ "$CC_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     fi
 fi
 
-# Priority order: tokens > spend > model > effort > metric > duration > stale
-printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_SPEND" "$_L2_MODEL" "$_L2_EFFORT" "$_L2_METRIC" "$_L2_DURATION" "$_L2_STALE")"
+# Priority order: tokens > model > effort > duration > stale
+printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_MODEL" "$_L2_EFFORT" "$_L2_DURATION" "$_L2_STALE")"
