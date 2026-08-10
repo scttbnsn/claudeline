@@ -44,6 +44,7 @@ render_second_line() {
     local output_file=$2
 
     cat <<'JSON' | env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW -u CLAUDE_AUTOCOMPACT_PCT_OVERRIDE \
+        CLAUDELINE_SEGMENTS="context,git,lines,pace,burst,duration,tokens,effort,throughput,model,metric,stale" \
         PATH="$shim_dir:$PATH" HOME="$home_dir" NO_COLOR=1 NOW=1000000 COLUMNS="$width" \
         bash "$repo_root/statusline.sh" > "$output_file"
 {

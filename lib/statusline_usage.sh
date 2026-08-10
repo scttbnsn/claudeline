@@ -33,15 +33,74 @@ is_decimal_value() {
     [[ "$value" =~ ^-?([0-9]+([.][0-9]+)?|[.][0-9]+)$ ]]
 }
 
+# Staging tempfiles created but not yet renamed into place. Claude Code cancels
+# the previous status line render every time it starts a new one, so a render is
+# routinely killed mid-flight — and a killed process leaves its mktemp'd staging
+# file behind forever. Every atomic write registers its tempfile here so a single
+# exit trap can sweep whatever is still in flight. One shared registry rather
+# than a trap per call site: `trap ... EXIT` in the main shell replaces any
+# previous EXIT trap, so per-site traps would silently clobber each other.
+STATUSLINE_STAGED_TEMPFILES=()
+
+register_staged_tempfile() {
+    STATUSLINE_STAGED_TEMPFILES+=("$1")
+}
+
+# Drop a tempfile that has already been renamed away or removed. Without this the
+# exit sweep could delete a path that mktemp has since reissued to another caller.
+unregister_staged_tempfile() {
+    local target=$1 kept=() entry
+    for entry in ${STATUSLINE_STAGED_TEMPFILES[@]+"${STATUSLINE_STAGED_TEMPFILES[@]}"}; do
+        [ "$entry" = "$target" ] || kept+=("$entry")
+    done
+    STATUSLINE_STAGED_TEMPFILES=(${kept[@]+"${kept[@]}"})
+}
+
+cleanup_staged_tempfiles() {
+    local entry
+    for entry in ${STATUSLINE_STAGED_TEMPFILES[@]+"${STATUSLINE_STAGED_TEMPFILES[@]}"}; do
+        rm -f "$entry" 2>/dev/null
+    done
+    STATUSLINE_STAGED_TEMPFILES=()
+}
+
+trap cleanup_staged_tempfiles EXIT HUP INT TERM
+
+# mktemp wrapper that registers the result. Use this instead of a bare mktemp for
+# anything staged-then-renamed.
+#
+# Returns via $REPLY rather than stdout on purpose: a `$(mktemp_staged ...)` call
+# would run the registration inside a command substitution subshell, so the
+# parent's registry would never see the tempfile and the exit trap would not
+# sweep it. That is the exact leak this machinery exists to close.
+mktemp_staged() {
+    local tmp
+    tmp=$(mktemp "$1" 2>>"${STATUSLINE_DEBUG_LOG:-/dev/null}") || return 1
+    register_staged_tempfile "$tmp"
+    REPLY=$tmp
+}
+
+# Remove a staging tempfile and forget it in one step.
+discard_staged_tempfile() {
+    rm -f "$1" 2>/dev/null
+    unregister_staged_tempfile "$1"
+}
+
 # Write $2 to path $1 atomically (temp file in the same dir, then rename) so a
 # concurrent reader never observes a half-written file.
 atomic_write() {
     local dest=$1 content=$2 tmp
-    tmp=$(mktemp "${dest}.XXXXXX" 2>>"${STATUSLINE_DEBUG_LOG:-/dev/null}") || return 1
+    mktemp_staged "${dest}.XXXXXX" || return 1
+    tmp=$REPLY
     if printf '%s' "$content" > "$tmp" 2>>"${STATUSLINE_DEBUG_LOG:-/dev/null}"; then
-        mv "$tmp" "$dest" 2>>"${STATUSLINE_DEBUG_LOG:-/dev/null}" || { rm -f "$tmp" 2>/dev/null; return 1; }
+        if mv "$tmp" "$dest" 2>>"${STATUSLINE_DEBUG_LOG:-/dev/null}"; then
+            unregister_staged_tempfile "$tmp"
+        else
+            discard_staged_tempfile "$tmp"
+            return 1
+        fi
     else
-        rm -f "$tmp" 2>/dev/null
+        discard_staged_tempfile "$tmp"
         return 1
     fi
 }
@@ -191,11 +250,24 @@ cold_jsonl_scan() {
     printf '%s\n%s\n' "$now" "$summary" > "$JSONL_STATE" 2>>"$STATUSLINE_DEBUG_LOG"
 }
 
-# Sweep leaked refresh tempfiles (>1h old). Defensive cleanup in case a prior
-# refresh was SIGKILL'd before its trap ran — keeps CACHE_DIR from accumulating
-# thousands of zero-byte files that balloon directory readdir cost.
+# Sweep leaked staging tempfiles (>1h old). The exit trap handles every signal
+# bash can catch; this is the backstop for SIGKILL, which it cannot. Covers every
+# staged-then-renamed pattern, not just the JSONL one — the others leaked for
+# months and accumulated thousands of files that balloon directory readdir cost.
+# The 1h floor keeps it clear of anything a live render is still working on.
+#
+# Each pattern must match ONLY mktemp output, never the committed file it stages
+# for. `.extra-usage-??????` is spelled with six literal wildcards rather than a
+# `*` for exactly that reason: `.extra-usage-*` would also match the live
+# `.extra-usage-cache` and delete it on every sweep.
 sweep_stale_refresh_tempfiles() {
-    find "$CACHE_DIR" -maxdepth 1 -name '.jsonl-state-*' -type f -mmin +60 \
+    find "$CACHE_DIR" -maxdepth 1 -type f -mmin +60 \
+        \( -name '.jsonl-state-*' \
+        -o -name '.spend-cache-*' \
+        -o -name '.extra-usage-??????' \
+        -o -name '.extra-usage-response-*' \
+        -o -name '.cost-rate-history.*' \
+        -o -name '.cost-rate-state.*' \) \
         -delete 2>>"$STATUSLINE_DEBUG_LOG" || true
 }
 
@@ -379,17 +451,19 @@ write_spend_cache() {
     [[ "$block_tokens" =~ ^[0-9]+$ ]] || block_tokens=0
     [[ "$block_cost_cents" =~ ^[0-9]+$ ]] || block_cost_cents=0
 
-    tmp_cache=$(mktemp "${CACHE_DIR}/.spend-cache-XXXXXX") || return 1
+    mktemp_staged "${CACHE_DIR}/.spend-cache-XXXXXX" || return 1
+    tmp_cache=$REPLY
     printf '%s\n%s %s %s %s\n' \
         "$now" "$today_tokens" "$today_cost_cents" "$block_tokens" "$block_cost_cents" > "$tmp_cache" || {
-        rm -f "$tmp_cache"
+        discard_staged_tempfile "$tmp_cache"
         return 1
     }
     mv "$tmp_cache" "$SPEND_CACHE" 2>>"$STATUSLINE_DEBUG_LOG" || {
         debug_log "Failed to atomically update $SPEND_CACHE"
-        rm -f "$tmp_cache"
+        discard_staged_tempfile "$tmp_cache"
         return 1
     }
+    unregister_staged_tempfile "$tmp_cache"
 }
 
 read_spend_cache() {
@@ -526,17 +600,19 @@ write_extra_usage_cache() {
     local utilization=$2
     local tmp_cache
 
-    tmp_cache=$(mktemp "${CACHE_DIR}/.extra-usage-XXXXXX") || return 1
+    mktemp_staged "${CACHE_DIR}/.extra-usage-XXXXXX" || return 1
+    tmp_cache=$REPLY
     printf '%s\n%s\n' "$now" "$utilization" > "$tmp_cache" || {
-        rm -f "$tmp_cache"
+        discard_staged_tempfile "$tmp_cache"
         return 1
     }
 
     mv "$tmp_cache" "$EXTRA_USAGE_CACHE" 2>>"$STATUSLINE_DEBUG_LOG" || {
         debug_log "Failed to atomically update $EXTRA_USAGE_CACHE"
-        rm -f "$tmp_cache"
+        discard_staged_tempfile "$tmp_cache"
         return 1
     }
+    unregister_staged_tempfile "$tmp_cache"
 }
 
 read_extra_usage_cache() {
@@ -624,7 +700,8 @@ refresh_extra_usage_cache_now() {
         return 1
     fi
 
-    response_file=$(mktemp "${CACHE_DIR}/.extra-usage-response-XXXXXX") || return 1
+    mktemp_staged "${CACHE_DIR}/.extra-usage-response-XXXXXX" || return 1
+    response_file=$REPLY
     escaped_oauth_token=${oauth_token//\\/\\\\}
     escaped_oauth_token=${escaped_oauth_token//\"/\\\"}
 
@@ -633,13 +710,13 @@ refresh_extra_usage_cache_now() {
             -H "Accept: application/json" \
             -H "anthropic-beta: oauth-2025-04-20" \
             "https://api.anthropic.com/api/oauth/usage" >"$response_file" 2>>"$STATUSLINE_DEBUG_LOG"; then
-        rm -f "$response_file"
+        discard_staged_tempfile "$response_file"
         debug_log "Failed to fetch extra usage from Anthropic API"
         return 1
     fi
 
     extra_usage_response=$(<"$response_file")
-    rm -f "$response_file"
+    discard_staged_tempfile "$response_file"
 
     if ! extra_util=$(printf '%s\n' "$extra_usage_response" | jq -r '.extra_usage.utilization // empty' 2>>"$STATUSLINE_DEBUG_LOG"); then
         debug_log "Failed to parse extra usage response from Anthropic API"
@@ -740,7 +817,9 @@ start_extra_usage_refresh() {
 
     acquire_extra_usage_lock "$now" || return 0
     (
-        trap 'rmdir "$EXTRA_USAGE_LOCK" 2>>"$STATUSLINE_DEBUG_LOG" || true; signal_extra_usage_refresh_done' EXIT
+        # This subshell replaces the inherited EXIT trap, so it has to sweep its
+        # own staged tempfiles too — the curl response file is created in here.
+        trap 'cleanup_staged_tempfiles; rmdir "$EXTRA_USAGE_LOCK" 2>>"$STATUSLINE_DEBUG_LOG" || true; signal_extra_usage_refresh_done' EXIT
         refresh_extra_usage_cache_now "$now" >/dev/null
     ) </dev/null >>"$STATUSLINE_DEBUG_LOG" 2>&1 &
 }
@@ -1079,14 +1158,24 @@ get_cost_rate_indicator() {
     if [ "$have_lock" = 1 ]; then
         local hist_tmp="" state_tmp="" stage_ok=1
         if [ -n "$history_file" ]; then
-            hist_tmp=$(mktemp "${history_file}.XXXXXX" 2>>"$STATUSLINE_DEBUG_LOG") \
-                && printf '%s' "$kept_history" > "$hist_tmp" 2>>"$STATUSLINE_DEBUG_LOG" \
-                || { stage_ok=0; debug_log "Cost-rate history staging failed"; }
+            if mktemp_staged "${history_file}.XXXXXX"; then
+                hist_tmp=$REPLY
+                printf '%s' "$kept_history" > "$hist_tmp" 2>>"$STATUSLINE_DEBUG_LOG" \
+                    || { stage_ok=0; debug_log "Cost-rate history staging failed"; }
+            else
+                stage_ok=0
+                debug_log "Cost-rate history staging failed"
+            fi
         fi
         if [ "$stage_ok" = 1 ] && [ -n "$session_id" ] && [ -n "$state_file" ]; then
-            state_tmp=$(mktemp "${state_file}.XXXXXX" 2>>"$STATUSLINE_DEBUG_LOG") \
-                && printf '%s' "$kept_state" > "$state_tmp" 2>>"$STATUSLINE_DEBUG_LOG" \
-                || { stage_ok=0; debug_log "Cost-rate state staging failed"; }
+            if mktemp_staged "${state_file}.XXXXXX"; then
+                state_tmp=$REPLY
+                printf '%s' "$kept_state" > "$state_tmp" 2>>"$STATUSLINE_DEBUG_LOG" \
+                    || { stage_ok=0; debug_log "Cost-rate state staging failed"; }
+            else
+                stage_ok=0
+                debug_log "Cost-rate state staging failed"
+            fi
         fi
         if [ "$stage_ok" = 1 ]; then
             [ -n "$hist_tmp" ] && { mv "$hist_tmp" "$history_file" 2>>"$STATUSLINE_DEBUG_LOG" || true; }
@@ -1095,6 +1184,8 @@ get_cost_rate_indicator() {
             [ -n "$hist_tmp" ] && rm -f "$hist_tmp" 2>/dev/null
             [ -n "$state_tmp" ] && rm -f "$state_tmp" 2>/dev/null
         fi
+        [ -n "$hist_tmp" ] && unregister_staged_tempfile "$hist_tmp"
+        [ -n "$state_tmp" ] && unregister_staged_tempfile "$state_tmp"
         rmdir "$lock_dir" 2>>"$STATUSLINE_DEBUG_LOG" || true
         have_lock=0
     fi

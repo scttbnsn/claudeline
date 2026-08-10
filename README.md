@@ -277,7 +277,7 @@ The `🏆` suffix indicates all-time totals in the scoped metric rotation. The s
 <details>
 <summary><strong>Context bar tiers</strong></summary>
 
-The bar maps the context-window percentage to 8 color/emoji tiers. Normally that's the percentage Claude Code reports directly; when you cap the window with `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, the bar is measured against that cap instead (Claude Code's own percentage is relative to the full physical window), so the bar and the token count below it always agree:
+The bar maps the context-window percentage to 8 color/emoji tiers. Normally that's the percentage Claude Code reports directly; when you cap the auto-compact window below the model's physical window, the bar is measured against that cap instead (Claude Code's own percentage is relative to the full physical window), so the bar and the token count below it always agree:
 
 | Range | Color | Icon | Meaning |
 |-------|-------|------|---------|
@@ -290,7 +290,12 @@ The bar maps the context-window percentage to 8 color/emoji tiers. Normally that
 | 85-94% | Hot Pink | 🫠 | Past compact zone |
 | 95%+ | Magenta | 💀 | Near hard wall |
 
-The token count under the bar is measured against the effective window (the model's context size, or `CLAUDE_CODE_AUTO_COMPACT_WINDOW` when you cap it lower).
+The token count under the bar is measured against the effective window: the model's physical context size, or the auto-compact window when you cap it lower. Claudeline resolves that cap the same way Claude Code does, in this order:
+
+1. The `CLAUDE_CODE_AUTO_COMPACT_WINDOW` env var.
+2. The `autoCompactWindow` settings key, which is what `/config` → **Auto-compact window size** writes. Settings are merged across scopes in Claude Code's order (user → project → `.claude/settings.local.json` → managed), so the narrowest-scoped file wins.
+
+Whichever is found is clamped to 100K–1M and then capped at the physical window. The `autoCompactWindow` setting is ignored when auto-compact is off (`autoCompactEnabled: false`, `DISABLE_AUTO_COMPACT`, or `DISABLE_COMPACT`); the env var applies either way, matching Claude Code. Claude Code also has server-driven per-model defaults that no status line can observe, so a window it picked on its own won't show up here.
 
 </details>
 

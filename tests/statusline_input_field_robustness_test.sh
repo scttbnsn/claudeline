@@ -72,9 +72,11 @@ assert_eq 606 "$CURRENT_CACHE_READ_TOKENS" "cache-read tokens stay aligned"
 assert_eq 'sessionidvalue' "$SESSION_ID" "newlines tabs and unit separators cannot smuggle a new field"
 assert_eq 'xhighlevelvalue' "$EFFORT_LEVEL" "later string field remains aligned after control stripping"
 assert_eq true "$THINKING_ENABLED" "boolean field after hostile strings remains aligned"
-assert_eq 73 "$CTX_USED_PCT" "final payload percentage remains in the final column"
+assert_eq 73 "$CTX_USED_PCT" "payload percentage stays aligned"
+assert_eq '' "$PROJECT_DIR" "an absent project dir stays empty without shifting the column after it"
+assert_eq '' "$CC_VERSION" "an absent version remains empty in the final column"
 
 separator_count=$(LC_ALL=C awk -F $'\x1f' '{print NF - 1}' <<< "$INPUT_FIELDS")
-assert_eq 22 "$separator_count" "the extracted record retains exactly 23 fixed fields"
+assert_eq 24 "$separator_count" "the extracted record retains exactly 25 fixed fields"
 
 printf 'ok\n'

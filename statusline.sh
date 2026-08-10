@@ -122,6 +122,137 @@ round_decimal_to_int_or_default() {
     printf -v REPLY '%s' "${rounded:-$default_value}"
 }
 
+# Claude Code caps the usable context at an auto-compact window that can be
+# smaller than the model's physical window, and resolves it from, in order: the
+# CLAUDE_CODE_AUTO_COMPACT_WINDOW env var, then the `autoCompactWindow` settings
+# key (what `/config` → "Auto-compact window size" writes), then server/model
+# defaults the status line cannot observe. Whatever it resolves is clamped to
+# [100k, 1M] and then capped by the physical window.
+AUTO_COMPACT_WINDOW_MIN=100000
+AUTO_COMPACT_WINDOW_MAX=1000000
+
+is_truthy_flag() {
+    case "${1:-}" in
+        1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]) return 0 ;;
+    esac
+    return 1
+}
+
+# Claude Code's settings chain, lowest precedence first: the last file that
+# defines a key wins, and managed/policy settings override everything. CLI
+# `--settings` files sit between local and policy but are not visible from here.
+claude_settings_files() {
+    local project_dir=$1
+    local config_dir=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
+    local candidate
+
+    local candidates=("$config_dir/settings.json")
+    if [ -n "$project_dir" ]; then
+        candidates+=("$project_dir/.claude/settings.json" "$project_dir/.claude/settings.local.json")
+    fi
+    candidates+=(
+        "/Library/Application Support/ClaudeCode/managed-settings.json"
+        "/etc/claude-code/managed-settings.json"
+    )
+
+    CLAUDE_SETTINGS_FILES=()
+    for candidate in "${candidates[@]}"; do
+        [ -f "$candidate" ] && CLAUDE_SETTINGS_FILES+=("$candidate")
+    done
+    return 0
+}
+
+# Pull autoCompactWindow / autoCompactEnabled out of the whole settings chain in
+# one jq call. Keys are picked with `has` rather than `//` so a literal `false`
+# is not mistaken for "unset", and an unreadable or malformed file leaves both
+# values empty instead of aborting the status line.
+read_auto_compact_settings() {
+    AUTO_COMPACT_WINDOW_SETTING=""
+    AUTO_COMPACT_ENABLED_SETTING=""
+    [ "${#CLAUDE_SETTINGS_FILES[@]}" -gt 0 ] || return 0
+
+    local fields
+    if ! fields=$(jq -n -r '
+            [inputs] as $all
+            | def pick($k): [$all[] | select(type == "object" and has($k)) | .[$k]] | last;
+              (pick("autoCompactWindow") | if . == null then "" else tostring end) as $window
+            | (pick("autoCompactEnabled") | if . == null then "" else tostring end) as $enabled
+            | $window + "\u001f" + $enabled' \
+            "${CLAUDE_SETTINGS_FILES[@]}" 2>>"$STATUSLINE_DEBUG_LOG"); then
+        debug_log "Failed to read auto-compact settings from ${CLAUDE_SETTINGS_FILES[*]}"
+        return 0
+    fi
+    IFS=$'\x1f' read -r AUTO_COMPACT_WINDOW_SETTING AUTO_COMPACT_ENABLED_SETTING <<< "$fields"
+    return 0
+}
+
+# Mirrors Claude Code's auto-compact gate: the DISABLE_COMPACT and
+# DISABLE_AUTO_COMPACT env vars, then the `autoCompactEnabled` setting (on by
+# default). Only the settings window is gated on this — Claude Code applies the
+# env var either way.
+auto_compact_disabled() {
+    is_truthy_flag "${DISABLE_COMPACT:-}" && return 0
+    is_truthy_flag "${DISABLE_AUTO_COMPACT:-}" && return 0
+    [ "${AUTO_COMPACT_ENABLED_SETTING:-}" = "false" ]
+}
+
+# Sets REPLY to the configured auto-compact window, or "" when nothing this
+# script can see configures one.
+resolve_auto_compact_window() {
+    local project_dir=$1
+    local configured=""
+
+    if [ -n "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}" ]; then
+        # Claude Code reads the env var first and only falls through to settings
+        # when it does not parse as a positive number.
+        if [[ "$CLAUDE_CODE_AUTO_COMPACT_WINDOW" =~ ^[0-9]+$ ]] \
+            && [ "$CLAUDE_CODE_AUTO_COMPACT_WINDOW" -gt 0 ]; then
+            configured=$CLAUDE_CODE_AUTO_COMPACT_WINDOW
+        else
+            debug_log "Invalid CLAUDE_CODE_AUTO_COMPACT_WINDOW value '$CLAUDE_CODE_AUTO_COMPACT_WINDOW'; falling back to settings"
+        fi
+    fi
+
+    if [ -z "$configured" ]; then
+        claude_settings_files "$project_dir"
+        read_auto_compact_settings
+        if auto_compact_disabled; then
+            debug_log "Auto-compact is disabled; ignoring the autoCompactWindow setting"
+        elif [[ "$AUTO_COMPACT_WINDOW_SETTING" =~ ^[0-9]+$ ]] \
+            && [ "$AUTO_COMPACT_WINDOW_SETTING" -gt 0 ]; then
+            configured=$AUTO_COMPACT_WINDOW_SETTING
+        elif [ -n "$AUTO_COMPACT_WINDOW_SETTING" ]; then
+            debug_log "Invalid autoCompactWindow setting '$AUTO_COMPACT_WINDOW_SETTING'; ignoring"
+        fi
+    fi
+
+    if [ -n "$configured" ]; then
+        [ "$configured" -lt "$AUTO_COMPACT_WINDOW_MIN" ] && configured=$AUTO_COMPACT_WINDOW_MIN
+        [ "$configured" -gt "$AUTO_COMPACT_WINDOW_MAX" ] && configured=$AUTO_COMPACT_WINDOW_MAX
+    fi
+    REPLY=$configured
+}
+
+# Claude Code's native installer keeps each build under a versions/ directory and
+# points a symlink at the active one. Its background updater repoints that symlink
+# without touching running processes, so a long-lived session keeps its old binary
+# mapped. Comparing the payload's version against the symlink target is therefore a
+# "restart to pick up the build you already have" check — purely local, no network,
+# and never a claim about what's published upstream.
+#
+# Sets REPLY to the version on disk, or "" when this isn't a symlinked native
+# install (npm, Homebrew and PATH shims all land here and simply opt out).
+resolve_ondisk_cc_version() {
+    local launcher target
+    REPLY=""
+
+    launcher=$(command -v claude 2>>"$STATUSLINE_DEBUG_LOG") || return 0
+    [ -n "$launcher" ] && [ -L "$launcher" ] || return 0
+    target=$(readlink "$launcher" 2>>"$STATUSLINE_DEBUG_LOG") || return 0
+    # Strip the directory with parameter expansion rather than spawning basename.
+    REPLY=${target##*/}
+}
+
 STATUSLINE_DIR=${BASH_SOURCE[0]%/*}
 [ "$STATUSLINE_DIR" = "${BASH_SOURCE[0]}" ] && STATUSLINE_DIR=.
 # shellcheck source=lib/statusline_themes.sh
@@ -139,7 +270,7 @@ if [ -n "${CLAUDELINE_SEGMENTS:-}" ]; then
     _SEG_CONTEXT=0; _SEG_GIT=0; _SEG_LINES=0; _SEG_PACE=0
     _SEG_BURST=0; _SEG_DURATION=0; _SEG_CREDIT=0
     _SEG_TOKENS=0; _SEG_SPEND=0; _SEG_EFFORT=0
-    _SEG_METRIC=0; _SEG_THROUGHPUT=0; _SEG_MODEL=0
+    _SEG_METRIC=0; _SEG_THROUGHPUT=0; _SEG_MODEL=0; _SEG_STALE=0
     IFS=',' read -ra _segs <<< "$CLAUDELINE_SEGMENTS"
     for _s in "${_segs[@]}"; do
         case "${_s## }" in  # trim leading space
@@ -156,13 +287,17 @@ if [ -n "${CLAUDELINE_SEGMENTS:-}" ]; then
             metric)     _SEG_METRIC=1 ;;
             throughput) _SEG_THROUGHPUT=1 ;;
             model)      _SEG_MODEL=1 ;;
+            stale)      _SEG_STALE=1 ;;
         esac
     done
 else
     _SEG_CONTEXT=1; _SEG_GIT=1; _SEG_LINES=1; _SEG_PACE=1
     _SEG_BURST=1; _SEG_DURATION=1; _SEG_CREDIT=1
     _SEG_TOKENS=1; _SEG_SPEND=0; _SEG_EFFORT=1
-    _SEG_METRIC=1; _SEG_THROUGHPUT=1; _SEG_MODEL=1
+    # The rotating 🎟️/📅/🧱/🏆 metric conversions are opt-in: they're a novelty
+    # next to the live signals, and they push more useful segments off narrow
+    # terminals. Set CLAUDELINE_SEGMENTS to include `metric` to bring them back.
+    _SEG_METRIC=0; _SEG_THROUGHPUT=1; _SEG_MODEL=1; _SEG_STALE=1
 fi
 
 seg_on() { [ "${_SEG_ALL}" -eq 1 ] || [ "${1:-0}" -eq 1 ]; }
@@ -220,10 +355,12 @@ if ! INPUT_FIELDS=$(printf '%s\n' "$input" | jq -r '[
         (.context_window.current_usage.cache_read_input_tokens // 0),
         (.effort.level // "_"),
         (.thinking.enabled // false),
-        (.context_window.used_percentage // "_")
+        (.context_window.used_percentage // "_"),
+        (.workspace.project_dir // ""),
+        (.version // "")
     ] | map(tostring) | map(gsub("[[:cntrl:]]";"")) | join("\u001f")' 2>>"$STATUSLINE_DEBUG_LOG"); then
     debug_log "Failed to parse statusline input; using defaults"
-    INPUT_FIELDS=$'Claude\x1f\x1f0\x1f0\x1f0\x1f0\x1f0\x1f0\x1f0\x1f0\x1f200000\x1f_\x1f_\x1f_\x1f_\x1f_\x1f0\x1f0\x1f0\x1f0\x1f_\x1ffalse\x1f_'
+    INPUT_FIELDS=$'Claude\x1f\x1f0\x1f0\x1f0\x1f0\x1f0\x1f0\x1f0\x1f0\x1f200000\x1f_\x1f_\x1f_\x1f_\x1f_\x1f0\x1f0\x1f0\x1f0\x1f_\x1ffalse\x1f_\x1f\x1f'
 fi
 
 # Use the ASCII unit separator (0x1f) as the field delimiter, not a tab: `read`
@@ -234,7 +371,7 @@ IFS=$'\x1f' read -r MODEL CURRENT_DIR LINES_ADDED LINES_REMOVED \
     TOTAL_INPUT TOTAL_OUTPUT DURATION_MS API_DURATION_MS TOTAL_COST CURRENT_TOKENS CONTEXT_WINDOW_SIZE \
     WEEKLY_USAGE RESETS_AT BURST_USAGE BURST_RESETS SESSION_ID \
     CURRENT_INPUT_TOKENS CURRENT_OUTPUT_TOKENS CURRENT_CACHE_WRITE_TOKENS CURRENT_CACHE_READ_TOKENS \
-    EFFORT_LEVEL THINKING_ENABLED CTX_USED_PCT <<< "$INPUT_FIELDS"
+    EFFORT_LEVEL THINKING_ENABLED CTX_USED_PCT PROJECT_DIR CC_VERSION <<< "$INPUT_FIELDS"
 
 [ "$SESSION_ID" = "_" ] && SESSION_ID=""
 [ "$EFFORT_LEVEL" = "_" ] && EFFORT_LEVEL=""
@@ -444,18 +581,19 @@ fi
 # the literal string "0", so a zero would otherwise survive to divide-by-zero
 # below.
 [ "${CONTEXT_WINDOW_SIZE:-0}" -gt 0 ] 2>/dev/null || CONTEXT_WINDOW_SIZE=200000
-# Honor user-configured auto-compact window cap (CLAUDE_CODE_AUTO_COMPACT_WINDOW).
-# When set to a positive integer <= the physical window, treat it as the effective cap.
+# Honor the user-configured auto-compact window cap, from either the
+# CLAUDE_CODE_AUTO_COMPACT_WINDOW env var or the `autoCompactWindow` settings key.
+# Claude Code caps whatever it resolves at the physical window, so anything at or
+# above the physical window leaves the effective window alone.
 EFFECTIVE_WINDOW=$CONTEXT_WINDOW_SIZE
-if [[ "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}" =~ ^[0-9]+$ ]] \
-    && [ "$CLAUDE_CODE_AUTO_COMPACT_WINDOW" -gt 0 ] \
-    && [ "$CLAUDE_CODE_AUTO_COMPACT_WINDOW" -le "$CONTEXT_WINDOW_SIZE" ]; then
-    EFFECTIVE_WINDOW=$CLAUDE_CODE_AUTO_COMPACT_WINDOW
+resolve_auto_compact_window "$PROJECT_DIR"
+if [ -n "$REPLY" ] && [ "$REPLY" -lt "$CONTEXT_WINDOW_SIZE" ]; then
+    EFFECTIVE_WINDOW=$REPLY
 fi
 # The payload's used_percentage is Claude Code's own accounting, but it is
 # measured against the physical context_window_size. Prefer it for the bar UNLESS
-# the effective window is capped below the physical window
-# (CLAUDE_CODE_AUTO_COMPACT_WINDOW): there the payload percentage is relative to
+# the effective window is capped below the physical window by the auto-compact
+# window: there the payload percentage is relative to
 # the full window while the token count under the bar is shown against the capped
 # window, so the two disagree and the bar under-fills. In that case — and when the
 # payload gives no percentage at all — derive the percentage from the same
@@ -700,5 +838,19 @@ fi
 _L2_DURATION=""; seg_on "$_SEG_DURATION" && _L2_DURATION="$DURATION_INFO"
 _L2_METRIC=""; seg_on "$_SEG_METRIC" && _L2_METRIC="$METRIC_INFO"
 
-# Priority order: tokens > spend > model > effort > metric > duration
-printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_SPEND" "$_L2_MODEL" "$_L2_EFFORT" "$_L2_METRIC" "$_L2_DURATION")"
+# Only rendered when the running build and the on-disk build actually differ, so
+# it costs one readlink and stays invisible the rest of the time. Both versions
+# are matched against a strict x.y.z pattern before comparing: an unexpected
+# symlink target must not be echoed into the line or mistaken for staleness.
+_L2_STALE=""
+if seg_on "$_SEG_STALE" && [[ "$CC_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    resolve_ondisk_cc_version
+    _ondisk_version=$REPLY
+    if [[ "$_ondisk_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+        && [ "$_ondisk_version" != "$CC_VERSION" ]; then
+        _L2_STALE="${CTX_YELLOW}🆕 →${_ondisk_version}${RESET}"
+    fi
+fi
+
+# Priority order: tokens > spend > model > effort > metric > duration > stale
+printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_SPEND" "$_L2_MODEL" "$_L2_EFFORT" "$_L2_METRIC" "$_L2_DURATION" "$_L2_STALE")"
