@@ -12,6 +12,10 @@ Thumbs.db
 # Cache directories
 .claude-usage.d/
 
+# Claude Code local state
+.claude/settings.local.json
+.claude/worktrees/
+
 # Logs
 logs/
 
