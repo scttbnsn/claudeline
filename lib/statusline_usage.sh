@@ -16,6 +16,259 @@ is_decimal_value() {
     [[ "$value" =~ ^-?([0-9]+([.][0-9]+)?|[.][0-9]+)$ ]]
 }
 
+# Non-blocking mkdir lock with stale reclaim. Returns 0 only when the lock is
+# newly held by this caller. A lock directory older than 2 minutes is treated
+# as abandoned — a background usage refresh finishes in well under that.
+try_lock_dir() {
+    local lock_dir=$1
+    [ -n "$lock_dir" ] || return 1
+    if [ -d "$lock_dir" ]; then
+        local stale
+        stale=$(find "$lock_dir" -maxdepth 0 -mmin +2 -print 2>/dev/null)
+        if [ -n "$stale" ]; then
+            # Steal by atomic rename, not a bare rmdir: only one racer can rename
+            # the stale dir aside (the rest see "source gone"), so we never remove
+            # a lock a different racer just freshly re-acquired (ABA).
+            local aside="${lock_dir}.stale.$$"
+            if mv "$lock_dir" "$aside" 2>/dev/null; then
+                rm -rf "$aside" 2>/dev/null || true
+            fi
+        fi
+    fi
+    mkdir "$lock_dir" 2>/dev/null
+}
+
+# Read the Claude Code OAuth access token: macOS Keychain first, falling back
+# to the on-disk credentials file. Read-only by design — never refreshes or
+# writes the token. A refresh response can rotate the refresh token, and a
+# second writer racing Claude Code's own refresh could invalidate the
+# credential and log the user out, so this only ever reads.
+# Sets REPLY to the token and returns 0, or returns 1 when there is no usable,
+# unexpired token.
+read_claude_oauth_token() {
+    local creds="" compact_hex="" cfg="" fields="" token="" expires_at="" now_ms=""
+
+    REPLY=""
+
+    if [[ "${OSTYPE:-}" == darwin* ]]; then
+        creds=$(security find-generic-password -s "Claude Code-credentials" -w 2>>"$STATUSLINE_DEBUG_LOG") || creds=""
+        compact_hex=$(printf '%s' "$creds" | tr -d '[:space:]')
+        if [[ -n "$compact_hex" && "$compact_hex" =~ ^[0-9a-fA-F]+$ ]]; then
+            creds=$(printf '%s' "$compact_hex" | xxd -r -p 2>>"$STATUSLINE_DEBUG_LOG")
+        fi
+    fi
+
+    if [ -z "$creds" ]; then
+        cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json"
+        [ -f "$cfg" ] && creds=$(<"$cfg")
+    fi
+
+    [ -n "$creds" ] || return 1
+
+    if ! fields=$(printf '%s' "$creds" | jq -r '
+            [(.claudeAiOauth.accessToken // empty), (.claudeAiOauth.expiresAt // empty)]
+            | join("")' 2>>"$STATUSLINE_DEBUG_LOG"); then
+        debug_log "Failed to parse Claude Code OAuth credentials"
+        return 1
+    fi
+
+    IFS=$'\x1f' read -r token expires_at <<< "$fields"
+    [ -n "$token" ] || return 1
+
+    if [[ "$expires_at" =~ ^[0-9]+$ ]]; then
+        now_ms=$(( ${NOW:-$(date +%s)} * 1000 ))
+        if [ "$expires_at" -le "$now_ms" ]; then
+            debug_log "Ignoring expired Claude Code OAuth token"
+            return 1
+        fi
+    fi
+
+    REPLY=$token
+}
+
+# Fetch extra_usage from /api/oauth/usage and refresh the cache. Never called
+# on the render path directly — only from a background refresh, or
+# synchronously under STATUSLINE_REFRESH_BLOCKING for tests.
+refresh_extra_usage_cache_now() {
+    local now=$1
+    local oauth_token="" escaped_token="" response_file="" http_status="" body="" fields=""
+
+    [ -n "${EXTRA_USAGE_CACHE:-}" ] || return 1
+
+    read_claude_oauth_token || return 1
+    oauth_token=$REPLY
+
+    # Validate token format: printable, bounded length, no shell metacharacters.
+    # curl still receives it via a --config stdin header line rather than argv
+    # (see below), so this is defense in depth, not the only thing keeping it
+    # out of `ps`.
+    if [[ "$oauth_token" =~ [[:cntrl:]] ]]; then
+        debug_log "Ignoring OAuth token with control characters"
+        return 1
+    fi
+    if [ "${#oauth_token}" -lt 20 ] || [ "${#oauth_token}" -gt 4096 ]; then
+        debug_log "Ignoring OAuth token with unexpected length (${#oauth_token})"
+        return 1
+    fi
+    if [[ "$oauth_token" =~ [\;\|\&\$\`\(\)\{\}] ]]; then
+        debug_log "Ignoring OAuth token with shell metacharacters"
+        return 1
+    fi
+
+    response_file=$(mktemp "${CACHE_DIR:-${TMPDIR:-/tmp}}/.extra-usage-response-XXXXXX" 2>>"$STATUSLINE_DEBUG_LOG") || return 1
+    escaped_token=${oauth_token//\\/\\\\}
+    escaped_token=${escaped_token//\"/\\\"}
+
+    # The bearer token goes through --config on stdin, not -H on argv, so it
+    # never shows up in `ps`. The other headers are not sensitive.
+    if ! http_status=$(printf 'header = "Authorization: Bearer %s"\n' "$escaped_token" | \
+        curl -s --max-time 2 --config - \
+            -H "Accept: application/json" \
+            -H "anthropic-beta: oauth-2025-04-20" \
+            -A "claude-code/claudeline" \
+            -o "$response_file" -w '%{http_code}' \
+            "https://api.anthropic.com/api/oauth/usage" 2>>"$STATUSLINE_DEBUG_LOG"); then
+        debug_log "Failed to reach the extra usage endpoint"
+        rm -f "$response_file"
+        return 1
+    fi
+
+    if [ "$http_status" != "200" ]; then
+        debug_log "Extra usage endpoint returned HTTP ${http_status:-<empty>}"
+        rm -f "$response_file"
+        return 1
+    fi
+
+    body=$(<"$response_file")
+    rm -f "$response_file"
+
+    if ! fields=$(printf '%s' "$body" | jq -r '
+            .extra_usage as $e
+            | [
+                ($e.is_enabled // false),
+                ($e.monthly_limit // "null"),
+                ($e.used_credits // "null"),
+                ($e.decimal_places // "null"),
+                ($e.currency // "null"),
+                ($e.spend_limit_reached // false),
+                ($e.user_disabled // false),
+                ($e.disabled_reason // "null"),
+                ($e.utilization // "null")
+              ]
+            | map(tostring) | map(gsub("[[:cntrl:]]|";""))
+            | join("")' 2>>"$STATUSLINE_DEBUG_LOG"); then
+        debug_log "Failed to parse extra usage response"
+        return 1
+    fi
+
+    write_extra_usage_cache "$now" "$fields"
+}
+
+# Write $2 (the \x1f-delimited extra_usage fields) to the cache file, preceded
+# by timestamp $1. Inline mktemp-then-mv rather than the shared atomic-write
+# registry from claudeline's history — that machinery existed to protect five
+# subsystems that no longer exist, and this is the one writer left.
+write_extra_usage_cache() {
+    local now=$1
+    local fields=$2
+    local tmp_cache=""
+
+    [ -n "${EXTRA_USAGE_CACHE:-}" ] || return 1
+
+    tmp_cache=$(mktemp "${EXTRA_USAGE_CACHE}.XXXXXX" 2>>"$STATUSLINE_DEBUG_LOG") || return 1
+    if ! printf '%s\n%s\n' "$now" "$fields" > "$tmp_cache" 2>>"$STATUSLINE_DEBUG_LOG"; then
+        rm -f "$tmp_cache"
+        return 1
+    fi
+    if ! mv "$tmp_cache" "$EXTRA_USAGE_CACHE" 2>>"$STATUSLINE_DEBUG_LOG"; then
+        rm -f "$tmp_cache"
+        return 1
+    fi
+}
+
+# Read the extra-usage cache. Sets EXTRA_USAGE_CACHE_FIELDS to the raw
+# \x1f-delimited field string (possibly stale) and EXTRA_USAGE_CACHE_IS_FRESH
+# to 1 when it is within max_age. Returns 1 only on a missing file or a
+# corrupt timestamp line — a stale-but-valid cache still returns 0.
+read_extra_usage_cache() {
+    local now=$1
+    local max_age=${2:-600}
+    local cache_time="" cache_fields="" cache_age=0
+
+    EXTRA_USAGE_CACHE_FIELDS=""
+    EXTRA_USAGE_CACHE_IS_FRESH=0
+
+    [ -n "${EXTRA_USAGE_CACHE:-}" ] && [ -f "$EXTRA_USAGE_CACHE" ] || return 1
+
+    exec 3<"$EXTRA_USAGE_CACHE" || return 1
+    read -r cache_time <&3 || { exec 3<&-; return 1; }
+    IFS= read -r cache_fields <&3 || cache_fields=""
+    exec 3<&-
+
+    if ! [[ "$cache_time" =~ ^[0-9]+$ ]]; then
+        debug_log "Ignoring invalid extra usage cache timestamp in $EXTRA_USAGE_CACHE: ${cache_time:-<empty>}"
+        return 1
+    fi
+
+    EXTRA_USAGE_CACHE_FIELDS=$cache_fields
+    cache_age=$((now - cache_time))
+    [ "$cache_age" -lt "$max_age" ] && EXTRA_USAGE_CACHE_IS_FRESH=1
+    return 0
+}
+
+# Kick a refresh under the fetch lock. Normally a detached background
+# subshell; under STATUSLINE_REFRESH_BLOCKING (a test hook) it runs
+# synchronously instead so a test can observe the result deterministically.
+start_extra_usage_refresh() {
+    local now=${1:-${NOW:-$(date +%s)}}
+
+    # Hard kill switch, independent of the CLAUDELINE_SPEND opt-in. Inline and
+    # self-contained rather than a call to is_truthy_flag (which lives in
+    # statusline.sh) because this lib is sourced standalone in tests.
+    case "${CLAUDELINE_NO_NETWORK:-}" in
+        1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]) return 0 ;;
+    esac
+
+    [ -n "${EXTRA_USAGE_LOCK:-}" ] || return 0
+    try_lock_dir "$EXTRA_USAGE_LOCK" || return 0
+
+    case "${STATUSLINE_REFRESH_BLOCKING:-}" in
+        1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn])
+            refresh_extra_usage_cache_now "$now" >/dev/null 2>>"$STATUSLINE_DEBUG_LOG"
+            rmdir "$EXTRA_USAGE_LOCK" 2>>"$STATUSLINE_DEBUG_LOG" || true
+            return 0
+            ;;
+    esac
+
+    (
+        trap 'rmdir "$EXTRA_USAGE_LOCK" 2>>"$STATUSLINE_DEBUG_LOG" || true' EXIT
+        refresh_extra_usage_cache_now "$now" >/dev/null
+    ) </dev/null >>"$STATUSLINE_DEBUG_LOG" 2>&1 &
+}
+
+# Serve-stale-while-revalidate accessor for the render path. Sets
+# EXTRA_USAGE_FIELDS and never blocks: fresh cache serves directly, a stale
+# cache serves the stale value while kicking a background refresh, and a miss
+# serves empty while kicking a refresh.
+get_extra_usage_fields_nonblocking() {
+    local now=${1:-${NOW:-$(date +%s)}}
+
+    EXTRA_USAGE_FIELDS=""
+
+    if read_extra_usage_cache "$now" "${EXTRA_USAGE_TTL:-600}"; then
+        EXTRA_USAGE_FIELDS=$EXTRA_USAGE_CACHE_FIELDS
+        [ "$EXTRA_USAGE_CACHE_IS_FRESH" -eq 1 ] && return 0
+    fi
+
+    start_extra_usage_refresh "$now"
+
+    case "${STATUSLINE_REFRESH_BLOCKING:-}" in
+        1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn])
+            read_extra_usage_cache "$now" "${EXTRA_USAGE_TTL:-600}" && EXTRA_USAGE_FIELDS=$EXTRA_USAGE_CACHE_FIELDS
+            ;;
+    esac
+}
+
 # Get trend arrow based on usage% velocity
 # Tracks how fast you're burning tokens vs sustainable rate
 # Sustainable rate = 100% / 7 days ≈ 0.01%/min

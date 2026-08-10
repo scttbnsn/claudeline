@@ -88,7 +88,10 @@ env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW -u CLAUDE_AUTOCOMPACT_PCT_OVERRIDE \
     PATH="$shim_dir:$PATH" HOME="$home_dir" NO_COLOR=1 NOW=1000000 \
     bash "$repo_root/statusline.sh" <<< "$input_json" > "$tmpdir/rendered.txt"
 
+first_line=$(sed -n '1p' "$tmpdir/rendered.txt")
+assert_eq '✨ ░░░░░░░░░░  ·  demo  ·  Claude Sonnet 4  ·  🔥max' "$first_line" "statusline renders context, git, model, and effort with the surviving segments"
+
 second_line=$(sed -n '2p' "$tmpdir/rendered.txt")
-assert_eq '      1K/200K  ·  Claude Sonnet 4  ·  🔥max  ·  ⏱️ 5m' "$second_line" "statusline renders tokens, model, effort, and duration with the surviving segments"
+assert_eq '      1K/200K  ·  ⏱️ 5m' "$second_line" "statusline renders tokens and duration with the surviving segments"
 
 printf 'ok\n'

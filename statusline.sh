@@ -24,6 +24,10 @@ if [ -f "$CLAUDELINE_CONF" ]; then
             no_color)             [ -z "${NO_COLOR:-}" ]                    && NO_COLOR="$_val" ;;
             trend_window)         [ -z "${TREND_WINDOW:-}" ]                && TREND_WINDOW="$_val" ;;
             trend_history_max_age) [ -z "${TREND_HISTORY_MAX_AGE:-}" ]      && TREND_HISTORY_MAX_AGE="$_val" ;;
+            spend)                [ -z "${CLAUDELINE_SPEND:-}" ]            && CLAUDELINE_SPEND="$_val" ;;
+            spend_icon)           [ -z "${CLAUDELINE_SPEND_ICON:-}" ]       && CLAUDELINE_SPEND_ICON="$_val" ;;
+            no_network)           [ -z "${CLAUDELINE_NO_NETWORK:-}" ]       && CLAUDELINE_NO_NETWORK="$_val" ;;
+            extra_usage_ttl)      [ -z "${EXTRA_USAGE_TTL:-}" ]             && EXTRA_USAGE_TTL="$_val" ;;
         esac
     done < "$CLAUDELINE_CONF"
 fi
@@ -252,7 +256,7 @@ _SEG_ALL=0
 if [ -n "${CLAUDELINE_SEGMENTS:-}" ]; then
     _SEG_ALL=0
     _SEG_CONTEXT=0; _SEG_GIT=0; _SEG_PACE=0
-    _SEG_BURST=0; _SEG_DURATION=0
+    _SEG_BURST=0; _SEG_DURATION=0; _SEG_SPEND=0
     _SEG_TOKENS=0; _SEG_EFFORT=0
     _SEG_MODEL=0; _SEG_STALE=0
     IFS=',' read -ra _segs <<< "$CLAUDELINE_SEGMENTS"
@@ -263,6 +267,7 @@ if [ -n "${CLAUDELINE_SEGMENTS:-}" ]; then
             pace)     _SEG_PACE=1 ;;
             burst)    _SEG_BURST=1 ;;
             duration)   _SEG_DURATION=1 ;;
+            spend)      _SEG_SPEND=1 ;;
             tokens)     _SEG_TOKENS=1 ;;
             effort)     _SEG_EFFORT=1 ;;
             model)      _SEG_MODEL=1 ;;
@@ -271,7 +276,7 @@ if [ -n "${CLAUDELINE_SEGMENTS:-}" ]; then
     done
 else
     _SEG_CONTEXT=1; _SEG_GIT=1; _SEG_PACE=1
-    _SEG_BURST=1; _SEG_DURATION=1
+    _SEG_BURST=1; _SEG_DURATION=1; _SEG_SPEND=1
     _SEG_TOKENS=1; _SEG_EFFORT=1
     _SEG_MODEL=1; _SEG_STALE=1
 fi
@@ -282,6 +287,9 @@ seg_on() { [ "${_SEG_ALL}" -eq 1 ] || [ "${1:-0}" -eq 1 ]; }
 CACHE_DIR="$HOME/.claude-usage.d"
 USAGE_HISTORY="$CACHE_DIR/.usage-history"
 TREND_WINDOW=${TREND_WINDOW:-900}   # 15 minutes in seconds
+EXTRA_USAGE_CACHE="$CACHE_DIR/.extra-usage-cache"
+EXTRA_USAGE_LOCK="$CACHE_DIR/.extra-usage-fetch.lock"
+EXTRA_USAGE_TTL=${EXTRA_USAGE_TTL:-600}
 (umask 077 && mkdir -p "$CACHE_DIR") 2>>"$STATUSLINE_DEBUG_LOG"
 
 # Extract all values in a single jq call (11 calls → 1). Each field is stripped
@@ -528,6 +536,20 @@ if seg_on "$_SEG_BURST"; then
     BURST_INDICATOR=$REPLY
 fi
 
+# Opt-in, default off: enterprise usage-based spend segment. Gated on both the
+# segment filter and CLAUDELINE_SPEND so a non-enterprise user pays zero
+# cost — no cache stat, no fork, nothing — unless they explicitly ask for it.
+SPEND_INDICATOR=""
+if seg_on "$_SEG_SPEND" && is_truthy_flag "${CLAUDELINE_SPEND:-}"; then
+    get_extra_usage_fields_nonblocking "$NOW"
+    IFS=$'\x1f' read -r EU_IS_ENABLED EU_MONTHLY_LIMIT EU_USED_CREDITS EU_DECIMAL_PLACES \
+        EU_CURRENCY EU_SPEND_LIMIT_REACHED EU_USER_DISABLED EU_DISABLED_REASON EU_UTILIZATION \
+        <<< "${EXTRA_USAGE_FIELDS:-}"
+    format_spend_indicator "$EU_IS_ENABLED" "$EU_MONTHLY_LIMIT" "$EU_USED_CREDITS" "$EU_DECIMAL_PLACES" \
+        "$EU_CURRENCY" "$EU_SPEND_LIMIT_REACHED" "$EU_USER_DISABLED" "$EU_DISABLED_REASON" "$EU_UTILIZATION"
+    SPEND_INDICATOR=$REPLY
+fi
+
 # Terminal width for responsive layout (drop low-priority segments to prevent wrapping)
 TERM_WIDTH="${COLUMNS:-120}"
 
@@ -594,11 +616,21 @@ _build_responsive_line() {
 # Prepare line 1 segments in priority order (highest first, lowest dropped first)
 _L1_CONTEXT=""; seg_on "$_SEG_CONTEXT" && _L1_CONTEXT="${CTX_ICON} ${PROGRESS_BAR}"
 _L1_GIT=""; seg_on "$_SEG_GIT" && _L1_GIT="$REPO_BRANCH"
-_L1_PACE=""; seg_on "$_SEG_PACE" && [ -n "$PACE_INDICATOR" ] && _L1_PACE="$PACE_INDICATOR"
-_L1_BURST=""; seg_on "$_SEG_BURST" && [ -n "$BURST_INDICATOR" ] && _L1_BURST="$BURST_INDICATOR"
+_L1_MODEL=""
+if seg_on "$_SEG_MODEL" && [ -n "$MODEL" ]; then
+    _L1_MODEL_NAME=${MODEL% (1M context)}
+    _L1_MODEL_NAME=${_L1_MODEL_NAME% 1M context}
+    _L1_MODEL="${DIM}${_L1_MODEL_NAME}${RESET}"
+fi
+_L1_EFFORT=""
+if seg_on "$_SEG_EFFORT"; then
+    format_effort_indicator "$EFFORT_LEVEL" "$THINKING_ENABLED"
+    _L1_EFFORT=$REPLY
+fi
+_L1_SPEND=""; seg_on "$_SEG_SPEND" && [ -n "$SPEND_INDICATOR" ] && _L1_SPEND="$SPEND_INDICATOR"
 
-# Priority order: context > git > pace > burst
-printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L1_CONTEXT" "$_L1_GIT" "$_L1_PACE" "$_L1_BURST")"
+# Priority order: context > git > model > effort > spend
+printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L1_CONTEXT" "$_L1_GIT" "$_L1_MODEL" "$_L1_EFFORT" "$_L1_SPEND")"
 
 # Prepare line 2 segments in priority order
 _L2_TOKENS=""
@@ -609,17 +641,8 @@ if seg_on "$_SEG_TOKENS"; then
     CTX_PADDED=$(printf "%13s" "$CTX_STATS")
     _L2_TOKENS="${DIM}${CTX_PADDED}${RESET}"
 fi
-_L2_MODEL=""
-if seg_on "$_SEG_MODEL" && [ -n "$MODEL" ]; then
-    _L2_MODEL_NAME=${MODEL% (1M context)}
-    _L2_MODEL_NAME=${_L2_MODEL_NAME% 1M context}
-    _L2_MODEL="${DIM}${_L2_MODEL_NAME}${RESET}"
-fi
-_L2_EFFORT=""
-if seg_on "$_SEG_EFFORT"; then
-    format_effort_indicator "$EFFORT_LEVEL" "$THINKING_ENABLED"
-    _L2_EFFORT=$REPLY
-fi
+_L2_PACE=""; seg_on "$_SEG_PACE" && [ -n "$PACE_INDICATOR" ] && _L2_PACE="$PACE_INDICATOR"
+_L2_BURST=""; seg_on "$_SEG_BURST" && [ -n "$BURST_INDICATOR" ] && _L2_BURST="$BURST_INDICATOR"
 _L2_DURATION=""; seg_on "$_SEG_DURATION" && _L2_DURATION="$DURATION_INFO"
 
 # Only rendered when the running build and the on-disk build actually differ, so
@@ -636,5 +659,5 @@ if seg_on "$_SEG_STALE" && [[ "$CC_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     fi
 fi
 
-# Priority order: tokens > model > effort > duration > stale
-printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_MODEL" "$_L2_EFFORT" "$_L2_DURATION" "$_L2_STALE")"
+# Priority order: tokens > pace > burst > duration > stale
+printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_PACE" "$_L2_BURST" "$_L2_DURATION" "$_L2_STALE")"

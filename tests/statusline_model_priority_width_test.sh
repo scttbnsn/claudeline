@@ -36,7 +36,7 @@ exit 1
 SH
 chmod +x "$shim_dir/git"
 
-render_second_line() {
+render_lines() {
     local width=$1
     local output_file=$2
 
@@ -67,14 +67,18 @@ render_second_line() {
   }
 }
 JSON
-
-    sed -n '2p' "$output_file"
 }
 
-full_line=$(render_second_line 120 "$tmpdir/full-width.txt")
-assert_eq '      1K/200K  ·  Claude Sonnet 4  ·  🔥max  ·  ⏱️ 5m' "$full_line" "full-width statusline renders all line-two segments"
+render_lines 120 "$tmpdir/full-width.txt"
+full_first_line=$(sed -n '1p' "$tmpdir/full-width.txt")
+full_second_line=$(sed -n '2p' "$tmpdir/full-width.txt")
+assert_eq '✨ ░░░░░░░░░░  ·  demo  ·  Claude Sonnet 4  ·  🔥max' "$full_first_line" "full-width statusline renders all line-one segments"
+assert_eq '      1K/200K  ·  ⏱️ 5m' "$full_second_line" "full-width statusline renders all line-two segments"
 
-narrow_line=$(render_second_line 33 "$tmpdir/narrow-width.txt")
-assert_eq '      1K/200K  ·  Claude Sonnet 4' "$narrow_line" "narrow statusline keeps tokens and model while dropping lower-priority segments"
+render_lines 45 "$tmpdir/narrow-width.txt"
+narrow_first_line=$(sed -n '1p' "$tmpdir/narrow-width.txt")
+narrow_second_line=$(sed -n '2p' "$tmpdir/narrow-width.txt")
+assert_eq '✨ ░░░░░░░░░░  ·  demo  ·  Claude Sonnet 4' "$narrow_first_line" "narrow statusline keeps context, git, and model while dropping the lower-priority effort segment"
+assert_eq '      1K/200K  ·  ⏱️ 5m' "$narrow_second_line" "narrow statusline still fits both line-two segments"
 
 printf 'ok\n'

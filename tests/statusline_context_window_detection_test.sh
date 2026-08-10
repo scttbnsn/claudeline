@@ -59,7 +59,7 @@ chmod +x "$shim_dir/git"
 
 printf '1000000\n0 0 0 0 0 0\n' > "$home_dir/.claude-usage.d/.jsonl-cache"
 
-render_second_line() {
+render_lines() {
     local model=$1
     local context_window_size=$2
     local output_file=$3
@@ -89,14 +89,18 @@ render_second_line() {
   }
 }
 EOF
-
-    sed -n '2p' "$output_file"
 }
 
-model_detected_line=$(render_second_line "Claude Opus 4.6 1M context" 200000 "$tmpdir/model-detected.txt")
-assert_eq '     1K/1.00M  ·  Claude Opus 4.6  ·  ⏱️ 5m' "$model_detected_line" "statusline should detect 1M context from the model display name when JSON still says 200K"
+render_lines "Claude Opus 4.6 1M context" 200000 "$tmpdir/model-detected.txt"
+model_detected_first_line=$(sed -n '1p' "$tmpdir/model-detected.txt")
+model_detected_second_line=$(sed -n '2p' "$tmpdir/model-detected.txt")
+assert_eq '✨ ░░░░░░░░░░  ·  demo/main*↑2  ·  Claude Opus 4.6' "$model_detected_first_line" "statusline should detect 1M context from the model display name when JSON still says 200K"
+assert_eq '     1K/1.00M  ·  ⏱️ 5m' "$model_detected_second_line" "statusline should detect 1M context from the model display name when JSON still says 200K"
 
-json_detected_line=$(render_second_line "Claude Sonnet 4" 1000000 "$tmpdir/json-detected.txt")
-assert_eq '     1K/1.00M  ·  Claude Sonnet 4  ·  ⏱️ 5m' "$json_detected_line" "statusline should honor a 1M context window directly from JSON input"
+render_lines "Claude Sonnet 4" 1000000 "$tmpdir/json-detected.txt"
+json_detected_first_line=$(sed -n '1p' "$tmpdir/json-detected.txt")
+json_detected_second_line=$(sed -n '2p' "$tmpdir/json-detected.txt")
+assert_eq '✨ ░░░░░░░░░░  ·  demo/main*↑2  ·  Claude Sonnet 4' "$json_detected_first_line" "statusline should honor a 1M context window directly from JSON input"
+assert_eq '     1K/1.00M  ·  ⏱️ 5m' "$json_detected_second_line" "statusline should honor a 1M context window directly from JSON input"
 
 printf 'ok\n'

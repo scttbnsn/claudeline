@@ -35,8 +35,10 @@
 - [✨ Features](#features)
 - [📊 Smart Pace Indicator](#smart-pace-indicator)
 - [💥 Burst Indicator](#burst-indicator)
+- [💰 Spend Indicator](#spend-indicator)
 - [⚡ Performance](#performance)
 - [⚙️ Configuration](#configuration)
+- [🔒 Privacy & Network Access](#privacy--network-access)
 - [🔧 Requirements](#requirements)
 - [🗑 Uninstall](#uninstall)
 
@@ -62,12 +64,12 @@ Create `~/.claude/claudeline.conf` to customize without env vars:
 ```bash
 # ~/.claude/claudeline.conf
 theme=nord
-segments=context,git,pace,burst,duration,tokens,effort,model,stale
+segments=context,spend,git,pace,burst,duration,tokens,effort,model,stale
 ```
 
 Env vars override config file values. All keys are optional.
 
-Available keys: `theme`, `segments`, `no_color`, `debug`, `debug_log`, `trend_window`, `trend_history_max_age`.
+Available keys: `theme`, `segments`, `no_color`, `debug`, `debug_log`, `trend_window`, `trend_history_max_age`, `spend`, `spend_icon`, `no_network`, `extra_usage_ttl`.
 
 </details>
 
@@ -204,6 +206,32 @@ A dimmed countdown shows minutes until the 5-hour window resets whenever usage i
 
 <hr>
 
+<h2 align="center" id="spend-indicator">💰 Spend Indicator</h2>
+
+**Opt-in, off by default.** For enterprise usage-based seats — accounts with a monthly spend cap instead of (or alongside) the usual weekly/5-hour rate limits, where pace and burst have nothing to show. Renders as a bare percentage of the monthly cap used:
+
+```
+💰 68%
+```
+
+A null `monthly_limit` means unlimited, not zero — renders as `💰 ∞` since there's no percentage to show. A monthly budget is a different kind of signal than a 5-hour rate limit, so the percentage is colored using its own 11-tier scale — one color per 10%, eleven distinct colors ramping cyan through magenta to white-hot — rather than the burst indicator's scale, and appends 💀 once the spend limit is reached or usage hits 100% (e.g. `💰 103%💀`).
+
+| Range | Color |
+|-------|-------|
+| 0-9% | cyan |
+| 10-19% | teal |
+| 20-39% | green |
+| 40-59% | lime |
+| 60-69% | yellow |
+| 70-79% | orange |
+| 80-89% | coral |
+| 90-99% | red |
+| 100%+ | magenta |
+
+Enable it with `CLAUDELINE_SPEND=1` or `spend=1` in `claudeline.conf`. Most accounts don't have `extra_usage` at all, which is why this stays off unless asked for. The leading icon defaults to 💰 and can be changed with `CLAUDELINE_SPEND_ICON` or `spend_icon` in `claudeline.conf`.
+
+<hr>
+
 <h2 align="center" id="performance">⚡ Performance</h2>
 
 | Scenario | Time |
@@ -220,7 +248,7 @@ A dimmed countdown shows minutes until the 5-hour window resets whenever usage i
 | Formatting | ~22ms | 1 awk + bash math |
 | Source libs + rest | ~27ms | bash |
 
-Rate limit data comes directly from the Claude Code status line JSON — zero network calls, ever.
+Rate limit data comes directly from the Claude Code status line JSON — zero network calls by default. See [Privacy & Network Access](#privacy--network-access) for the one opt-in exception.
 
 <details>
 <summary><strong>Context bar tiers</strong></summary>
@@ -254,18 +282,42 @@ Whichever is found is clamped to 100K–1M and then capped at the physical windo
 | Variable | Effect |
 |----------|--------|
 | `CLAUDELINE_THEME=nord` | Theme: `vibey` (default), `dark`, `light`, `nord`, `gruvbox` |
-| `CLAUDELINE_SEGMENTS=context,git,pace` | Show only listed segments. Available: `context`, `git`, `pace`, `burst`, `duration`, `tokens`, `effort`, `model`, `stale` |
+| `CLAUDELINE_SEGMENTS=context,git,pace` | Show only listed segments. Available: `context`, `spend`, `git`, `pace`, `burst`, `duration`, `tokens`, `effort`, `model`, `stale` |
 | `NO_COLOR=1` | Disables all color output ([spec](https://no-color.org)) |
 | `CLAUDELINE_DEBUG=1` | Enables debug logging to `$TMPDIR/claudeline-statusline-debug.log` |
 | `CLAUDELINE_DEBUG_LOG=/path` | Custom debug log path (requires `CLAUDELINE_DEBUG=1`) |
 | `TREND_WINDOW=900` | Trend arrow sample window in seconds (default: 900) |
 | `TREND_HISTORY_MAX_AGE=86400` | Max age for trend history entries in seconds (default: 86400) |
+| `CLAUDELINE_SPEND=1` | Opt in to the [spend indicator](#spend-indicator) (default: off) |
+| `CLAUDELINE_SPEND_ICON=🪙` | Leading icon for the spend indicator (default: `💰`) |
+| `CLAUDELINE_NO_NETWORK=1` | Hard kill switch — skips the spend fetch entirely, independent of `CLAUDELINE_SPEND` |
+| `EXTRA_USAGE_TTL=600` | Spend cache TTL in seconds (default: 600) |
 
 **Local data stored** in `~/.claude-usage.d/` (created with `chmod 700`):
 
 | File | Purpose |
 |------|---------|
 | `.usage-history` | Rolling 24h usage samples for trend arrows |
+| `.extra-usage-cache` | Cached spend segment fields (only written when `CLAUDELINE_SPEND=1`) |
+| `.extra-usage-fetch.lock` | Lock directory guarding the background spend refresh against concurrent panes |
+
+<hr>
+
+<h2 align="center" id="privacy--network-access">🔒 Privacy & Network Access</h2>
+
+By default claudeline makes **zero network calls**. Opting into the [spend indicator](#spend-indicator) (`CLAUDELINE_SPEND=1`) adds **one optional API call** to `https://api.anthropic.com/api/oauth/usage` — a `GET` request with only an `Authorization` header and no request body. Nothing else in claudeline touches the network.
+
+The OAuth token is read **read-only**, never refreshed or written back — a refresh response can rotate the refresh token, and a second writer racing Claude Code's own refresh could log you out:
+- **macOS:** the `Claude Code-credentials` entry in Keychain, via `security find-generic-password`
+- **Fallback (all platforms):** `${CLAUDE_CONFIG_DIR:-~/.claude}/.credentials.json`
+
+The fetch runs in a **non-blocking background subshell**, guarded by a lock file so concurrent panes don't stampede the endpoint, and is skipped entirely when the cached value is still fresh (`EXTRA_USAGE_TTL`, default 600s).
+
+| Variable | Effect |
+|----------|--------|
+| `CLAUDELINE_SPEND=1` | Required to enable the spend fetch at all — off by default |
+| `CLAUDELINE_NO_NETWORK=1` | Disables the spend fetch even when `CLAUDELINE_SPEND=1` is set |
+| `CLAUDELINE_DEBUG=1` | Enables debug logging to `$TMPDIR/claudeline-statusline-debug.log` |
 
 <hr>
 

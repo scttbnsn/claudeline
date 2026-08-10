@@ -8,6 +8,13 @@ if ! declare -F is_sentinel_value >/dev/null 2>&1; then
     }
 fi
 
+if ! declare -F is_decimal_value >/dev/null 2>&1; then
+    is_decimal_value() {
+        local value=$1
+        [[ "$value" =~ ^-?([0-9]+([.][0-9]+)?|[.][0-9]+)$ ]]
+    }
+fi
+
 # Context tier lookup table
 CONTEXT_TIERS_FULL_WINDOW=(
     "15|CTX_CYAN|✨"
@@ -36,6 +43,25 @@ BURST_BAND_COLOR_NAMES=(
 )
 BURST_COUNTDOWN_MIN_PCT=${BURST_BAND_MAXES[5]}
 BURST_COUNTDOWN_SOON_MINS=60
+
+# Spend bands split the monthly-cap percentage into 11 tiers, one per 10%
+# (the last catches 100%+). A monthly budget sitting at 69% isn't the same
+# emergency as a 5-hour rate limit at 69%, so this is its own scale rather
+# than a reuse of BURST_BAND_*, which reaches red at 64%.
+SPEND_BAND_MAXES=(9 19 29 39 49 59 69 79 89 99 100)
+SPEND_BAND_COLOR_NAMES=(
+    "CTX_CYAN"
+    "BURST_TEAL"
+    "BURST_GREEN"
+    "CTX_LIME"
+    "CTX_YELLOW"
+    "CTX_ORANGE"
+    "CTX_CORAL"
+    "CTX_RED"
+    "CTX_HOT_PINK"
+    "CTX_MAGENTA"
+    "CTX_WHITE_HOT"
+)
 
 set_context_tier() {
     local percent_used=$1
@@ -229,4 +255,143 @@ format_burst_indicator() {
         fi
     fi
     REPLY="💥${burst_color}${burst_bar}${RESET}"
+}
+
+# Convert a validated decimal string to a fixed-point integer scaled by 10^4
+# (4 fractional digits kept, the rest truncated). Pure bash — no bc, no
+# printf %.0f (whose rounding mode for .5 is not guaranteed half-up across
+# platforms, and the spend segment's dollar figure needs to be).
+decimal_to_fixed4() {
+    local value=$1
+    local sign="" int_part="" frac_part=""
+
+    case "$value" in
+        -*) sign="-"; value=${value#-} ;;
+    esac
+    case "$value" in
+        .*) value="0$value" ;;
+    esac
+
+    int_part=${value%%.*}
+    [ -n "$int_part" ] || int_part=0
+    frac_part=""
+    [[ "$value" == *.* ]] && frac_part=${value#*.}
+    frac_part="${frac_part}0000"
+    frac_part=${frac_part:0:4}
+
+    REPLY=$(( 10#$int_part * 10000 + 10#$frac_part ))
+    if [ -n "$sign" ] && [ "$REPLY" -ne 0 ]; then
+        REPLY=$((-REPLY))
+    fi
+}
+
+# Round `value / 10^decimal_places` to the nearest integer, half-up. E.g.
+# round_decimal_half_up "167500.0" 2 -> 1675 (167500 minor units / 10^2 =
+# whole dollars). decimal_places is assumed already clamped by the caller so
+# the scaling loop stays bounded.
+round_decimal_half_up() {
+    local value=$1
+    local decimal_places=${2:-0}
+    local fixed=0 divisor=1 scaled_divisor=0 i=0 sign="" magnitude=0
+
+    decimal_to_fixed4 "$value"
+    fixed=$REPLY
+
+    for ((i = 0; i < decimal_places; i++)); do
+        divisor=$((divisor * 10))
+    done
+    scaled_divisor=$((divisor * 10000))
+
+    magnitude=$fixed
+    if [ "$magnitude" -lt 0 ]; then
+        sign="-"
+        magnitude=$((-magnitude))
+    fi
+
+    REPLY=$(( (magnitude + scaled_divisor / 2) / scaled_divisor ))
+    if [ -n "$sign" ] && [ "$REPLY" -ne 0 ]; then
+        REPLY="-$REPLY"
+    fi
+}
+
+# Format the enterprise usage-based spend segment as a bare percentage, e.g.
+# "68%", or "∞" when monthly_limit is null (unlimited — there's no percentage
+# to show, and rendering nothing would look like the feature is broken).
+# Renders empty when the segment shouldn't show at all — the caller only
+# calls this once CLAUDELINE_SPEND is opted in, so this only covers
+# payload-driven suppression (disabled, user-disabled, a disabled_reason, or
+# an unparseable used_credits).
+format_spend_indicator() {
+    local is_enabled=$1
+    local monthly_limit=$2
+    local used_credits=$3
+    local decimal_places=$4
+    local currency=$5
+    local spend_limit_reached=$6
+    local user_disabled=$7
+    local disabled_reason=$8
+    local utilization=$9
+    local icon="${CLAUDELINE_SPEND_ICON:-💰}"
+
+    REPLY=""
+
+    [ "$is_enabled" = "true" ] || return 0
+    [ "$user_disabled" = "true" ] && return 0
+    case "$disabled_reason" in
+        ""|_|null) ;;
+        *) return 0 ;;
+    esac
+    is_decimal_value "$used_credits" || return 0
+
+    if ! [[ "$decimal_places" =~ ^[0-9]+$ ]] || [ "$decimal_places" -gt 6 ]; then
+        decimal_places=2
+    fi
+
+    local unlimited=0 percent=""
+    if is_sentinel_value "$monthly_limit"; then
+        unlimited=1
+    else
+        if is_decimal_value "$utilization"; then
+            round_decimal_half_up "$utilization" 0
+            percent=$REPLY
+        elif is_decimal_value "$monthly_limit"; then
+            decimal_to_fixed4 "$used_credits"
+            local used_fixed=$REPLY
+            decimal_to_fixed4 "$monthly_limit"
+            local limit_fixed=$REPLY
+            if [ "$limit_fixed" -gt 0 ]; then
+                percent=$(( (used_fixed * 100 + limit_fixed / 2) / limit_fixed ))
+            else
+                percent=0
+            fi
+        fi
+        [ -n "$percent" ] && [ "$percent" -lt 0 ] && percent=0
+    fi
+
+    local color=""
+    if [ -n "$percent" ]; then
+        local band_pct=$percent i band_name
+        [ "$band_pct" -gt 100 ] && band_pct=100
+        for ((i = 0; i < ${#SPEND_BAND_MAXES[@]}; i++)); do
+            if [ "$band_pct" -le "${SPEND_BAND_MAXES[$i]}" ]; then
+                band_name=${SPEND_BAND_COLOR_NAMES[$i]}
+                color=${!band_name}
+                break
+            fi
+        done
+    fi
+
+    if [ "$unlimited" -eq 1 ]; then
+        REPLY="${icon} ∞"
+        return 0
+    fi
+
+    local overlimit=""
+    if [ "$spend_limit_reached" = "true" ]; then
+        overlimit="💀"
+    elif [ -n "$percent" ] && [ "$percent" -ge 100 ]; then
+        overlimit="💀"
+    fi
+
+    REPLY="${icon} ${color}${percent}%${RESET}${overlimit}"
 }

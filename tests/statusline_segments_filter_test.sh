@@ -92,7 +92,7 @@ while IFS= read -r line; do
 done < "$tmpdir/rendered.txt"
 
 assert_eq 2 "${#lines[@]}" "segment filtering still emits exactly two lines"
-assert_eq "demo/main*↑2" "${lines[0]}" "segment filtering keeps only the requested git segment on line 1"
-assert_eq "Claude Sonnet 4" "${lines[1]}" "segment filtering keeps only the requested model segment on line 2"
+assert_eq "demo/main*↑2  ·  Claude Sonnet 4" "${lines[0]}" "segment filtering keeps only the requested git and model segments on line 1"
+assert_eq "" "${lines[1]}" "segment filtering leaves line 2 empty when no line-2 segments are requested"
 
 printf 'ok\n'
