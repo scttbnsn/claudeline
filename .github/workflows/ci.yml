@@ -38,9 +38,6 @@ jobs:
           bash -n lib/statusline_display.sh
           bash -n lib/statusline_usage.sh
 
-      - name: Syntax check Perl script
-        run: perl -c lib/jsonl_parser.pl
-
       - name: Run tests
         timeout-minutes: 5
         env:
