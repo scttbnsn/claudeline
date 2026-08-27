@@ -35,7 +35,10 @@ printf '%b\n' \
     'extra_usage_ttl = \t120\t' \
     > "$config_file"
 
-config_case=$(HOME="$home_dir" bash -c '
+config_case=$(env -u CLAUDELINE_THEME -u CLAUDELINE_SEGMENTS -u NO_COLOR \
+    -u CLAUDELINE_DEBUG -u CLAUDELINE_DEBUG_LOG -u TREND_WINDOW \
+    -u TREND_HISTORY_MAX_AGE -u CLAUDELINE_SPEND -u CLAUDELINE_SPEND_ICON \
+    -u CLAUDELINE_NO_NETWORK -u EXTRA_USAGE_TTL HOME="$home_dir" bash -c '
     source "$1"
     printf "%s|%s|%s|%s|%s|%s|%s\n" \
         "${CLAUDELINE_THEME-}" "${CLAUDELINE_SEGMENTS-}" "${NO_COLOR-}" "${CLAUDELINE_DEBUG-}" \
@@ -72,7 +75,10 @@ printf '%s\r\n' \
     '' \
     > "$crlf_config"
 
-crlf_case=$(HOME="$crlf_home" bash -c '
+crlf_case=$(env -u CLAUDELINE_THEME -u CLAUDELINE_SEGMENTS -u NO_COLOR \
+    -u CLAUDELINE_DEBUG -u CLAUDELINE_DEBUG_LOG -u TREND_WINDOW \
+    -u TREND_HISTORY_MAX_AGE -u CLAUDELINE_SPEND -u CLAUDELINE_SPEND_ICON \
+    -u CLAUDELINE_NO_NETWORK -u EXTRA_USAGE_TTL HOME="$crlf_home" bash -c '
     source "$1"
     printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n" \
         "${CLAUDELINE_THEME-}" "${CLAUDELINE_SEGMENTS-}" "${CLAUDELINE_DEBUG-}" \
