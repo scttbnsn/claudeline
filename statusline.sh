@@ -858,7 +858,7 @@ _visible_len() {
                 ((cluster_width < 2)) && cluster_width=2
                 continue
             fi
-            ((cell_count += cluster_width))
+            cell_count=$((cell_count + cluster_width))
             cluster_width=2
             regional_count=1
             join_next=0
@@ -928,7 +928,7 @@ _visible_len() {
             ((char_width > cluster_width)) && cluster_width=$char_width
             join_next=0
         else
-            ((cell_count += cluster_width))
+            cell_count=$((cell_count + cluster_width))
             cluster_width=$char_width
         fi
         regional_count=0
