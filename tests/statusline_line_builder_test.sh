@@ -46,5 +46,6 @@ assert_eq "alpha  ·  beta" "$line" "_append_seg adds the shared separator betwe
 assert_eq "alpha  ·  beta  ·  gamma" "$(_build_responsive_line 0 "alpha" "beta" "gamma")" "_build_responsive_line keeps all segments when width is unknown"
 assert_eq "alpha  ·  beta" "$(_build_responsive_line 15 "alpha" "beta" "gamma")" "_build_responsive_line drops the lowest-priority segment when needed"
 assert_eq "alpha" "$(_build_responsive_line 4 "alpha" "beta")" "_build_responsive_line falls back to the highest-priority segment when nothing fits"
+assert_eq "oversized" "$(_build_responsive_line 4 "" "oversized" "")" "_build_responsive_line keeps the first nonempty oversized segment"
 
 printf 'ok\n'

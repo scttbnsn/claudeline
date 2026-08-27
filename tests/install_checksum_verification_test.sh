@@ -2,6 +2,7 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+. "$repo_root/tests/install_test_helpers.sh"
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 bash_bin=$(command -v bash)
@@ -22,6 +23,7 @@ assert_file_contains() {
 home_dir="$tmpdir/home"
 shim_dir="$tmpdir/shim"
 download_dir="$tmpdir/downloads"
+installer="$tmpdir/install.sh"
 mkdir -p "$home_dir/.claude/lib" "$shim_dir" "$download_dir/lib"
 
 printf 'trusted-existing\n' > "$home_dir/.claude/lib/statusline_usage.sh"
@@ -30,6 +32,7 @@ cp "$repo_root/statusline.sh" "$download_dir/statusline.sh"
 cp "$repo_root/lib/statusline_display.sh" "$download_dir/lib/statusline_display.sh"
 cp "$repo_root/lib/statusline_themes.sh" "$download_dir/lib/statusline_themes.sh"
 printf 'tampered-usage\n' > "$download_dir/lib/statusline_usage.sh"
+prepare_installer_copy "$repo_root" "$installer"
 
 cat > "$shim_dir/curl" <<'EOF'
 #!/usr/bin/env bash
@@ -92,7 +95,7 @@ export HOME="$home_dir"
 export PATH="$shim_dir:$orig_path"
 export TEST_DOWNLOAD_ROOT="$download_dir"
 
-if "$bash_bin" "$repo_root/install.sh" > "$tmpdir/install.out" 2> "$tmpdir/install.err"; then
+if "$bash_bin" "$installer" > "$tmpdir/install.out" 2> "$tmpdir/install.err"; then
     echo "FAIL: installer should reject tampered downloads" >&2
     exit 1
 fi

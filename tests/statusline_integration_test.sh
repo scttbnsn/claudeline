@@ -35,22 +35,18 @@ cat > "$shim_dir/git" <<'EOF'
 set -euo pipefail
 
 [ "${1:-}" = "-C" ] && shift 2  # tolerate the git -C <dir> prefix
-cmd1=${1:-}
-cmd2=${2:-}
-cmd3=${3:-}
-
-case "$cmd1 $cmd2 $cmd3" in
-    "rev-parse --show-toplevel ")
+case "$*" in
+    "rev-parse --show-toplevel")
         printf '/tmp/demo\n'
         ;;
-    "rev-parse --verify refs/stash")
+    "rev-parse --verify --quiet refs/stash")
         exit 1
         ;;
-    "status -sb ")
-        printf '## main...origin/main [ahead 2]\n M file.txt\n'
+    "status --porcelain=v2 --branch --untracked-files=no")
+        printf '# branch.oid 1234567890abcdef\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +2 -0\n1 .M N... 100644 100644 100644 abc abc file.txt\n'
         ;;
     *)
-        printf 'unexpected git args: %s %s %s\n' "$cmd1" "$cmd2" "$cmd3" >&2
+        printf 'unexpected git args: %s\n' "$*" >&2
         exit 99
         ;;
 esac

@@ -82,6 +82,7 @@ assert_eq "<warm>↗<reset>" "$(run_trend_case $'100,10\n200,10.11\n' 10.11 500)
 assert_eq "<stable>→<reset>" "$(run_trend_case $'100,10\n200,10.06\n' 10.06 500)" "get_trend_arrow stays stable near the sustainable rate"
 assert_eq "<cool>↘<reset>" "$(run_trend_case $'100,10\n200,10.02\n' 10.02 500)" "get_trend_arrow detects cooling usage"
 assert_eq "<cold>↓<reset>" "$(run_trend_case $'100,10\n200,10.005\n' 10.005 500)" "get_trend_arrow detects very low growth"
+assert_eq "<hot>↑<reset>" "$(LC_NUMERIC=de_DE.UTF-8 run_trend_case $'100,10.1\n200,20.2\n' 50.3 500)" "get_trend_arrow parses JSON decimals under a comma-decimal locale"
 
 get_trend_arrow() {
     REPLY="<arrow>"

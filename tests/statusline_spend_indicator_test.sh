@@ -61,6 +61,14 @@ format_spend_indicator true null 167500.0 2 USD false false null null
 assert_eq '💰 ∞' "$REPLY" \
     "format_spend_indicator renders the unlimited form when monthly_limit is null"
 
+format_spend_indicator true null null null null false false null null
+assert_eq '💰 ∞' "$REPLY" \
+    "format_spend_indicator renders unlimited when finite credit fields are null"
+
+format_spend_indicator true null '' '' '' false false null ''
+assert_eq '💰 ∞' "$REPLY" \
+    "format_spend_indicator renders unlimited when finite credit fields are omitted"
+
 format_spend_indicator false 250000 167500.0 2 USD false false null 67
 assert_eq "" "$REPLY" "format_spend_indicator renders empty when is_enabled is not true"
 
@@ -72,6 +80,33 @@ assert_eq "" "$REPLY" "format_spend_indicator renders empty when disabled_reason
 
 format_spend_indicator true 250000 not-a-number 2 USD false false null 67
 assert_eq "" "$REPLY" "format_spend_indicator renders empty when used_credits fails decimal validation"
+
+format_spend_indicator true not-a-number 167500.0 2 USD false false null also-not-a-number
+assert_eq "" "$REPLY" "format_spend_indicator renders empty when finite spend values are malformed"
+
+format_spend_indicator true 0 0 2 USD false false null null
+assert_eq '' "$REPLY" \
+    "format_spend_indicator suppresses an unusable finite zero limit"
+
+format_spend_indicator true 100 0 2 USD false false null null
+assert_eq '💰 <ctx-cyan>0%<reset>' "$REPLY" \
+    "format_spend_indicator preserves valid zero finite usage"
+
+format_spend_indicator true 100 -1 2 USD false false null 0
+assert_eq '' "$REPLY" \
+    "format_spend_indicator suppresses negative finite credits"
+
+format_spend_indicator true -100 1 2 USD false false null 1
+assert_eq '' "$REPLY" \
+    "format_spend_indicator suppresses a negative finite limit"
+
+format_spend_indicator true 100 1 2 USD false false null -1
+assert_eq '' "$REPLY" \
+    "format_spend_indicator suppresses negative finite utilization"
+
+format_spend_indicator true 200 50 0 USD false false null malformed
+assert_eq '💰 <green>25%<reset>' "$REPLY" \
+    "format_spend_indicator falls back to the finite credit ratio when utilization is malformed"
 
 format_spend_indicator true 250000 167500.0 2 USD true false null 67.0
 assert_contains '💀' "$REPLY" "spend_limit_reached true surfaces the overlimit glyph"

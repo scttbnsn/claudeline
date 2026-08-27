@@ -8,13 +8,31 @@ input=$(</dev/stdin)
 
 # Load config file — env vars take precedence over config values
 CLAUDELINE_CONF="${CLAUDELINE_CONF:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/claudeline.conf}"
+
+trim_config_field() {
+    local value=$1
+
+    while :; do
+        case "$value" in
+            ' '*|$'\t'*|$'\r'*) value=${value:1} ;;
+            *) break ;;
+        esac
+    done
+    while :; do
+        case "$value" in
+            *' '|*$'\t'|*$'\r') value=${value%?} ;;
+            *) break ;;
+        esac
+    done
+    REPLY=$value
+}
+
 if [ -f "$CLAUDELINE_CONF" ]; then
     while IFS='=' read -r _key _val || [ -n "$_key" ]; do
+        trim_config_field "$_key"; _key=$REPLY
+        trim_config_field "$_val"; _val=$REPLY
         # Skip comments and blank lines
         case "$_key" in '#'*|'') continue ;; esac
-        # Trim whitespace
-        _key="${_key## }"; _key="${_key%% }"
-        _val="${_val## }"; _val="${_val%% }"
         # Map config keys to env vars (only set if not already defined)
         case "$_key" in
             theme)                [ -z "${CLAUDELINE_THEME:-}" ]            && CLAUDELINE_THEME="$_val" ;;
@@ -39,14 +57,27 @@ case "${CLAUDELINE_DEBUG:-}" in
 esac
 STATUSLINE_DEBUG_LOG="/dev/null"
 if [ "$STATUSLINE_DEBUG_ENABLED" -eq 1 ]; then
-    STATUSLINE_DEBUG_LOG="${CLAUDELINE_DEBUG_LOG:-${TMPDIR:-/tmp}/claudeline-statusline-debug.log}"
-    mkdir -p "$(dirname "$STATUSLINE_DEBUG_LOG")" 2>/dev/null || true
-    : >> "$STATUSLINE_DEBUG_LOG" 2>/dev/null || STATUSLINE_DEBUG_LOG="/dev/null"
+    if [ -n "${CLAUDELINE_DEBUG_LOG:-}" ]; then
+        STATUSLINE_DEBUG_LOG=$CLAUDELINE_DEBUG_LOG
+        mkdir -p "$(dirname "$STATUSLINE_DEBUG_LOG")" 2>/dev/null || true
+        : >> "$STATUSLINE_DEBUG_LOG" 2>/dev/null || STATUSLINE_DEBUG_LOG="/dev/null"
+    else
+        STATUSLINE_DEBUG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.claudeline"
+        STATUSLINE_DEBUG_LOG="$STATUSLINE_DEBUG_DIR/debug.log"
+        if [ -L "$STATUSLINE_DEBUG_DIR" ] \
+            || ! (umask 077 && mkdir -p "$STATUSLINE_DEBUG_DIR" && chmod 700 "$STATUSLINE_DEBUG_DIR") 2>/dev/null \
+            || [ -L "$STATUSLINE_DEBUG_LOG" ] \
+            || ! (umask 177 && : >> "$STATUSLINE_DEBUG_LOG" && chmod 600 "$STATUSLINE_DEBUG_LOG") 2>/dev/null; then
+            STATUSLINE_DEBUG_LOG="/dev/null"
+        fi
+    fi
 fi
 
 debug_log() {
     [ "$STATUSLINE_DEBUG_ENABLED" -eq 1 ] || return 0
-    printf '[%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >> "$STATUSLINE_DEBUG_LOG"
+    local message=$* REPLY=""
+    sanitize_display_field "$message" 0
+    printf '[%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$REPLY" >> "$STATUSLINE_DEBUG_LOG"
 }
 
 # Neutralize externally-sourced display text (model name, dir, branch) before it
@@ -56,8 +87,70 @@ debug_log() {
 # codes. Only ever applied to values used for DISPLAY — never to paths used for
 # filesystem or git operations.
 sanitize_display_field() {
-    local v=${1//[[:cntrl:]]/}
-    REPLY=${v//\\/}
+    local input=$1 output="" sequence="" char=""
+    local strip_backslash=${2:-1}
+    local byte=0 next_byte=0 third_byte=0 fourth_byte=0 codepoint=0
+    local byte_count=0 sequence_size=1 i=0
+    local LC_ALL=C
+
+    byte_count=${#input}
+    for ((i=0; i<byte_count; i++)); do
+        char=${input:i:1}
+        printf -v byte '%d' "'$char"
+        ((byte < 0)) && byte=$((byte + 256))
+        codepoint=$byte
+        sequence=$char
+        sequence_size=1
+
+        if ((byte >= 0xc2 && byte <= 0xdf && i + 1 < byte_count)); then
+            char=${input:i+1:1}; printf -v next_byte '%d' "'$char"
+            ((next_byte < 0)) && next_byte=$((next_byte + 256))
+            if ((next_byte >= 0x80 && next_byte <= 0xbf)); then
+                codepoint=$(( ((byte & 0x1f) << 6) | (next_byte & 0x3f) ))
+                sequence=${input:i:2}
+                sequence_size=2
+            fi
+        elif ((byte >= 0xe0 && byte <= 0xef && i + 2 < byte_count)); then
+            char=${input:i+1:1}; printf -v next_byte '%d' "'$char"
+            char=${input:i+2:1}; printf -v third_byte '%d' "'$char"
+            ((next_byte < 0)) && next_byte=$((next_byte + 256))
+            ((third_byte < 0)) && third_byte=$((third_byte + 256))
+            if ((next_byte >= 0x80 && next_byte <= 0xbf \
+                && third_byte >= 0x80 && third_byte <= 0xbf \
+                && (byte != 0xe0 || next_byte >= 0xa0) \
+                && (byte != 0xed || next_byte <= 0x9f))); then
+                codepoint=$(( ((byte & 0x0f) << 12) | ((next_byte & 0x3f) << 6) | (third_byte & 0x3f) ))
+                sequence=${input:i:3}
+                sequence_size=3
+            fi
+        elif ((byte >= 0xf0 && byte <= 0xf4 && i + 3 < byte_count)); then
+            char=${input:i+1:1}; printf -v next_byte '%d' "'$char"
+            char=${input:i+2:1}; printf -v third_byte '%d' "'$char"
+            char=${input:i+3:1}; printf -v fourth_byte '%d' "'$char"
+            ((next_byte < 0)) && next_byte=$((next_byte + 256))
+            ((third_byte < 0)) && third_byte=$((third_byte + 256))
+            ((fourth_byte < 0)) && fourth_byte=$((fourth_byte + 256))
+            if ((next_byte >= 0x80 && next_byte <= 0xbf \
+                && third_byte >= 0x80 && third_byte <= 0xbf \
+                && fourth_byte >= 0x80 && fourth_byte <= 0xbf \
+                && (byte != 0xf0 || next_byte >= 0x90) \
+                && (byte != 0xf4 || next_byte <= 0x8f))); then
+                codepoint=$(( ((byte & 0x07) << 18) | ((next_byte & 0x3f) << 12) \
+                    | ((third_byte & 0x3f) << 6) | (fourth_byte & 0x3f) ))
+                sequence=${input:i:4}
+                sequence_size=4
+            fi
+        fi
+
+        i=$((i + sequence_size - 1))
+        if ((codepoint <= 0x1f || (codepoint >= 0x7f && codepoint <= 0x9f))); then
+            continue
+        fi
+        ((sequence_size == 1 && byte >= 0x80)) && continue
+        ((strip_backslash == 1 && codepoint == 0x5c)) && continue
+        output+=$sequence
+    done
+    REPLY=$output
 }
 
 normalize_scalar_var() {
@@ -90,11 +183,33 @@ normalize_scalar_var() {
     printf -v "$var_name" '%s' "$default_value"
 }
 
+normalize_positive_int_var() {
+    local var_name=$1
+    local default_value=$2
+    local label=${3:-$var_name}
+    local value=${!var_name-}
+    local canonical=$value
+
+    if [[ "$value" =~ ^[0-9]+$ ]]; then
+        while [ "${canonical#0}" != "$canonical" ]; do
+            canonical=${canonical#0}
+        done
+        if [ -n "$canonical" ]; then
+            printf -v "$var_name" '%s' "$canonical"
+            return 0
+        fi
+    fi
+
+    debug_log "Invalid $label value '${value:-<empty>}'; defaulting to $default_value"
+    printf -v "$var_name" '%s' "$default_value"
+}
+
 round_decimal_to_int_or_default() {
     local value=$1
     local default_value=$2
     local label=${3:-value}
     local rounded
+    local LC_ALL=C
 
     if is_sentinel_value "$value"; then
         printf -v REPLY '%s' "$default_value"
@@ -193,12 +308,8 @@ resolve_auto_compact_window() {
     if [ -n "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}" ]; then
         # Claude Code reads the env var first and only falls through to settings
         # when it does not parse as a positive number.
-        if [[ "$CLAUDE_CODE_AUTO_COMPACT_WINDOW" =~ ^[0-9]+$ ]] \
-            && [ "$CLAUDE_CODE_AUTO_COMPACT_WINDOW" -gt 0 ]; then
-            configured=$CLAUDE_CODE_AUTO_COMPACT_WINDOW
-        else
-            debug_log "Invalid CLAUDE_CODE_AUTO_COMPACT_WINDOW value '$CLAUDE_CODE_AUTO_COMPACT_WINDOW'; falling back to settings"
-        fi
+        configured=$CLAUDE_CODE_AUTO_COMPACT_WINDOW
+        normalize_positive_int_var configured "" "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
     fi
 
     if [ -z "$configured" ]; then
@@ -206,17 +317,18 @@ resolve_auto_compact_window() {
         read_auto_compact_settings
         if auto_compact_disabled; then
             debug_log "Auto-compact is disabled; ignoring the autoCompactWindow setting"
-        elif [[ "$AUTO_COMPACT_WINDOW_SETTING" =~ ^[0-9]+$ ]] \
-            && [ "$AUTO_COMPACT_WINDOW_SETTING" -gt 0 ]; then
-            configured=$AUTO_COMPACT_WINDOW_SETTING
         elif [ -n "$AUTO_COMPACT_WINDOW_SETTING" ]; then
-            debug_log "Invalid autoCompactWindow setting '$AUTO_COMPACT_WINDOW_SETTING'; ignoring"
+            configured=$AUTO_COMPACT_WINDOW_SETTING
+            normalize_positive_int_var configured "" "autoCompactWindow setting"
         fi
     fi
 
     if [ -n "$configured" ]; then
-        [ "$configured" -lt "$AUTO_COMPACT_WINDOW_MIN" ] && configured=$AUTO_COMPACT_WINDOW_MIN
-        [ "$configured" -gt "$AUTO_COMPACT_WINDOW_MAX" ] && configured=$AUTO_COMPACT_WINDOW_MAX
+        case ${#configured} in
+            [1-5]) configured=$AUTO_COMPACT_WINDOW_MIN ;;
+            6) ;;
+            *) configured=$AUTO_COMPACT_WINDOW_MAX ;;
+        esac
     fi
     REPLY=$configured
 }
@@ -284,13 +396,26 @@ fi
 seg_on() { [ "${_SEG_ALL}" -eq 1 ] || [ "${1:-0}" -eq 1 ]; }
 
 # Cache directory for locally observed usage-trend data
-CACHE_DIR="$HOME/.claude-usage.d"
+if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+    CACHE_DIR="$CLAUDE_CONFIG_DIR/.claude-usage.d"
+else
+    CACHE_DIR="$HOME/.claude-usage.d"
+fi
 USAGE_HISTORY="$CACHE_DIR/.usage-history"
 TREND_WINDOW=${TREND_WINDOW:-900}   # 15 minutes in seconds
+TREND_HISTORY_MAX_AGE=${TREND_HISTORY_MAX_AGE:-86400}
 EXTRA_USAGE_CACHE="$CACHE_DIR/.extra-usage-cache"
 EXTRA_USAGE_LOCK="$CACHE_DIR/.extra-usage-fetch.lock"
 EXTRA_USAGE_TTL=${EXTRA_USAGE_TTL:-600}
-(umask 077 && mkdir -p "$CACHE_DIR") 2>>"$STATUSLINE_DEBUG_LOG"
+normalize_positive_int_var TREND_WINDOW 900 "trend window"
+normalize_positive_int_var TREND_HISTORY_MAX_AGE 86400 "trend history max age"
+normalize_positive_int_var EXTRA_USAGE_TTL 600 "extra usage TTL"
+if ! (umask 077 && mkdir -p "$CACHE_DIR") 2>>"$STATUSLINE_DEBUG_LOG"; then
+    debug_log "Usage cache directory is unavailable at $CACHE_DIR; continuing without cache writes"
+    USAGE_HISTORY=/dev/null
+    EXTRA_USAGE_CACHE=""
+    EXTRA_USAGE_LOCK=""
+fi
 
 # Extract all values in a single jq call (11 calls → 1). Each field is stripped
 # of control characters inside jq (gsub) so no field value can contain the 0x1f
@@ -335,6 +460,9 @@ IFS=$'\x1f' read -r MODEL CURRENT_DIR DURATION_MS CURRENT_TOKENS CONTEXT_WINDOW_
 
 # Sanitize externally-sourced display text before it can reach a printf %b sink.
 sanitize_display_field "$MODEL"; MODEL=$REPLY
+if [ -n "${CLAUDELINE_SPEND_ICON:-}" ]; then
+    sanitize_display_field "$CLAUDELINE_SPEND_ICON"; CLAUDELINE_SPEND_ICON=$REPLY
+fi
 
 normalize_scalar_var DURATION_MS int 0 "duration ms"
 normalize_scalar_var CURRENT_TOKENS int 0 "current tokens"
@@ -359,8 +487,8 @@ NOW_DIV_10=$((NOW / 10))
 
 read_git_status_info() {
     local current_dir=$1
-    local git_root="" git_status_out="" first_line="" rest="" line="" branch="" git_status=""
-    local has_unstaged="" has_staged=""
+    local git_root="" git_status_out="" line="" branch="" git_oid="" git_status=""
+    local xy="" ahead="" behind="" has_unstaged="" has_staged=""
 
     BRANCH=""
     DIR_NAME="${current_dir##*/}"
@@ -373,46 +501,59 @@ read_git_status_info() {
     # process's cwd (Claude Code does not guarantee they match).
     [ -n "$current_dir" ] || return 0
 
-    if ! git_root=$(git -C "$current_dir" rev-parse --show-toplevel 2>>"$STATUSLINE_DEBUG_LOG"); then
+    if ! git_root=$(GIT_OPTIONAL_LOCKS=0 git -C "$current_dir" rev-parse --show-toplevel 2>>"$STATUSLINE_DEBUG_LOG"); then
         return 0
     fi
 
     DIR_NAME="${git_root##*/}"
     sanitize_display_field "$DIR_NAME"; DIR_NAME=$REPLY
 
-    # git status -sb gives: ## branch...upstream [ahead N, behind M] + file status
-    if ! git_status_out=$(git -C "$current_dir" status -sb 2>>"$STATUSLINE_DEBUG_LOG"); then
+    if ! git_status_out=$(GIT_OPTIONAL_LOCKS=0 git -C "$current_dir" \
+        status --porcelain=v2 --branch --untracked-files=no 2>>"$STATUSLINE_DEBUG_LOG"); then
         debug_log "Failed to read git status for $git_root; omitting branch info"
         return 0
     fi
 
-    # Parse first line for branch and ahead/behind (pure bash, no head/sed)
-    first_line="${git_status_out%%$'\n'*}"
-    # Remove "## " prefix and extract branch (before "..." or end)
-    branch="${first_line#\#\# }"
-    branch="${branch%%...*}"
-    branch="${branch%% \[*}"  # Remove [ahead/behind] if no upstream
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -z "$line" ] && continue
+        case "$line" in
+            '# branch.oid '*)
+                git_oid=${line#\# branch.oid }
+                ;;
+            '# branch.head '*)
+                branch=${line#\# branch.head }
+                ;;
+            '# branch.ab '*)
+                xy=${line#\# branch.ab }
+                ahead=${xy%% *}; ahead=${ahead#+}
+                behind=${xy##* }; behind=${behind#-}
+                ;;
+            '1 '*|'2 '*|'u '*)
+                xy=${line:2:2}
+                [ -z "$has_staged" ] && case "${xy:0:1}" in .) ;; *) has_staged=1 ;; esac
+                [ -z "$has_unstaged" ] && case "${xy:1:1}" in .) ;; *) has_unstaged=1 ;; esac
+                ;;
+        esac
+    done <<< "$git_status_out"
 
+    if [ "$branch" = "(detached)" ]; then
+        if [[ "$git_oid" =~ ^[0-9a-fA-F]{7,}$ ]]; then
+            branch="detached@${git_oid:0:7}"
+        else
+            branch="detached"
+        fi
+    fi
     [ -n "$branch" ] || return 0
 
-    # Parse status lines for staged/unstaged (pure bash, no grep)
-    # Status lines start after first line; check first two chars of each
-    rest="${git_status_out#*$'\n'}"
-    while IFS= read -r line; do
-        [ -z "$line" ] && continue
-        [ -z "$has_unstaged" ] && case "${line:1:1}" in [MADRC]) has_unstaged=1 ;; esac
-        [ -z "$has_staged" ] && case "${line:0:1}" in [MADRC]) has_staged=1 ;; esac
-        [ -n "$has_unstaged" ] && [ -n "$has_staged" ] && break
-    done <<< "$rest"
     [ -n "$has_unstaged" ] && git_status+="*"
     [ -n "$has_staged" ] && git_status+="+"
 
-    # Extract ahead/behind from first line
-    [[ "$first_line" =~ ahead\ ([0-9]+) ]] && git_status+="↑${BASH_REMATCH[1]}"
-    [[ "$first_line" =~ behind\ ([0-9]+) ]] && git_status+="↓${BASH_REMATCH[1]}"
+    [[ "$ahead" =~ ^[0-9]+$ ]] && [ "$ahead" -gt 0 ] && git_status+="↑${ahead}"
+    [[ "$behind" =~ ^[0-9]+$ ]] && [ "$behind" -gt 0 ] && git_status+="↓${behind}"
 
     # Stash check via refs/stash avoids walking the stash reflog.
-    if git -C "$current_dir" rev-parse --verify refs/stash >/dev/null 2>>"$STATUSLINE_DEBUG_LOG"; then
+    if GIT_OPTIONAL_LOCKS=0 git -C "$current_dir" rev-parse --verify --quiet refs/stash \
+        >/dev/null 2>>"$STATUSLINE_DEBUG_LOG"; then
         git_status+="\$"
     fi
 
@@ -553,10 +694,14 @@ fi
 # Terminal width for responsive layout (drop low-priority segments to prevent wrapping)
 TERM_WIDTH="${COLUMNS:-120}"
 
-# Measure visible width of a string by stripping ANSI escapes and counting characters.
-# Uses bash parameter expansion and REPLY to avoid subprocesses in the hot path.
+# Measure terminal cell width after stripping the SGR escapes emitted by themes.
+# This stays in Bash so responsive layout does not fork a helper for every trial.
 _visible_len() {
-    local stripped prefix suffix
+    local stripped prefix suffix char
+    local codepoint=0 next_code=0 third_code=0 fourth_code=0
+    local char_width=0 cell_count=0 cluster_width=0 byte_count=0
+    local join_next=0 regional_count=0 i=0
+    local LC_ALL=C
 
     printf -v stripped '%b' "$1"
     while [[ "$stripped" == *$'\033['*m* ]]; do
@@ -565,20 +710,249 @@ _visible_len() {
         stripped="${prefix}${suffix#*m}"
     done
 
-    REPLY=${#stripped}
+    byte_count=${#stripped}
+    for ((i=0; i<byte_count; i++)); do
+        char=${stripped:i:1}
+        printf -v codepoint '%d' "'$char"
+        ((codepoint < 0)) && codepoint=$((codepoint + 256))
+
+        # Bash 3.2's printf reports only a UTF-8 byte for a multibyte character,
+        # so decode the scalar here before applying terminal-width tables.
+        if ((codepoint >= 0xc2 && codepoint <= 0xdf && i + 1 < byte_count)); then
+            char=${stripped:i+1:1}; printf -v next_code '%d' "'$char"
+            ((next_code < 0)) && next_code=$((next_code + 256))
+            codepoint=$(( ((codepoint & 0x1f) << 6) | (next_code & 0x3f) ))
+            i=$((i + 1))
+        elif ((codepoint >= 0xe0 && codepoint <= 0xef && i + 2 < byte_count)); then
+            char=${stripped:i+1:1}; printf -v next_code '%d' "'$char"
+            char=${stripped:i+2:1}; printf -v third_code '%d' "'$char"
+            ((next_code < 0)) && next_code=$((next_code + 256))
+            ((third_code < 0)) && third_code=$((third_code + 256))
+            codepoint=$(( ((codepoint & 0x0f) << 12) | ((next_code & 0x3f) << 6) | (third_code & 0x3f) ))
+            i=$((i + 2))
+        elif ((codepoint >= 0xf0 && codepoint <= 0xf4 && i + 3 < byte_count)); then
+            char=${stripped:i+1:1}; printf -v next_code '%d' "'$char"
+            char=${stripped:i+2:1}; printf -v third_code '%d' "'$char"
+            char=${stripped:i+3:1}; printf -v fourth_code '%d' "'$char"
+            ((next_code < 0)) && next_code=$((next_code + 256))
+            ((third_code < 0)) && third_code=$((third_code + 256))
+            ((fourth_code < 0)) && fourth_code=$((fourth_code + 256))
+            codepoint=$(( ((codepoint & 0x07) << 18) | ((next_code & 0x3f) << 12) | ((third_code & 0x3f) << 6) | (fourth_code & 0x3f) ))
+            i=$((i + 3))
+        fi
+
+        # Combining marks, emoji modifiers, variation selectors, and tag
+        # characters extend the current grapheme without adding cells.
+        if ((
+            (codepoint >= 0x0300 && codepoint <= 0x036f) ||
+            (codepoint >= 0x0591 && codepoint <= 0x05bd) ||
+            codepoint == 0x05bf ||
+            (codepoint >= 0x05c1 && codepoint <= 0x05c2) ||
+            (codepoint >= 0x05c4 && codepoint <= 0x05c5) ||
+            codepoint == 0x05c7 ||
+            (codepoint >= 0x0600 && codepoint <= 0x0605) ||
+            (codepoint >= 0x0610 && codepoint <= 0x061a) ||
+            codepoint == 0x061c ||
+            (codepoint >= 0x064b && codepoint <= 0x065f) ||
+            codepoint == 0x0670 ||
+            (codepoint >= 0x06d6 && codepoint <= 0x06dd) ||
+            (codepoint >= 0x06df && codepoint <= 0x06e4) ||
+            (codepoint >= 0x06e7 && codepoint <= 0x06e8) ||
+            (codepoint >= 0x06ea && codepoint <= 0x06ed) ||
+            (codepoint >= 0x0900 && codepoint <= 0x0903) ||
+            (codepoint >= 0x093a && codepoint <= 0x093c) ||
+            (codepoint >= 0x093e && codepoint <= 0x094f) ||
+            (codepoint >= 0x0951 && codepoint <= 0x0957) ||
+            (codepoint >= 0x0962 && codepoint <= 0x0963) ||
+            (codepoint >= 0x0981 && codepoint <= 0x0983) ||
+            codepoint == 0x09bc ||
+            (codepoint >= 0x09be && codepoint <= 0x09c4) ||
+            (codepoint >= 0x09c7 && codepoint <= 0x09c8) ||
+            (codepoint >= 0x09cb && codepoint <= 0x09cd) ||
+            codepoint == 0x09d7 ||
+            (codepoint >= 0x09e2 && codepoint <= 0x09e3) ||
+            codepoint == 0x09fe ||
+            (codepoint >= 0x0a01 && codepoint <= 0x0a03) ||
+            codepoint == 0x0a3c ||
+            (codepoint >= 0x0a3e && codepoint <= 0x0a42) ||
+            (codepoint >= 0x0a47 && codepoint <= 0x0a48) ||
+            (codepoint >= 0x0a4b && codepoint <= 0x0a4d) ||
+            codepoint == 0x0a51 ||
+            (codepoint >= 0x0a70 && codepoint <= 0x0a71) ||
+            codepoint == 0x0a75 ||
+            (codepoint >= 0x0a81 && codepoint <= 0x0a83) ||
+            codepoint == 0x0abc ||
+            (codepoint >= 0x0abe && codepoint <= 0x0ac5) ||
+            (codepoint >= 0x0ac7 && codepoint <= 0x0ac9) ||
+            (codepoint >= 0x0acb && codepoint <= 0x0acd) ||
+            (codepoint >= 0x0ae2 && codepoint <= 0x0ae3) ||
+            (codepoint >= 0x0afa && codepoint <= 0x0aff) ||
+            (codepoint >= 0x0b01 && codepoint <= 0x0b03) ||
+            codepoint == 0x0b3c ||
+            (codepoint >= 0x0b3e && codepoint <= 0x0b44) ||
+            (codepoint >= 0x0b47 && codepoint <= 0x0b48) ||
+            (codepoint >= 0x0b4b && codepoint <= 0x0b4d) ||
+            (codepoint >= 0x0b55 && codepoint <= 0x0b57) ||
+            (codepoint >= 0x0b62 && codepoint <= 0x0b63) ||
+            codepoint == 0x0b82 ||
+            (codepoint >= 0x0bbe && codepoint <= 0x0bc2) ||
+            (codepoint >= 0x0bc6 && codepoint <= 0x0bc8) ||
+            (codepoint >= 0x0bca && codepoint <= 0x0bcd) ||
+            codepoint == 0x0bd7 ||
+            (codepoint >= 0x0c00 && codepoint <= 0x0c04) ||
+            codepoint == 0x0c3c ||
+            (codepoint >= 0x0c3e && codepoint <= 0x0c44) ||
+            (codepoint >= 0x0c46 && codepoint <= 0x0c48) ||
+            (codepoint >= 0x0c4a && codepoint <= 0x0c4d) ||
+            (codepoint >= 0x0c55 && codepoint <= 0x0c56) ||
+            (codepoint >= 0x0c62 && codepoint <= 0x0c63) ||
+            (codepoint >= 0x0c81 && codepoint <= 0x0c83) ||
+            codepoint == 0x0cbc ||
+            (codepoint >= 0x0cbe && codepoint <= 0x0cc4) ||
+            (codepoint >= 0x0cc6 && codepoint <= 0x0cc8) ||
+            (codepoint >= 0x0cca && codepoint <= 0x0ccd) ||
+            (codepoint >= 0x0cd5 && codepoint <= 0x0cd6) ||
+            (codepoint >= 0x0ce2 && codepoint <= 0x0ce3) ||
+            codepoint == 0x0cf3 ||
+            (codepoint >= 0x0d00 && codepoint <= 0x0d03) ||
+            (codepoint >= 0x0d3b && codepoint <= 0x0d3c) ||
+            (codepoint >= 0x0d3e && codepoint <= 0x0d44) ||
+            (codepoint >= 0x0d46 && codepoint <= 0x0d48) ||
+            (codepoint >= 0x0d4a && codepoint <= 0x0d4d) ||
+            codepoint == 0x0d57 ||
+            (codepoint >= 0x0d62 && codepoint <= 0x0d63) ||
+            (codepoint >= 0x0d81 && codepoint <= 0x0d83) ||
+            codepoint == 0x0dca ||
+            (codepoint >= 0x0dcf && codepoint <= 0x0dd4) ||
+            codepoint == 0x0dd6 ||
+            (codepoint >= 0x0dd8 && codepoint <= 0x0ddf) ||
+            (codepoint >= 0x0df2 && codepoint <= 0x0df3) ||
+            (codepoint >= 0x1ab0 && codepoint <= 0x1aff) ||
+            (codepoint >= 0x1dc0 && codepoint <= 0x1dff) ||
+            (codepoint >= 0x20d0 && codepoint <= 0x20ff) ||
+            (codepoint >= 0xfe00 && codepoint <= 0xfe0f) ||
+            (codepoint >= 0xfe20 && codepoint <= 0xfe2f) ||
+            (codepoint >= 0x1f3fb && codepoint <= 0x1f3ff) ||
+            (codepoint >= 0xe0020 && codepoint <= 0xe007f) ||
+            (codepoint >= 0xe0100 && codepoint <= 0xe01ef)
+        )); then
+            # Emoji presentation and enclosing keycap sequences occupy two
+            # cells even when their base character is normally narrow.
+            if ((codepoint == 0xfe0f || codepoint == 0x20e3)); then
+                ((cluster_width < 2)) && cluster_width=2
+            fi
+            continue
+        fi
+
+        # A zero-width joiner keeps the following glyph in this grapheme. The
+        # cluster's width is the widest member, not the sum of its members.
+        if ((codepoint == 0x200d)); then
+            join_next=1
+            continue
+        fi
+
+        # Regional indicators render in pairs as a single two-cell flag.
+        if ((codepoint >= 0x1f1e6 && codepoint <= 0x1f1ff)); then
+            if ((regional_count == 1)); then
+                regional_count=2
+                ((cluster_width < 2)) && cluster_width=2
+                continue
+            fi
+            ((cell_count += cluster_width))
+            cluster_width=2
+            regional_count=1
+            join_next=0
+            continue
+        fi
+
+        char_width=1
+        if ((
+            (codepoint >= 0x1100 && codepoint <= 0x115f) ||
+            (codepoint >= 0x231a && codepoint <= 0x231b) ||
+            codepoint == 0x2329 || codepoint == 0x232a ||
+            (codepoint >= 0x23e9 && codepoint <= 0x23ec) ||
+            codepoint == 0x23f0 || codepoint == 0x23f3 ||
+            (codepoint >= 0x25fd && codepoint <= 0x25fe) ||
+            (codepoint >= 0x2614 && codepoint <= 0x2615) ||
+            (codepoint >= 0x2630 && codepoint <= 0x2637) ||
+            (codepoint >= 0x2648 && codepoint <= 0x2653) ||
+            codepoint == 0x267f || (codepoint >= 0x268a && codepoint <= 0x268f) ||
+            codepoint == 0x2693 || codepoint == 0x26a1 ||
+            (codepoint >= 0x26aa && codepoint <= 0x26ab) ||
+            (codepoint >= 0x26bd && codepoint <= 0x26be) ||
+            (codepoint >= 0x26c4 && codepoint <= 0x26c5) ||
+            codepoint == 0x26ce || codepoint == 0x26d4 || codepoint == 0x26ea ||
+            (codepoint >= 0x26f2 && codepoint <= 0x26f3) ||
+            codepoint == 0x26f5 || codepoint == 0x26fa || codepoint == 0x26fd ||
+            codepoint == 0x2705 || (codepoint >= 0x270a && codepoint <= 0x270b) ||
+            codepoint == 0x2728 || codepoint == 0x274c || codepoint == 0x274e ||
+            (codepoint >= 0x2753 && codepoint <= 0x2755) || codepoint == 0x2757 ||
+            (codepoint >= 0x2795 && codepoint <= 0x2797) ||
+            codepoint == 0x27b0 || codepoint == 0x27bf ||
+            (codepoint >= 0x2b1b && codepoint <= 0x2b1c) ||
+            codepoint == 0x2b50 || codepoint == 0x2b55 ||
+            (codepoint >= 0x2e80 && codepoint <= 0xa4cf && codepoint != 0x303f) ||
+            (codepoint >= 0xa960 && codepoint <= 0xa97c) ||
+            (codepoint >= 0xac00 && codepoint <= 0xd7a3) ||
+            (codepoint >= 0xf900 && codepoint <= 0xfaff) ||
+            (codepoint >= 0xfe10 && codepoint <= 0xfe19) ||
+            (codepoint >= 0xfe30 && codepoint <= 0xfe6f) ||
+            (codepoint >= 0xff00 && codepoint <= 0xff60) ||
+            (codepoint >= 0xffe0 && codepoint <= 0xffe6) ||
+            codepoint == 0x1f004 || codepoint == 0x1f0cf || codepoint == 0x1f18e ||
+            (codepoint >= 0x1f191 && codepoint <= 0x1f19a) ||
+            (codepoint >= 0x1f200 && codepoint <= 0x1f202) ||
+            (codepoint >= 0x1f210 && codepoint <= 0x1f23b) ||
+            (codepoint >= 0x1f240 && codepoint <= 0x1f248) ||
+            (codepoint >= 0x1f250 && codepoint <= 0x1f251) ||
+            (codepoint >= 0x1f260 && codepoint <= 0x1f265) ||
+            (codepoint >= 0x16fe0 && codepoint <= 0x16fe4) ||
+            (codepoint >= 0x16ff0 && codepoint <= 0x16ff1) ||
+            (codepoint >= 0x17000 && codepoint <= 0x187f7) ||
+            (codepoint >= 0x18800 && codepoint <= 0x18cd5) ||
+            (codepoint >= 0x18cff && codepoint <= 0x18d08) ||
+            (codepoint >= 0x1aff0 && codepoint <= 0x1affe && codepoint != 0x1aff4 && codepoint != 0x1affc) ||
+            (codepoint >= 0x1b000 && codepoint <= 0x1b122) || codepoint == 0x1b132 ||
+            (codepoint >= 0x1b150 && codepoint <= 0x1b152) || codepoint == 0x1b155 ||
+            (codepoint >= 0x1b164 && codepoint <= 0x1b167) ||
+            (codepoint >= 0x1b170 && codepoint <= 0x1b2fb) ||
+            (codepoint >= 0x1d300 && codepoint <= 0x1d356) ||
+            (codepoint >= 0x1d360 && codepoint <= 0x1d376) ||
+            (codepoint >= 0x1f300 && codepoint <= 0x1faff) ||
+            (codepoint >= 0x20000 && codepoint <= 0x3fffd)
+        )); then
+            char_width=2
+        fi
+
+        if ((join_next == 1)); then
+            ((char_width > cluster_width)) && cluster_width=$char_width
+            join_next=0
+        else
+            ((cell_count += cluster_width))
+            cluster_width=$char_width
+        fi
+        regional_count=0
+    done
+
+    REPLY=$((cell_count + cluster_width))
 }
 
 # Build a line from segments, dropping lowest-priority segments if it exceeds terminal width.
 # Args: segment strings in priority order (highest first). Low-priority segments are dropped first.
 _build_responsive_line() {
     local width=$1; shift
-    local count=$#
-    local line="" i visible_len
+    local segments=()
+    local segment line="" i visible_len
+
+    for segment in "$@"; do
+        [ -n "$segment" ] && segments+=("$segment")
+    done
+    local count=${#segments[@]}
 
     # Try with all segments first
     line=""
-    for ((i=1; i<=count; i++)); do
-        [ -n "${!i}" ] && _append_seg line "${!i}"
+    for ((i=0; i<count; i++)); do
+        _append_seg line "${segments[$i]}"
     done
 
     # If it fits or width is unknown, return
@@ -597,8 +971,8 @@ _build_responsive_line() {
     local try=$((count - 1))
     while [ "$try" -ge 1 ]; do
         line=""
-        for ((i=1; i<=try; i++)); do
-            [ -n "${!i}" ] && _append_seg line "${!i}"
+        for ((i=0; i<try; i++)); do
+            _append_seg line "${segments[$i]}"
         done
         _visible_len "$line"
         visible_len=$REPLY

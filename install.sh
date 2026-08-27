@@ -14,16 +14,35 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 REPO_URL="https://raw.githubusercontent.com/scttbnsn/claudeline/main"
-CLAUDE_DIR="$HOME/.claude"
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 CLAUDE_LIB_DIR="$CLAUDE_DIR/lib"
 SCRIPT_PATH="$CLAUDE_DIR/statusline.sh"
 THEMES_LIB_PATH="$CLAUDE_LIB_DIR/statusline_themes.sh"
 DISPLAY_LIB_PATH="$CLAUDE_LIB_DIR/statusline_display.sh"
 USAGE_LIB_PATH="$CLAUDE_LIB_DIR/statusline_usage.sh"
 SETTINGS_PATH="$CLAUDE_DIR/settings.json"
-STATUSLINE_SHA256="5c3596613c20f737fcc62b4434ecf71d699cb216b16f07be81de88fb0b8b6bfc"
-DISPLAY_LIB_SHA256="9bba80df6f7b8caceb16cc05cf03209ddb3c542d55a88d4eedcdf4bb4976fe02"
-USAGE_LIB_SHA256="3b1fd7ba0a54815b8f2ff44b14499eb26ae87e769d94e25b2043c0544adba9fe"
+
+quote_shell_word() {
+    local value=$1 prefix=""
+
+    printf "'"
+    while [[ "$value" == *"'"* ]]; do
+        prefix=${value%%\'*}
+        printf "%s'\"'\"'" "$prefix"
+        value=${value#*\'}
+    done
+    printf "%s'" "$value"
+}
+
+if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+    STATUSLINE_COMMAND=$(quote_shell_word "$SCRIPT_PATH")
+else
+    # shellcheck disable=SC2088
+    STATUSLINE_COMMAND="~/.claude/statusline.sh"
+fi
+STATUSLINE_SHA256="799c3102eb16ebc538b0afbfbd2cd82cccf507351dc36df625596e0597e9cb5e"
+DISPLAY_LIB_SHA256="b6eda21c5f595cd2c8aede011bee8a4d92f00e2eec51ae7c21e0a42925a8df2e"
+USAGE_LIB_SHA256="d43a9f878e7247c8c8a9247614f9951b1ede3c5060dd8c40fb0aa9afb1ac8a1c"
 THEMES_LIB_SHA256="f21602fa7efc871559503d668ebf2df20de395e6560ca56beb918b6fb631c4c9"
 
 echo -e "${CYAN}${BOLD}"
@@ -55,7 +74,43 @@ if [ -n "$MISSING" ]; then
 fi
 echo -e "${GREEN}✓${NC} All dependencies found"
 
-# Create .claude directory if needed
+# Reject unsafe destination types before creating directories or downloading.
+for directory in "$CLAUDE_DIR" "$CLAUDE_LIB_DIR"; do
+    if { [ -e "$directory" ] || [ -L "$directory" ]; } && [ ! -d "$directory" ]; then
+        echo -e "${RED}✗ Install directory is not a directory: $directory${NC}"
+        exit 1
+    fi
+done
+
+for destination in "$SCRIPT_PATH" "$THEMES_LIB_PATH" "$DISPLAY_LIB_PATH" "$USAGE_LIB_PATH"; do
+    if [ -L "$destination" ] || { [ -e "$destination" ] && [ ! -f "$destination" ]; }; then
+        echo -e "${RED}✗ Runtime destination is not a regular file: $destination${NC}"
+        exit 1
+    fi
+done
+
+SETTINGS_TARGET_PATH="$SETTINGS_PATH"
+if [ -L "$SETTINGS_PATH" ]; then
+    if ! SETTINGS_TARGET_PATH=$(perl -MCwd=abs_path -e '
+        my $path = abs_path(shift);
+        exit 1 unless defined $path;
+        print $path;
+    ' "$SETTINGS_PATH") || [ ! -f "$SETTINGS_TARGET_PATH" ]; then
+        echo -e "${RED}✗ settings.json symlink target must be a readable regular file: $SETTINGS_PATH${NC}"
+        exit 1
+    fi
+elif [ -e "$SETTINGS_PATH" ] && [ ! -f "$SETTINGS_PATH" ]; then
+    echo -e "${RED}✗ settings.json must be a regular file: $SETTINGS_PATH${NC}"
+    exit 1
+fi
+SETTINGS_BACKUP_PATH="$SETTINGS_TARGET_PATH.backup"
+if { [ -e "$SETTINGS_BACKUP_PATH" ] || [ -L "$SETTINGS_BACKUP_PATH" ]; } \
+    && [ ! -f "$SETTINGS_BACKUP_PATH" ] && [ ! -L "$SETTINGS_BACKUP_PATH" ]; then
+    echo -e "${RED}✗ settings.json.backup must be a regular file or symlink: $SETTINGS_BACKUP_PATH${NC}"
+    exit 1
+fi
+
+# Create config directories if needed
 if [ ! -d "$CLAUDE_DIR" ]; then
     (umask 077 && mkdir -p "$CLAUDE_DIR")
     echo -e "${GREEN}✓${NC} Created $CLAUDE_DIR"
@@ -65,14 +120,21 @@ if [ ! -d "$CLAUDE_LIB_DIR" ]; then
     echo -e "${GREEN}✓${NC} Created $CLAUDE_LIB_DIR"
 fi
 
+STATUSLINE_CONFIG=$(jq -cn --arg command "$STATUSLINE_COMMAND" '{
+  type: "command",
+  command: $command,
+  padding: 0
+}')
+
 stage_dir=$(mktemp -d "${TMPDIR:-/tmp}/claudeline-install.XXXXXX") || {
     echo -e "${RED}✗ Failed to create staging directory${NC}"
     exit 1
 }
-cleanup() {
-    rm -rf "$stage_dir"
-}
-trap cleanup EXIT
+INSTALL_IN_PROGRESS=0
+SETTINGS_REPLACEMENT_TEMP=""
+SETTINGS_BACKUP_TEMP=""
+SETTINGS_HAD_ORIGINAL=0
+SETTINGS_BACKUP_HAD_ORIGINAL=0
 
 download_stage_file() {
     local rel_path=$1
@@ -105,48 +167,228 @@ download_stage_file() {
     chmod "$mode" "$staged_path"
 }
 
+RUNTIME_SOURCES=(
+    "$stage_dir/statusline.sh"
+    "$stage_dir/lib/statusline_themes.sh"
+    "$stage_dir/lib/statusline_display.sh"
+    "$stage_dir/lib/statusline_usage.sh"
+)
+RUNTIME_TARGETS=(
+    "$SCRIPT_PATH"
+    "$THEMES_LIB_PATH"
+    "$DISPLAY_LIB_PATH"
+    "$USAGE_LIB_PATH"
+)
+RUNTIME_BACKUP_DIR="$stage_dir/originals"
+RUNTIME_HAD_ORIGINAL=()
+SETTINGS_ORIGINAL_PATH="$stage_dir/original-settings.json"
+SETTINGS_BACKUP_ORIGINAL_PATH="$stage_dir/original-settings-backup"
+
+restore_runtime_files() {
+    local index=0
+    local failed=0
+
+    while [ "$index" -lt "${#RUNTIME_TARGETS[@]}" ]; do
+        if [ "${RUNTIME_HAD_ORIGINAL[$index]:-0}" -eq 1 ]; then
+            cp -p "$RUNTIME_BACKUP_DIR/$index" "${RUNTIME_TARGETS[$index]}" || failed=1
+        else
+            rm -f "${RUNTIME_TARGETS[$index]}" || failed=1
+        fi
+        index=$((index + 1))
+    done
+    return "$failed"
+}
+
+restore_settings_files() {
+    local failed=0
+
+    if [ "$SETTINGS_HAD_ORIGINAL" -eq 1 ]; then
+        if ! rm -f "$SETTINGS_TARGET_PATH" \
+            || ! cp -p "$SETTINGS_ORIGINAL_PATH" "$SETTINGS_TARGET_PATH"; then
+            failed=1
+        fi
+    elif ! rm -f "$SETTINGS_TARGET_PATH"; then
+        failed=1
+    fi
+
+    if [ "$SETTINGS_BACKUP_HAD_ORIGINAL" -eq 1 ]; then
+        if ! rm -f "$SETTINGS_BACKUP_PATH" \
+            || ! cp -Pp "$SETTINGS_BACKUP_ORIGINAL_PATH" "$SETTINGS_BACKUP_PATH"; then
+            failed=1
+        fi
+    elif ! rm -f "$SETTINGS_BACKUP_PATH"; then
+        failed=1
+    fi
+
+    return "$failed"
+}
+
+restore_install_state() {
+    local failed=0
+
+    if ! restore_settings_files; then
+        failed=1
+    fi
+    if ! restore_runtime_files; then
+        failed=1
+    fi
+    return "$failed"
+}
+
+cleanup() {
+    local exit_status=$?
+    local restored=1
+
+    trap - EXIT HUP INT TERM
+    if [ "${INSTALL_IN_PROGRESS:-0}" -eq 1 ]; then
+        if restore_install_state; then
+            INSTALL_IN_PROGRESS=0
+        else
+            restored=0
+            echo -e "${RED}✗ Failed to restore the previous installation${NC}" >&2
+        fi
+    fi
+    [ -z "${SETTINGS_REPLACEMENT_TEMP:-}" ] || rm -f "$SETTINGS_REPLACEMENT_TEMP" 2>/dev/null || true
+    [ -z "${SETTINGS_BACKUP_TEMP:-}" ] || rm -f "$SETTINGS_BACKUP_TEMP" 2>/dev/null || true
+    if [ "$restored" -eq 1 ]; then
+        rm -rf "$stage_dir"
+    else
+        echo -e "${YELLOW}Installation backups preserved at $stage_dir${NC}" >&2
+    fi
+    exit "$exit_status"
+}
+
+prepare_runtime_backups() {
+    local index=0
+
+    mkdir -p "$RUNTIME_BACKUP_DIR" || return 1
+    while [ "$index" -lt "${#RUNTIME_TARGETS[@]}" ]; do
+        if [ -f "${RUNTIME_TARGETS[$index]}" ]; then
+            cp -p "${RUNTIME_TARGETS[$index]}" "$RUNTIME_BACKUP_DIR/$index" || return 1
+            RUNTIME_HAD_ORIGINAL[$index]=1
+        else
+            RUNTIME_HAD_ORIGINAL[$index]=0
+        fi
+        index=$((index + 1))
+    done
+}
+
+prepare_settings_files() {
+    if [ -f "$SETTINGS_TARGET_PATH" ]; then
+        SETTINGS_HAD_ORIGINAL=1
+        if ! cp -p "$SETTINGS_TARGET_PATH" "$SETTINGS_ORIGINAL_PATH"; then
+            echo -e "${RED}✗ Failed to preserve existing settings.json${NC}"
+            return 1
+        fi
+    fi
+
+    if [ -e "$SETTINGS_BACKUP_PATH" ] || [ -L "$SETTINGS_BACKUP_PATH" ]; then
+        SETTINGS_BACKUP_HAD_ORIGINAL=1
+        if ! cp -Pp "$SETTINGS_BACKUP_PATH" "$SETTINGS_BACKUP_ORIGINAL_PATH"; then
+            echo -e "${RED}✗ Failed to preserve existing settings.json.backup${NC}"
+            return 1
+        fi
+    fi
+
+    if ! SETTINGS_REPLACEMENT_TEMP=$(mktemp "$SETTINGS_TARGET_PATH.XXXXXX"); then
+        echo -e "${RED}✗ Failed to stage replacement settings.json${NC}"
+        return 1
+    fi
+    if [ "$SETTINGS_HAD_ORIGINAL" -eq 1 ]; then
+        if ! jq --argjson sl "$STATUSLINE_CONFIG" '.statusLine = $sl' \
+            "$SETTINGS_TARGET_PATH" > "$SETTINGS_REPLACEMENT_TEMP"; then
+            echo -e "${RED}✗ Existing settings.json is not valid JSON${NC}"
+            return 1
+        fi
+    elif ! jq -n --argjson sl "$STATUSLINE_CONFIG" '{statusLine: $sl}' \
+        > "$SETTINGS_REPLACEMENT_TEMP"; then
+        echo -e "${RED}✗ Failed to create replacement settings.json${NC}"
+        return 1
+    fi
+    if ! jq -e . "$SETTINGS_REPLACEMENT_TEMP" >/dev/null \
+        || ! chmod 600 "$SETTINGS_REPLACEMENT_TEMP"; then
+        echo -e "${RED}✗ Failed to validate replacement settings.json${NC}"
+        return 1
+    fi
+
+    if [ "$SETTINGS_HAD_ORIGINAL" -eq 1 ]; then
+        if ! SETTINGS_BACKUP_TEMP=$(mktemp "$SETTINGS_BACKUP_PATH.XXXXXX"); then
+            echo -e "${RED}✗ Failed to stage settings.json.backup${NC}"
+            return 1
+        fi
+        if ! cp -p "$SETTINGS_TARGET_PATH" "$SETTINGS_BACKUP_TEMP"; then
+            echo -e "${RED}✗ Failed to stage settings.json.backup${NC}"
+            return 1
+        fi
+    fi
+}
+
+replace_backup_path() {
+    perl -e '
+        use strict;
+        use warnings;
+        my ($source, $destination) = @ARGV;
+        rename $source, $destination or die "rename $source -> $destination: $!";
+    ' "$SETTINGS_BACKUP_TEMP" "$SETTINGS_BACKUP_PATH"
+}
+
+activate_installation() {
+    local index=0
+
+    INSTALL_IN_PROGRESS=1
+    while [ "$index" -lt "${#RUNTIME_TARGETS[@]}" ]; do
+        if ! mv "${RUNTIME_SOURCES[$index]}" "${RUNTIME_TARGETS[$index]}"; then
+            echo -e "${RED}✗ Failed to activate runtime files${NC}"
+            return 1
+        fi
+        index=$((index + 1))
+    done
+
+    if [ "$SETTINGS_HAD_ORIGINAL" -eq 1 ]; then
+        if ! replace_backup_path; then
+            echo -e "${RED}✗ Failed to publish settings.json.backup${NC}"
+            return 1
+        fi
+        SETTINGS_BACKUP_TEMP=""
+    fi
+    if ! mv "$SETTINGS_REPLACEMENT_TEMP" "$SETTINGS_TARGET_PATH"; then
+        echo -e "${RED}✗ Failed to publish settings.json${NC}"
+        return 1
+    fi
+    SETTINGS_REPLACEMENT_TEMP=""
+    INSTALL_IN_PROGRESS=0
+}
+
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 # Download statusline runtime files
 echo -e "${DIM}Downloading statusline runtime...${NC}"
 if download_stage_file "statusline.sh" 700 "$STATUSLINE_SHA256" \
     && download_stage_file "lib/statusline_themes.sh" 600 "$THEMES_LIB_SHA256" \
     && download_stage_file "lib/statusline_display.sh" 600 "$DISPLAY_LIB_SHA256" \
     && download_stage_file "lib/statusline_usage.sh" 600 "$USAGE_LIB_SHA256"; then
-    mv "$stage_dir/statusline.sh" "$SCRIPT_PATH"
-    mv "$stage_dir/lib/statusline_themes.sh" "$THEMES_LIB_PATH"
-    mv "$stage_dir/lib/statusline_display.sh" "$DISPLAY_LIB_PATH"
-    mv "$stage_dir/lib/statusline_usage.sh" "$USAGE_LIB_PATH"
-    echo -e "${GREEN}✓${NC} Installed $SCRIPT_PATH"
-    echo -e "${GREEN}✓${NC} Installed $THEMES_LIB_PATH"
-    echo -e "${GREEN}✓${NC} Installed $DISPLAY_LIB_PATH"
-    echo -e "${GREEN}✓${NC} Installed $USAGE_LIB_PATH"
+    :
 else
     echo -e "${RED}✗ Failed to download statusline runtime files${NC}"
     exit 1
 fi
 
-# Update settings.json
 echo -e "${DIM}Configuring settings.json...${NC}"
+if ! prepare_settings_files || ! prepare_runtime_backups || ! activate_installation; then
+    exit 1
+fi
 
-STATUSLINE_CONFIG='{
-  "type": "command",
-  "command": "~/.claude/statusline.sh",
-  "padding": 0
-}'
-
-if [ -f "$SETTINGS_PATH" ]; then
-    # Backup existing settings
-    cp -p "$SETTINGS_PATH" "$SETTINGS_PATH.backup"
-
-    # Always update statusLine to point to the correct script
-    tmp=$(mktemp "$SETTINGS_PATH.XXXXXX") || { echo "Failed to create temp file"; exit 1; }
-    jq --argjson sl "$STATUSLINE_CONFIG" '.statusLine = $sl' "$SETTINGS_PATH" > "$tmp"
-    chmod 600 "$tmp"
-    mv "$tmp" "$SETTINGS_PATH"
+echo -e "${GREEN}✓${NC} Installed $SCRIPT_PATH"
+echo -e "${GREEN}✓${NC} Installed $THEMES_LIB_PATH"
+echo -e "${GREEN}✓${NC} Installed $DISPLAY_LIB_PATH"
+echo -e "${GREEN}✓${NC} Installed $USAGE_LIB_PATH"
+if [ "$SETTINGS_HAD_ORIGINAL" -eq 1 ]; then
     echo -e "${GREEN}✓${NC} Updated settings.json"
-    echo -e "  ${DIM}Backup saved to $SETTINGS_PATH.backup${NC}"
+    echo -e "  ${DIM}Backup saved to $SETTINGS_BACKUP_PATH${NC}"
 else
-    # Create new settings.json
-    (umask 077; echo "{\"statusLine\": $STATUSLINE_CONFIG}" | jq . > "$SETTINGS_PATH")
     echo -e "${GREEN}✓${NC} Created settings.json"
 fi
 
@@ -156,6 +398,6 @@ echo -e "${GREEN}${BOLD}✓ Installation complete!${NC}"
 echo ""
 echo -e "  ${DIM}Restart Claude Code to see your new statusline.${NC}"
 echo ""
-echo -e "  ${CYAN}🌱 ████░░░░░░  ·  repo/main*  ·  🔥↓  ·  💥▁${NC}"
-echo -e "  ${DIM}    5K/200K  ·  Opus 5  ·  🧠max  ·  ⏱️ 5m${NC}"
+echo -e "${CYAN}💭 ███░░░░░░░  ·  claudeline/main  ·  Claude Opus 4.1  ·  🧠high${NC}"
+echo -e "${DIM}  73.5K/1.00M  ·  ♨️→  ·  💥▃  ·  ⏱️ 45m${NC}"
 echo ""

@@ -9,7 +9,7 @@ git clone https://github.com/scttbnsn/claudeline.git
 cd claudeline
 ```
 
-Dependencies: `bash` (5.x), `jq`, `git`, `perl` (5.14+).
+Dependencies: `bash` (3.2+), `jq`, `git`, `perl` (5.14+).
 
 ## Running Tests
 
@@ -20,7 +20,7 @@ for f in tests/*.sh; do bash "$f" || exit 1; done
 ## Linting
 
 ```bash
-shellcheck -x statusline.sh lib/statusline_display.sh lib/statusline_usage.sh
+shellcheck -x -e SC2034 -S warning statusline.sh lib/statusline_themes.sh lib/statusline_display.sh lib/statusline_usage.sh
 ```
 
 ## Commit Style

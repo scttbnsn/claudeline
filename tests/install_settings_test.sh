@@ -2,6 +2,7 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+. "$repo_root/tests/install_test_helpers.sh"
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 
@@ -131,8 +132,10 @@ run_install() {
     local shim_dir=$2
     local download_dir=$3
 
+    local installer="$home_dir/install.sh"
+    prepare_installer_copy "$repo_root" "$installer"
     HOME="$home_dir" PATH="$shim_dir:$PATH" TEST_DOWNLOAD_ROOT="$download_dir" \
-        "$bash_bin" "$repo_root/install.sh" > /dev/null
+        "$bash_bin" "$installer" > /dev/null
 }
 
 create_home="$tmpdir/create-home"

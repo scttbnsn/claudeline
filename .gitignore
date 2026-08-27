@@ -13,8 +13,7 @@ Thumbs.db
 .claude-usage.d/
 
 # Claude Code local state
-.claude/settings.local.json
-.claude/worktrees/
+.claude/
 
 # Logs
 logs/

@@ -14,7 +14,7 @@ source "$repo_root/lib/statusline_usage.sh"
 lock_dir="$tmpdir/.extra-usage-fetch.lock"
 
 # A fresh lock dir is acquired.
-if ! try_lock_dir "$lock_dir"; then
+if ! try_lock_dir "$lock_dir" "owner-a"; then
     echo "FAIL: try_lock_dir should acquire a lock dir that does not exist yet" >&2
     exit 1
 fi
@@ -24,7 +24,7 @@ fi
 }
 
 # A live (fresh) lock dir blocks a second acquire.
-if try_lock_dir "$lock_dir"; then
+if try_lock_dir "$lock_dir" "owner-b"; then
     echo "FAIL: try_lock_dir should not acquire a lock dir that is already held" >&2
     exit 1
 fi
@@ -42,7 +42,7 @@ stale=$(find "$lock_dir" -maxdepth 0 -mmin +2 -print 2>/dev/null)
     exit 1
 }
 
-if ! try_lock_dir "$lock_dir"; then
+if ! try_lock_dir "$lock_dir" "owner-b"; then
     echo "FAIL: try_lock_dir should reclaim a lock dir older than 2 minutes" >&2
     exit 1
 fi
@@ -50,5 +50,24 @@ fi
     echo "FAIL: try_lock_dir should hold a freshly reclaimed lock dir" >&2
     exit 1
 }
+
+# The displaced owner must not release the replacement owner's lock. A third
+# caller remains blocked until the current owner performs an owned release.
+if release_lock_dir "$lock_dir" "owner-a"; then
+    echo "FAIL: a displaced owner should not release its replacement's lock" >&2
+    exit 1
+fi
+if try_lock_dir "$lock_dir" "owner-c"; then
+    echo "FAIL: a third caller should remain blocked by the replacement owner" >&2
+    exit 1
+fi
+if ! release_lock_dir "$lock_dir" "owner-b"; then
+    echo "FAIL: the current owner should release its own lock" >&2
+    exit 1
+fi
+if ! try_lock_dir "$lock_dir" "owner-c"; then
+    echo "FAIL: a third caller should acquire after the current owner releases" >&2
+    exit 1
+fi
 
 printf 'ok\n'

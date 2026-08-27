@@ -15,6 +15,44 @@ if ! declare -F is_decimal_value >/dev/null 2>&1; then
     }
 fi
 
+if ! declare -F decimal_to_scaled_integer >/dev/null 2>&1; then
+    decimal_to_scaled_integer() {
+        local value=$1
+        local scale=$2
+        local out_var=$3
+        local sign="" int_part="" frac_part="" kept="" next_digit="0"
+        local multiplier=1 magnitude=0 i=0
+
+        is_decimal_value "$value" || return 1
+        case "$value" in
+            -*) sign="-"; value=${value#-} ;;
+        esac
+        case "$value" in
+            .*) value="0$value" ;;
+        esac
+
+        int_part=${value%%.*}
+        [[ "$value" == *.* ]] && frac_part=${value#*.}
+        for ((i = 0; i < scale; i++)); do
+            multiplier=$((multiplier * 10))
+            kept="${kept}${frac_part:i:1}"
+        done
+        while [ "${#kept}" -lt "$scale" ]; do
+            kept="${kept}0"
+        done
+        next_digit=${frac_part:scale:1}
+        [ -n "$next_digit" ] || next_digit=0
+
+        magnitude=$((10#$int_part * multiplier))
+        [ -n "$kept" ] && magnitude=$((magnitude + 10#$kept))
+        [ "$next_digit" -ge 5 ] && magnitude=$((magnitude + 1))
+        if [ -n "$sign" ] && [ "$magnitude" -ne 0 ]; then
+            magnitude=$((-magnitude))
+        fi
+        printf -v "$out_var" '%s' "$magnitude"
+    }
+fi
+
 # Context tier lookup table
 CONTEXT_TIERS_FULL_WINDOW=(
     "15|CTX_CYAN|✨"
@@ -207,7 +245,7 @@ format_burst_indicator() {
         return
     fi
 
-    if ! printf -v burst_pct "%.0f" "$burst_usage" 2>>"$STATUSLINE_DEBUG_LOG"; then
+    if ! decimal_to_scaled_integer "$burst_usage" 0 burst_pct; then
         burst_pct=0
     fi
     burst_pct=${burst_pct:-0}
@@ -259,8 +297,7 @@ format_burst_indicator() {
 
 # Convert a validated decimal string to a fixed-point integer scaled by 10^4
 # (4 fractional digits kept, the rest truncated). Pure bash — no bc, no
-# printf %.0f (whose rounding mode for .5 is not guaranteed half-up across
-# platforms, and the spend segment's dollar figure needs to be).
+# Avoids floating-point parsing so JSON dot decimals work under every locale.
 decimal_to_fixed4() {
     local value=$1
     local sign="" int_part="" frac_part=""
@@ -341,31 +378,34 @@ format_spend_indicator() {
         ""|_|null) ;;
         *) return 0 ;;
     esac
+    if is_sentinel_value "$monthly_limit"; then
+        REPLY="${icon} ∞"
+        return 0
+    fi
     is_decimal_value "$used_credits" || return 0
+    case "$used_credits" in -*) return 0 ;; esac
 
     if ! [[ "$decimal_places" =~ ^[0-9]+$ ]] || [ "$decimal_places" -gt 6 ]; then
         decimal_places=2
     fi
 
-    local unlimited=0 percent=""
-    if is_sentinel_value "$monthly_limit"; then
-        unlimited=1
+    local percent="" used_fixed=0 limit_fixed=0
+    is_decimal_value "$monthly_limit" || return 0
+    case "$monthly_limit" in -*) return 0 ;; esac
+    decimal_to_fixed4 "$monthly_limit"
+    limit_fixed=$REPLY
+    REPLY=""
+    if [ "$limit_fixed" -le 0 ]; then
+        return 0
+    fi
+    if is_decimal_value "$utilization"; then
+        case "$utilization" in -*) return 0 ;; esac
+        round_decimal_half_up "$utilization" 0
+        percent=$REPLY
     else
-        if is_decimal_value "$utilization"; then
-            round_decimal_half_up "$utilization" 0
-            percent=$REPLY
-        elif is_decimal_value "$monthly_limit"; then
-            decimal_to_fixed4 "$used_credits"
-            local used_fixed=$REPLY
-            decimal_to_fixed4 "$monthly_limit"
-            local limit_fixed=$REPLY
-            if [ "$limit_fixed" -gt 0 ]; then
-                percent=$(( (used_fixed * 100 + limit_fixed / 2) / limit_fixed ))
-            else
-                percent=0
-            fi
-        fi
-        [ -n "$percent" ] && [ "$percent" -lt 0 ] && percent=0
+        decimal_to_fixed4 "$used_credits"
+        used_fixed=$REPLY
+        percent=$(( (used_fixed * 100 + limit_fixed / 2) / limit_fixed ))
     fi
 
     local color=""
@@ -379,11 +419,6 @@ format_spend_indicator() {
                 break
             fi
         done
-    fi
-
-    if [ "$unlimited" -eq 1 ]; then
-        REPLY="${icon} ∞"
-        return 0
     fi
 
     local overlimit=""

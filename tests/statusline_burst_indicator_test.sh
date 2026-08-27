@@ -45,6 +45,9 @@ assert_eq "" "$REPLY" "format_burst_indicator ignores missing burst usage"
 format_burst_indicator "0" "1260" 1200
 assert_eq "" "$REPLY" "format_burst_indicator suppresses the zero-percent edge case"
 
+LC_NUMERIC=de_DE.UTF-8 format_burst_indicator "41.6" "_" 1200
+assert_eq "💥<yellow>▄<reset>" "$REPLY" "format_burst_indicator parses JSON decimals under a comma-decimal locale"
+
 assert_burst_tier "1" "💥<cyan>▁<reset>" "format_burst_indicator renders the cyan tier"
 assert_burst_tier "13" "💥<teal>▂<reset>" "format_burst_indicator renders the teal tier"
 assert_burst_tier "25" "💥<green>▃<reset>" "format_burst_indicator renders the green tier"

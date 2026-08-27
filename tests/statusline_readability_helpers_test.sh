@@ -52,15 +52,19 @@ EOF
 source "$helpers_file"
 
 git() {
+    [ "${GIT_OPTIONAL_LOCKS:-}" = 0 ] || {
+        printf 'git probe did not disable optional locks\n' >&2
+        return 1
+    }
     [ "${1:-}" = "-C" ] && shift 2  # tolerate the git -C <dir> prefix
     case "$*" in
         "rev-parse --show-toplevel")
             printf '/tmp/demo\n'
             ;;
-        "status -sb")
-            printf '## main...origin/main [ahead 2, behind 1]\n M file.txt\nM  staged.txt\n'
+        "status --porcelain=v2 --branch --untracked-files=no")
+            printf '# branch.oid 1234567890abcdef\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +2 -1\n1 .M N... 100644 100644 100644 abc abc file.txt\n1 M. N... 100644 100644 100644 abc abc staged.txt\n'
             ;;
-        "rev-parse --verify refs/stash")
+        "rev-parse --verify --quiet refs/stash")
             return 0
             ;;
         *)
@@ -72,9 +76,70 @@ git() {
 
 read_git_status_info "/tmp/demo/subdir"
 assert_eq 'demo' "$DIR_NAME" "git helper captures repo directory name from git root"
-assert_eq 'main*+↑2↓1$' "$BRANCH" "git helper composes branch decorations from porcelain status"
+assert_eq 'main*+↑2↓1$' "$BRANCH" "git helper composes branch decorations from stable porcelain v2 status"
 
 git() {
+    [ "${GIT_OPTIONAL_LOCKS:-}" = 0 ] || return 1
+    [ "${1:-}" = "-C" ] && shift 2
+    case "$*" in
+        "rev-parse --show-toplevel") printf '/tmp/demo\n' ;;
+        "status --porcelain=v2 --branch --untracked-files=no")
+            printf '# branch.oid 1234567890abcdef\n# branch.head conflicts\nu UU N... 100644 100644 100644 100644 abc abc abc both.txt\n'
+            ;;
+        "rev-parse --verify --quiet refs/stash") return 1 ;;
+        *) return 1 ;;
+    esac
+}
+read_git_status_info "/tmp/demo"
+assert_eq 'conflicts*+' "$BRANCH" "unmerged entries mark both worktree and index dirty"
+
+git() {
+    [ "${GIT_OPTIONAL_LOCKS:-}" = 0 ] || return 1
+    [ "${1:-}" = "-C" ] && shift 2
+    case "$*" in
+        "rev-parse --show-toplevel") printf '/tmp/demo\n' ;;
+        "status --porcelain=v2 --branch --untracked-files=no")
+            printf '# branch.oid 1234567890abcdef\n# branch.head types\n1 T. N... 100644 120000 120000 abc abc staged-type.txt\n1 .T N... 100644 100644 100644 abc abc worktree-type.txt\n'
+            ;;
+        "rev-parse --verify --quiet refs/stash") return 1 ;;
+        *) return 1 ;;
+    esac
+}
+read_git_status_info "/tmp/demo"
+assert_eq 'types*+' "$BRANCH" "type changes mark the corresponding worktree and index states dirty"
+
+git() {
+    [ "${GIT_OPTIONAL_LOCKS:-}" = 0 ] || return 1
+    [ "${1:-}" = "-C" ] && shift 2
+    case "$*" in
+        "rev-parse --show-toplevel") printf '/tmp/demo\n' ;;
+        "status --porcelain=v2 --branch --untracked-files=no")
+            printf '# branch.oid (initial)\n# branch.head first-branch\n'
+            ;;
+        "rev-parse --verify --quiet refs/stash") return 1 ;;
+        *) return 1 ;;
+    esac
+}
+read_git_status_info "/tmp/demo"
+assert_eq 'first-branch' "$BRANCH" "unborn repositories keep their configured branch name"
+
+git() {
+    [ "${GIT_OPTIONAL_LOCKS:-}" = 0 ] || return 1
+    [ "${1:-}" = "-C" ] && shift 2
+    case "$*" in
+        "rev-parse --show-toplevel") printf '/tmp/demo\n' ;;
+        "status --porcelain=v2 --branch --untracked-files=no")
+            printf '# branch.oid 1234567890abcdef\n# branch.head (detached)\n'
+            ;;
+        "rev-parse --verify --quiet refs/stash") return 1 ;;
+        *) return 1 ;;
+    esac
+}
+read_git_status_info "/tmp/demo"
+assert_eq 'detached@1234567' "$BRANCH" "detached repositories render a stable short object identity"
+
+git() {
+    [ "${GIT_OPTIONAL_LOCKS:-}" = 0 ] || return 1
     [ "${1:-}" = "-C" ] && shift 2  # tolerate the git -C <dir> prefix
     case "$*" in
         "rev-parse --show-toplevel")

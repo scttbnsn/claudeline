@@ -41,37 +41,76 @@ fi
 # ------------------------------------------------------------ credentials ----
 rule "oauth credentials"
 TOKEN=""
+UNSAFE_AUTH_SEEN=0
 
 read_creds() {
     # $1 = raw credentials JSON, $2 = label. Sets TOKEN/CRED_SOURCE on success.
-    local raw=$1 label=$2 token expires refresh
-    token=$(printf '%s' "$raw" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
-    [ -n "$token" ] || return 1
-    expires=$(printf '%s' "$raw" | jq -r '.claudeAiOauth.expiresAt // empty' 2>/dev/null)
-    refresh=$(printf '%s' "$raw" | jq -r 'if (.claudeAiOauth.refreshToken // "") == "" then "no" else "yes" end' 2>/dev/null)
+    local raw=$1 label=$2 access_credential="" expires="" refresh=""
+    local secs=0 now=0 now_ms=0
+
+    if ! printf '%s' "$raw" | jq -e '
+        .claudeAiOauth.accessToken
+        | type == "string" and length > 0' >/dev/null 2>&1; then
+        return 1
+    fi
+    if ! printf '%s' "$raw" | jq -e '
+        .claudeAiOauth.accessToken
+        | test("[[:cntrl:]]") | not' >/dev/null 2>&1; then
+        UNSAFE_AUTH_SEEN=1
+        return 1
+    fi
+    access_credential=$(printf '%s' "$raw" | jq -r '.claudeAiOauth.accessToken' 2>/dev/null) || return 1
+    expires=$(printf '%s' "$raw" | jq -er '
+        (.claudeAiOauth.expiresAt // "")
+        | if type == "string" or type == "number" then tostring
+          else error("invalid expiry shape")
+          end' 2>/dev/null) || return 1
+    refresh=$(printf '%s' "$raw" | jq -r '
+        if (.claudeAiOauth.refreshToken // "") == "" then "no" else "yes" end' 2>/dev/null) || return 1
+    if [ -n "$expires" ] && ! [[ "$expires" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+    if [[ "$expires" =~ ^[0-9]+$ ]]; then
+        now=$(date +%s)
+        now_ms=$((now * 1000))
+        [ "$expires" -gt "$now_ms" ] || return 1
+        secs=$((10#$expires / 1000))
+    fi
+
     printf 'source:            %s\n' "$label"
-    printf 'access token:      present (%s chars)\n' "${#token}"
+    printf 'access token:      present (%s chars)\n' "${#access_credential}"
     printf 'refresh token:     %s\n' "$refresh"
     if [ -n "$expires" ]; then
-        local secs now
-        secs=$((expires / 1000))
-        now=$(date +%s)
         printf 'expiresAt:         %s' "$(date -r "$secs" '+%Y-%m-%d %H:%M:%S %Z' 2>/dev/null || echo "$secs")"
-        if [ "$secs" -lt "$now" ]; then
-            printf '  <-- EXPIRED %s days ago\n' "$(( (now - secs) / 86400 ))"
-        else
-            printf '  (valid)\n'
-        fi
+        printf '  (valid)\n'
     fi
     printf 'scopes:            %s\n' \
         "$(printf '%s' "$raw" | jq -r 'if (.claudeAiOauth.scopes // null) == null then "<not recorded locally>" else (.claudeAiOauth.scopes | join(" ")) end' 2>/dev/null)"
-    TOKEN=$token
+    TOKEN=$access_credential
     return 0
+}
+
+decode_keychain_value() {
+    local raw=$1 compact="" decoded=""
+
+    compact=$(printf '%s' "$raw" | tr -d '[:space:]')
+    if [[ -z "$compact" || ! "$compact" =~ ^[0-9a-fA-F]+$ ]]; then
+        printf '%s' "$raw"
+        return 0
+    fi
+    [ $(( ${#compact} % 2 )) -eq 0 ] || return 1
+    command -v xxd >/dev/null 2>&1 || return 1
+    decoded=$(printf '%s' "$compact" | xxd -r -p 2>/dev/null) || return 1
+    printf '%s' "$decoded"
 }
 
 if [ "$(uname -s)" = "Darwin" ]; then
     if kc=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null); then
-        read_creds "$kc" "macOS keychain" || printf 'keychain entry present but has no accessToken\n'
+        if decoded=$(decode_keychain_value "$kc"); then
+            read_creds "$decoded" "macOS keychain" || printf 'keychain entry present but has no usable access credential\n'
+        else
+            printf 'keychain entry present but could not be decoded\n'
+        fi
     else
         printf 'no keychain entry for "Claude Code-credentials"\n'
     fi
@@ -80,7 +119,7 @@ fi
 if [ -z "$TOKEN" ]; then
     cred_file="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json"
     if [ -r "$cred_file" ]; then
-        read_creds "$(cat "$cred_file")" "$cred_file" || printf 'credentials file has no accessToken\n'
+        read_creds "$(cat "$cred_file")" "$cred_file" || printf 'credentials file has no usable access credential\n'
     else
         printf 'no credentials file at %s\n' "$cred_file"
     fi
@@ -94,7 +133,10 @@ for var in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN \
            ANTHROPIC_VERTEX_PROJECT_ID CLAUDE_CONFIG_DIR; do
     if [ -n "${!var:-}" ]; then
         case "$var" in
-            *KEY|*TOKEN) printf '%s = <set, %s chars>\n' "$var" "${#var}" ;;
+            *KEY|*TOKEN)
+                secret_value=${!var}
+                printf '%s = <set, %s chars>\n' "$var" "${#secret_value}"
+                ;;
             *)           printf '%s = %s\n' "$var" "${!var}" ;;
         esac
         found=1
@@ -103,19 +145,41 @@ done
 [ "$found" -eq 1 ] || printf 'none set (plain claude.ai OAuth session)\n'
 
 # --------------------------------------------------------------- endpoints ---
+escape_curl_config_value() {
+    local value=$1
+
+    case "$value" in
+        *$'\n'*|*$'\r'*) return 1 ;;
+    esac
+    if printf '%s' "$value" | LC_ALL=C grep -q '[^[:print:]]'; then
+        return 1
+    fi
+    value=${value//\\/\\\\}
+    value=${value//\"/\\\"}
+    printf '%s' "$value"
+}
+
 probe() {
     # $1 = label, $2 = url
-    local label=$1 url=$2 body status
+    local label=$1 url=$2 body status escaped_credential=""
     printf '\n--- %s\n%s\n' "$label" "$url"
     if [ -z "$TOKEN" ]; then
-        printf 'skipped: no access token to present\n'
+        if [ "$UNSAFE_AUTH_SEEN" -eq 1 ]; then
+            printf 'skipped: access credential contains unsupported characters\n'
+        else
+            printf 'skipped: no access token to present\n'
+        fi
         return
     fi
-    body=$(curl -sS --max-time 15 -w '\n%{http_code}' \
-        -H "Authorization: Bearer $TOKEN" \
-        -H "anthropic-beta: $BETA_HEADER" \
-        -H "User-Agent: $USER_AGENT" \
-        "$url" 2>&1)
+    if ! escaped_credential=$(escape_curl_config_value "$TOKEN"); then
+        printf 'skipped: access credential contains unsupported characters\n'
+        return
+    fi
+    body=$({
+        printf 'header = "Authorization: Bearer %s"\n' "$escaped_credential"
+        printf 'header = "anthropic-beta: %s"\n' "$BETA_HEADER"
+        printf 'user-agent = "%s"\n' "$USER_AGENT"
+    } | curl -q --config - -sS --max-time 15 -w '\n%{http_code}' "$url" 2>&1)
     status=$(printf '%s' "$body" | tail -1)
     body=$(printf '%s' "$body" | sed '$d')
     printf 'HTTP %s\n' "$status"

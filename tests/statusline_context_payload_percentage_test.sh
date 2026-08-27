@@ -80,6 +80,10 @@ payload_pct=$(render_context 73 1000 200000 payload-pct)
 assert_eq '🔥 ███████░░░' "$(sed -n '1p' <<< "$payload_pct")" \
     "payload used_percentage controls the context bar regardless of token ratio"
 
+locale_pct=$(LC_ALL=de_DE.UTF-8 render_context 73.5 1000 200000 comma-locale-pct)
+assert_eq '🔥 ███████░░░' "$(sed -n '1p' <<< "$locale_pct")" \
+    "dot-decimal JSON percentages render under a comma-decimal Unicode locale"
+
 fallback_pct=$(render_context _ 50000 200000 fallback-pct)
 assert_eq '🌱 ██░░░░░░░░' "$(sed -n '1p' <<< "$fallback_pct")" \
     "sentinel used_percentage falls back to the current-token ratio"

@@ -2,8 +2,10 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+. "$repo_root/tests/install_test_helpers.sh"
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
+jq_bin=$(command -v jq)
 
 get_perm() {
     local path=$1
@@ -48,6 +50,7 @@ assert_file_contains() {
 home_dir="$tmpdir/home"
 shim_dir="$tmpdir/shim"
 download_dir="$tmpdir/downloads"
+installer="$tmpdir/install.sh"
 mkdir -p "$home_dir/.claude/lib" "$shim_dir" "$download_dir/lib"
 
 printf 'malicious-display\n' > "$home_dir/.claude/lib/statusline_display.sh"
@@ -58,6 +61,7 @@ cp "$repo_root/statusline.sh" "$download_dir/statusline.sh"
 cp "$repo_root/lib/statusline_display.sh" "$download_dir/lib/statusline_display.sh"
 cp "$repo_root/lib/statusline_themes.sh" "$download_dir/lib/statusline_themes.sh"
 cp "$repo_root/lib/statusline_usage.sh" "$download_dir/lib/statusline_usage.sh"
+prepare_installer_copy "$repo_root" "$installer"
 
 cat > "$shim_dir/curl" <<'EOF'
 #!/usr/bin/env bash
@@ -98,15 +102,9 @@ cp "$src" "$output"
 EOF
 chmod +x "$shim_dir/curl"
 
-cat > "$shim_dir/jq" <<'EOF'
+cat > "$shim_dir/jq" <<EOF
 #!/usr/bin/env bash
-set -euo pipefail
-
-if [ "${1:-}" = "--argjson" ]; then
-    cat "${4:?}"
-else
-    cat
-fi
+exec "$jq_bin" "\$@"
 EOF
 chmod +x "$shim_dir/jq"
 
@@ -126,7 +124,25 @@ export HOME="$home_dir"
 export PATH="$shim_dir:$PATH"
 export TEST_DOWNLOAD_ROOT="$download_dir"
 
-bash "$repo_root/install.sh" > "$tmpdir/install.out"
+bash "$installer" > "$tmpdir/install.out"
+
+expected_preview=$'💭 ███░░░░░░░  ·  claudeline/main  ·  Claude Opus 4.1  ·  🧠high\n  73.5K/1.00M  ·  ♨️→  ·  💥▃  ·  ⏱️ 45m'
+readme_preview=$(awk '
+    /^```$/ && !inside { inside=1; next }
+    /^```$/ && inside { exit }
+    inside { print }
+' "$repo_root/README.md")
+assert_eq "$expected_preview" "$readme_preview" "README shows the canonical v2 preview"
+
+plain_install_output=$(perl -pe 's/\e\[[0-9;]*m//g' "$tmpdir/install.out")
+case "$plain_install_output" in
+    *"$expected_preview"*) ;;
+    *)
+        printf 'FAIL: installer completion output should show the canonical v2 preview\nexpected block:\n%s\nactual output:\n%s\n' \
+            "$expected_preview" "$plain_install_output" >&2
+        exit 1
+        ;;
+esac
 
 assert_file_contains 'source "$STATUSLINE_DIR/lib/statusline_display.sh"' "$HOME/.claude/statusline.sh" "installer writes the sourced statusline"
 assert_file_contains '# shellcheck shell=bash' "$HOME/.claude/lib/statusline_display.sh" "installer downloads display module"

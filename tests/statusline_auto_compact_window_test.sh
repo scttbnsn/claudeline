@@ -79,6 +79,21 @@ render_window() {
         | sed -n '2s/^ *//p'
 }
 
+assert_clean_window() {
+    local expected=$1
+    local label=$2
+    local stderr_file="$tmpdir/auto-window-${RANDOM}.err"
+    shift 2
+
+    actual=$(render_window "$@" 2> "$stderr_file")
+    assert_eq "$expected" "$actual" "$label"
+    [ ! -s "$stderr_file" ] || {
+        printf 'FAIL: %s\nunexpected stderr:\n' "$label" >&2
+        cat "$stderr_file" >&2
+        exit 1
+    }
+}
+
 reset_settings
 assert_eq '100K/1.00M' "$(render_window)" \
     "with nothing configured the bar measures against the physical window"
@@ -103,6 +118,33 @@ assert_eq '100K/400K' "$(render_window CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000)" 
 
 assert_eq '100K/300K' "$(render_window CLAUDE_CODE_AUTO_COMPACT_WINDOW=not-a-number)" \
     "an unparseable env var falls through to the settings key"
+
+assert_clean_window '100K/400K' \
+    "a leading-zero env window keeps base-10 meaning" \
+    CLAUDE_CODE_AUTO_COMPACT_WINDOW=0400000
+assert_clean_window '100K/400K' \
+    "a multiply padded env window keeps base-10 meaning" \
+    CLAUDE_CODE_AUTO_COMPACT_WINDOW=000400000
+assert_clean_window '100K/100K' \
+    "a padded env window below the floor clamps in base 10" \
+    CLAUDE_CODE_AUTO_COMPACT_WINDOW=090000
+assert_clean_window '100K/300K' \
+    "an all-zero env window is rejected and falls through to settings" \
+    CLAUDE_CODE_AUTO_COMPACT_WINDOW=000000
+
+reset_settings
+write_settings "$project_dir/.claude/settings.local.json" '{"autoCompactWindow":"0400000"}'
+assert_clean_window '100K/400K' \
+    "a leading-zero settings window keeps base-10 meaning"
+write_settings "$project_dir/.claude/settings.local.json" '{"autoCompactWindow":"000400000"}'
+assert_clean_window '100K/400K' \
+    "a multiply padded settings window keeps base-10 meaning"
+write_settings "$project_dir/.claude/settings.local.json" '{"autoCompactWindow":"090000"}'
+assert_clean_window '100K/100K' \
+    "a padded settings window below the floor clamps in base 10"
+write_settings "$project_dir/.claude/settings.local.json" '{"autoCompactWindow":"000000"}'
+assert_clean_window '100K/1.00M' \
+    "an all-zero settings window is rejected"
 
 # Claude Code clamps a configured window into [100000, 1000000].
 assert_eq '100K/100K' "$(render_window CLAUDE_CODE_AUTO_COMPACT_WINDOW=25000)" \

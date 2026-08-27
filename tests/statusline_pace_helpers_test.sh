@@ -56,12 +56,17 @@ emoji_case() {
 }
 
 assert_eq "42" "$(normalize_case 41.6)" "normalize_pace_usage_pct rounds decimal usage to a whole percent"
+assert_eq "42" "$(LC_NUMERIC=de_DE.UTF-8 normalize_case 41.6)" "normalize_pace_usage_pct parses JSON decimals under a comma-decimal locale"
 assert_eq "" "$(normalize_case _)" "normalize_pace_usage_pct omits underscore placeholders"
 assert_eq "" "$(normalize_case null)" "normalize_pace_usage_pct omits null placeholders"
 assert_eq "" "$(normalize_case nope)" "normalize_pace_usage_pct rejects malformed usage"
 
 assert_eq " -1.2d" "$(reset_suffix_case 12500)" "format_pace_reset_suffix formats day countdowns"
 assert_eq " -12h" "$(reset_suffix_case 5000)" "format_pace_reset_suffix formats sub-day countdowns"
+assert_eq " -1h" "$(reset_suffix_case 417)" "format_pace_reset_suffix formats the first whole-hour interval"
+assert_eq " -60m" "$(reset_suffix_case 416)" "format_pace_reset_suffix rounds the sub-hour boundary to minutes"
+assert_eq " -1m" "$(reset_suffix_case 1)" "format_pace_reset_suffix rounds a positive short interval to one minute"
+assert_eq " -1m" "$(reset_suffix_case 0)" "format_pace_reset_suffix never renders negative zero hours after fixed-point truncation"
 
 assert_eq "0|10000|10000|" "$(signals_case 50 _ 1000000)" "calculate_pace_signals keeps default values without reset data"
 assert_eq "503200|12173|10000| -1.2d" "$(signals_case 100 1108000 1000000)" "calculate_pace_signals derives week start, burn rate, and reset suffix"

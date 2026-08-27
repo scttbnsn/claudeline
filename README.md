@@ -11,16 +11,8 @@
 </div>
 
 ```
-🌱 ████░░░░░░  ·  myrepo/main*  ·  🔥↓  ·  💥▁
-│  └────┬────┘     └─────┬─────┘   └┬─┘   └┬┘
-│    context          repo/branch  pace   burst
-│    bar              + git status trend
-└─ context icon (✨🌱💭🧠🔥💾🫠💀)
-
-    73.5K/200K  ·  Opus 5  ·  🧠high  ·  ⏱️ 45m
-    └────┬────┘     └──┬──┘     └┬┘      └──┬──┘
-      context        model     effort    duration
-      tokens
+💭 ███░░░░░░░  ·  claudeline/main  ·  Claude Opus 4.1  ·  🧠high
+  73.5K/1.00M  ·  ♨️→  ·  💥▃  ·  ⏱️ 45m
 ```
 
 <div align="center">
@@ -123,7 +115,7 @@ Dual-signal weekly pace (burn rate + pressure) with 8-tier emoji scale and veloc
 <tr>
 <td align="center" width="33%">
 <h3>Git Integration</h3>
-Repo/branch with status indicators — unstaged, staged, ahead/behind, stash count
+Repo/branch with status indicators — unstaged, staged, ahead/behind, stash presence
 </td>
 <td align="center" width="33%">
 <h3>5 Built-in Themes</h3>
@@ -189,7 +181,7 @@ Tracks **usage% velocity** — how fast you're burning tokens compared to the su
 
 <h2 align="center" id="burst-indicator">💥 Burst Indicator</h2>
 
-**💥 Burst** (5-hour rate limit) — colored bar mapped directly to API utilization %, only shown when > 0%. Alternates to raw percent (`💥25%`) on its own 10-tick rotation cycle.
+**💥 Burst** (5-hour rate limit) — colored bar mapped directly to API utilization %, only shown when > 0%. Alternates to raw percent (`💥25%`) on its own 10-tick rotation cycle. Raw-percent ticks omit the countdown.
 
 | Range | Bar | Color |
 |-------|-----|-------|
@@ -200,9 +192,10 @@ Tracks **usage% velocity** — how fast you're burning tokens compared to the su
 | 50-62% | ▅ | orange |
 | 63-74% | ▆ | red |
 | 75-87% | ▇ -135m | magenta + countdown |
-| 88%+ | █ -90m | bright magenta + countdown |
+| 88-99% | █ -90m | bright magenta + countdown |
+| 100%+ | 🤑 -45m | limit + countdown |
 
-A dimmed countdown shows minutes until the 5-hour window resets whenever usage is 75%+ *or* the reset is under an hour away.
+On bar-display ticks, a dimmed countdown shows minutes until the 5-hour window resets whenever usage is 75%+ *or* the reset is under an hour away.
 
 <hr>
 
@@ -220,13 +213,15 @@ A null `monthly_limit` means unlimited, not zero — renders as `💰 ∞` since
 |-------|-------|
 | 0-9% | cyan |
 | 10-19% | teal |
-| 20-39% | green |
-| 40-59% | lime |
-| 60-69% | yellow |
-| 70-79% | orange |
-| 80-89% | coral |
-| 90-99% | red |
-| 100%+ | magenta |
+| 20-29% | green |
+| 30-39% | lime |
+| 40-49% | yellow |
+| 50-59% | orange |
+| 60-69% | coral |
+| 70-79% | red |
+| 80-89% | hot pink |
+| 90-99% | magenta |
+| 100%+ | white-hot |
 
 Enable it with `CLAUDELINE_SPEND=1` or `spend=1` in `claudeline.conf`. Most accounts don't have `extra_usage` at all, which is why this stays off unless asked for. The leading icon defaults to 💰 and can be changed with `CLAUDELINE_SPEND_ICON` or `spend_icon` in `claudeline.conf`.
 
@@ -234,21 +229,9 @@ Enable it with `CLAUDELINE_SPEND=1` or `spend=1` in `claudeline.conf`. Most acco
 
 <h2 align="center" id="performance">⚡ Performance</h2>
 
-| Scenario | Time |
-|----------|------|
-| Typical | ~30ms |
+The hot path parses the Claude Code payload with one `jq` invocation, formats the display in Bash, and performs read-only Git probes only when the working directory is in a repository. Git probes disable optional index locks and untracked-file enumeration. Rate-limit data comes directly from the payload, so the default render makes zero network calls.
 
-**Cost breakdown** (typical, ~30ms total):
-
-| Phase | Time | Tool |
-|-------|------|------|
-| Git status | ~90ms | 3 git calls (parallelized with jq parse) |
-| jq parse | ~16ms | 1 jq call |
-| Trend/pace | ~20ms | 1 awk call |
-| Formatting | ~22ms | 1 awk + bash math |
-| Source libs + rest | ~27ms | bash |
-
-Rate limit data comes directly from the Claude Code status line JSON — zero network calls by default. See [Privacy & Network Access](#privacy--network-access) for the one opt-in exception.
+The opt-in spend indicator reads its cache synchronously and refreshes stale data in the background. Failed refreshes enter a cooldown, so status-line renders don't repeatedly perform credential or network work. See [Privacy & Network Access](#privacy--network-access) for that one optional request.
 
 <details>
 <summary><strong>Context bar tiers</strong></summary>
@@ -284,7 +267,7 @@ Whichever is found is clamped to 100K–1M and then capped at the physical windo
 | `CLAUDELINE_THEME=nord` | Theme: `vibey` (default), `dark`, `light`, `nord`, `gruvbox` |
 | `CLAUDELINE_SEGMENTS=context,git,pace` | Show only listed segments. Available: `context`, `spend`, `git`, `pace`, `burst`, `duration`, `tokens`, `effort`, `model`, `stale` |
 | `NO_COLOR=1` | Disables all color output ([spec](https://no-color.org)) |
-| `CLAUDELINE_DEBUG=1` | Enables debug logging to `$TMPDIR/claudeline-statusline-debug.log` |
+| `CLAUDELINE_DEBUG=1` | Enables private debug logging under the active Claude config profile (`~/.claude/.claudeline/debug.log` by default) |
 | `CLAUDELINE_DEBUG_LOG=/path` | Custom debug log path (requires `CLAUDELINE_DEBUG=1`) |
 | `TREND_WINDOW=900` | Trend arrow sample window in seconds (default: 900) |
 | `TREND_HISTORY_MAX_AGE=86400` | Max age for trend history entries in seconds (default: 86400) |
@@ -293,31 +276,32 @@ Whichever is found is clamped to 100K–1M and then capped at the physical windo
 | `CLAUDELINE_NO_NETWORK=1` | Hard kill switch — skips the spend fetch entirely, independent of `CLAUDELINE_SPEND` |
 | `EXTRA_USAGE_TTL=600` | Spend cache TTL in seconds (default: 600) |
 
-**Local data stored** in `~/.claude-usage.d/` (created with `chmod 700`):
+**Local data stored** in `~/.claude-usage.d/` by default, or `$CLAUDE_CONFIG_DIR/.claude-usage.d/` for an explicit profile (created with `chmod 700`):
 
 | File | Purpose |
 |------|---------|
 | `.usage-history` | Rolling 24h usage samples for trend arrows |
 | `.extra-usage-cache` | Cached spend segment fields (only written when `CLAUDELINE_SPEND=1`) |
-| `.extra-usage-fetch.lock` | Lock directory guarding the background spend refresh against concurrent panes |
+| `.extra-usage-cache.retry` | Short retry cooldown after a failed spend refresh |
+| `.extra-usage-fetch.lock` | Owned lock directory guarding the background spend refresh against concurrent panes |
 
 <hr>
 
 <h2 align="center" id="privacy--network-access">🔒 Privacy & Network Access</h2>
 
-By default claudeline makes **zero network calls**. Opting into the [spend indicator](#spend-indicator) (`CLAUDELINE_SPEND=1`) adds **one optional API call** to `https://api.anthropic.com/api/oauth/usage` — a `GET` request with only an `Authorization` header and no request body. Nothing else in claudeline touches the network.
+By default claudeline makes **zero network calls**. Opting into the [spend indicator](#spend-indicator) (`CLAUDELINE_SPEND=1`) adds **one optional API call** to `https://api.anthropic.com/api/oauth/usage` — a `GET` request with the credential plus required `Accept`, beta, and user-agent metadata, and no request body. Nothing else in claudeline touches the network.
 
 The OAuth token is read **read-only**, never refreshed or written back — a refresh response can rotate the refresh token, and a second writer racing Claude Code's own refresh could log you out:
 - **macOS:** the `Claude Code-credentials` entry in Keychain, via `security find-generic-password`
 - **Fallback (all platforms):** `${CLAUDE_CONFIG_DIR:-~/.claude}/.credentials.json`
 
-The fetch runs in a **non-blocking background subshell**, guarded by a lock file so concurrent panes don't stampede the endpoint, and is skipped entirely when the cached value is still fresh (`EXTRA_USAGE_TTL`, default 600s).
+The fetch runs in a **non-blocking background subshell**, guarded by an ownership-aware lock directory so concurrent panes don't stampede the endpoint. It is skipped while the cached value is fresh (`EXTRA_USAGE_TTL`, default 600s), and failed refreshes use a short retry cooldown instead of retrying on every render.
 
 | Variable | Effect |
 |----------|--------|
 | `CLAUDELINE_SPEND=1` | Required to enable the spend fetch at all — off by default |
 | `CLAUDELINE_NO_NETWORK=1` | Disables the spend fetch even when `CLAUDELINE_SPEND=1` is set |
-| `CLAUDELINE_DEBUG=1` | Enables debug logging to `$TMPDIR/claudeline-statusline-debug.log` |
+| `CLAUDELINE_DEBUG=1` | Enables private debug logging under the active Claude config profile |
 
 <hr>
 
@@ -337,18 +321,10 @@ The fetch runs in a **non-blocking background subshell**, guarded by a lock file
 <h2 align="center" id="uninstall">🗑 Uninstall</h2>
 
 ```bash
-# Remove statusline files
-rm -f ~/.claude/statusline.sh
-rm -rf ~/.claude/lib/statusline_themes.sh ~/.claude/lib/statusline_display.sh ~/.claude/lib/statusline_usage.sh
-
-# Remove the statusLine key from settings.json
-jq 'del(.statusLine)' ~/.claude/settings.json > ~/.claude/settings.json.tmp && mv ~/.claude/settings.json.tmp ~/.claude/settings.json
-
-# Remove cached data (optional)
-rm -rf ~/.claude-usage.d
+curl -fsSL https://raw.githubusercontent.com/scttbnsn/claudeline/main/uninstall.sh | bash
 ```
 
-Then restart Claude Code.
+The helper honors an exported `CLAUDE_CONFIG_DIR`, preserves absolute or relative `settings.json` links, and leaves unrelated settings and cached history intact. Then restart Claude Code.
 
 ---
 
