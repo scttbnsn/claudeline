@@ -236,10 +236,9 @@ mv() {
     if [ "$RUN_MODE" = EXIT ]; then
         exit 77
     fi
-    attempt=0
-    while [ "$attempt" -lt 1000 ]; do
-        sleep 0.01
-        attempt=$((attempt + 1))
+    deadline=$((SECONDS + 10))
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        :
     done
     return 28
 }
