@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [2.1.0] - 2026-11-02
 
 ### Added
 - A `cache` segment on line 2 shows a prompt-cache countdown (`♻️ 4m`, `<1m`, `1h`) from the `prompt_cache` payload field while the cache is warm, turns yellow under two minutes, and drops first on narrow terminals
@@ -14,6 +14,12 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 - The Keychain lookup now asks for the item whose account is `$USER` first, so an old account-less or legacy "unknown" item can no longer shadow the live credential, and it uses the `Claude Code-credentials-<sha256 prefix>` service name Claude Code writes when `CLAUDE_CONFIG_DIR` is set instead of always reading the default profile's item
+
+### Changed
+- Context tokens come from `context_window.total_input_tokens` when Claude Code sends it, falling back to summing `current_usage`
+
+### Performance
+- Stash presence is read from `git status --show-stash`, dropping one git process per render on git 2.35 and later; older git keeps the `refs/stash` probe
 
 ## [2.0.0] - 2026-08-27
 
