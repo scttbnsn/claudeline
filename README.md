@@ -11,7 +11,7 @@
 </div>
 
 ```
-💭 ███░░░░░░░  ·  claudeline/main  ·  Claude Opus 4.1  ·  🧠high
+💭 ███░░░░░░░  ·  claudeline/main  ·  Claude Opus 5.5  ·  🧠high
   73.5K/1.00M  ·  ♨️→  ·  💥▃  ·  ⏱️ 45m
 ```
 
@@ -84,10 +84,13 @@ Available keys: `theme`, `segments`, `no_color`, `debug`, `debug_log`, `trend_wi
      "statusLine": {
        "type": "command",
        "command": "~/.claude/statusline.sh",
-       "padding": 0
+       "padding": 0,
+       "refreshInterval": 30
      }
    }
    ```
+
+   `refreshInterval` re-runs the status line every 30 seconds, which keeps the duration and reset countdowns current while Claude Code is idle. The installer sets it for you and keeps a positive value you already have.
 
 3. Restart Claude Code
 
@@ -201,7 +204,12 @@ On bar-display ticks, a dimmed countdown shows minutes until the 5-hour window r
 
 <h2 align="center" id="spend-indicator">💰 Spend Indicator</h2>
 
-**Opt-in, off by default.** For enterprise usage-based seats — accounts with a monthly spend cap instead of (or alongside) the usual weekly/5-hour rate limits, where pace and burst have nothing to show. Renders as a bare percentage of the monthly cap used:
+Two sources feed this segment, checked in this order:
+
+1. **Gateway spend limits, free and automatic.** Behind a Claude apps gateway, Claude Code puts `rate_limits.spend_limit` in the status line payload. When it's there, claudeline renders it with no opt-in, no credential read, no cache, and no network call. If the payload also carries `used_usd` and `limit_usd`, the dollar amounts follow the percentage, rounded to whole dollars (e.g. `💰 63% $314/$500`). Hide it with `CLAUDELINE_SEGMENTS` like any other segment.
+2. **Opt-in OAuth `extra_usage`.** When the payload has no spend limit, the segment falls back to the source described below.
+
+**The OAuth source is opt-in, off by default.** For enterprise usage-based seats — accounts with a monthly spend cap instead of (or alongside) the usual weekly/5-hour rate limits, where pace and burst have nothing to show. Renders as a bare percentage of the monthly cap used:
 
 ```
 💰 68%
@@ -223,7 +231,7 @@ A null `monthly_limit` means unlimited, not zero — renders as `💰 ∞` since
 | 90-99% | magenta |
 | 100%+ | white-hot |
 
-Enable it with `CLAUDELINE_SPEND=1` or `spend=1` in `claudeline.conf`. Most accounts don't have `extra_usage` at all, which is why this stays off unless asked for. The leading icon defaults to 💰 and can be changed with `CLAUDELINE_SPEND_ICON` or `spend_icon` in `claudeline.conf`.
+Both sources share the same icon, color scale, and 💀 behavior. Enable the OAuth source with `CLAUDELINE_SPEND=1` or `spend=1` in `claudeline.conf`. Most accounts don't have `extra_usage` at all, which is why this stays off unless asked for. The leading icon defaults to 💰 and can be changed with `CLAUDELINE_SPEND_ICON` or `spend_icon` in `claudeline.conf`.
 
 <hr>
 
@@ -271,7 +279,7 @@ Whichever is found is clamped to 100K–1M and then capped at the physical windo
 | `CLAUDELINE_DEBUG_LOG=/path` | Custom debug log path (requires `CLAUDELINE_DEBUG=1`) |
 | `TREND_WINDOW=900` | Trend arrow sample window in seconds (default: 900) |
 | `TREND_HISTORY_MAX_AGE=86400` | Max age for trend history entries in seconds (default: 86400) |
-| `CLAUDELINE_SPEND=1` | Opt in to the [spend indicator](#spend-indicator) (default: off) |
+| `CLAUDELINE_SPEND=1` | Opt in to the OAuth `extra_usage` source of the [spend indicator](#spend-indicator) (default: off). Gateway spend limits in the payload show without it |
 | `CLAUDELINE_SPEND_ICON=🪙` | Leading icon for the spend indicator (default: `💰`) |
 | `CLAUDELINE_NO_NETWORK=1` | Hard kill switch — skips the spend fetch entirely, independent of `CLAUDELINE_SPEND` |
 | `EXTRA_USAGE_TTL=600` | Spend cache TTL in seconds (default: 600) |

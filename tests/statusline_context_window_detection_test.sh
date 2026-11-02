@@ -87,11 +87,11 @@ render_lines() {
 EOF
 }
 
-render_lines "Claude Opus 4.6 1M context" 200000 "$tmpdir/model-detected.txt"
-model_detected_first_line=$(sed -n '1p' "$tmpdir/model-detected.txt")
-model_detected_second_line=$(sed -n '2p' "$tmpdir/model-detected.txt")
-assert_eq '✨ ░░░░░░░░░░  ·  demo/main*↑2  ·  Claude Opus 4.6' "$model_detected_first_line" "statusline should detect 1M context from the model display name when JSON still says 200K"
-assert_eq '     1K/1.00M  ·  ⏱️ 5m' "$model_detected_second_line" "statusline should detect 1M context from the model display name when JSON still says 200K"
+render_lines "Claude Opus 5.5 1M context" 200000 "$tmpdir/model-name.txt"
+model_name_first_line=$(sed -n '1p' "$tmpdir/model-name.txt")
+model_name_second_line=$(sed -n '2p' "$tmpdir/model-name.txt")
+assert_eq '✨ ░░░░░░░░░░  ·  demo/main*↑2  ·  Claude Opus 5.5' "$model_name_first_line" "statusline should still strip the context suffix from the model name"
+assert_eq '      1K/200K  ·  ⏱️ 5m' "$model_name_second_line" "statusline should trust the JSON 200K window over a 1M model display name"
 
 render_lines "Claude Sonnet 4" 1000000 "$tmpdir/json-detected.txt"
 json_detected_first_line=$(sed -n '1p' "$tmpdir/json-detected.txt")

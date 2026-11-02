@@ -441,20 +441,28 @@ if ! INPUT_FIELDS=$(printf '%s\n' "$input" | jq -r '[
         (.thinking.enabled // false),
         (.context_window.used_percentage // "_"),
         (.workspace.project_dir // ""),
-        (.version // "")
+        (.version // ""),
+        (.rate_limits.spend_limit.used_percentage // "_"),
+        (.rate_limits.spend_limit.resets_at // "_"),
+        (.rate_limits.spend_limit.used_usd // "_"),
+        (.rate_limits.spend_limit.limit_usd // "_"),
+        (.rate_limits.spend_limit.period // "_")
     ] | map(tostring) | map(gsub("[[:cntrl:]]";"")) | join("\u001f")' 2>>"$STATUSLINE_DEBUG_LOG"); then
     debug_log "Failed to parse statusline input; using defaults"
-    INPUT_FIELDS=$'Claude\x1f\x1f0\x1f0\x1f200000\x1f_\x1f_\x1f_\x1f_\x1f0\x1f0\x1f0\x1f0\x1f_\x1ffalse\x1f_\x1f\x1f'
+    INPUT_FIELDS=$'Claude\x1f\x1f0\x1f0\x1f200000\x1f_\x1f_\x1f_\x1f_\x1f0\x1f0\x1f0\x1f0\x1f_\x1ffalse\x1f_\x1f\x1f\x1f_\x1f_\x1f_\x1f_\x1f_'
 fi
 
 # Use the ASCII unit separator (0x1f) as the field delimiter, not a tab: `read`
 # with a whitespace IFS collapses adjacent delimiters, so any empty field (e.g. an
 # absent current_dir) would silently shift every later column. 0x1f is
 # non-whitespace, so empty fields are preserved and columns stay aligned.
+# SPEND_RESETS and SPEND_PERIOD are extracted for completeness but not rendered yet.
+# shellcheck disable=SC2034
 IFS=$'\x1f' read -r MODEL CURRENT_DIR DURATION_MS CURRENT_TOKENS CONTEXT_WINDOW_SIZE \
     WEEKLY_USAGE RESETS_AT BURST_USAGE BURST_RESETS \
     CURRENT_INPUT_TOKENS CURRENT_OUTPUT_TOKENS CURRENT_CACHE_WRITE_TOKENS CURRENT_CACHE_READ_TOKENS \
-    EFFORT_LEVEL THINKING_ENABLED CTX_USED_PCT PROJECT_DIR CC_VERSION <<< "$INPUT_FIELDS"
+    EFFORT_LEVEL THINKING_ENABLED CTX_USED_PCT PROJECT_DIR CC_VERSION \
+    SPEND_PCT SPEND_RESETS SPEND_USED_USD SPEND_LIMIT_USD SPEND_PERIOD <<< "$INPUT_FIELDS"
 
 [ "$EFFORT_LEVEL" = "_" ] && EFFORT_LEVEL=""
 
@@ -475,6 +483,7 @@ normalize_scalar_var WEEKLY_USAGE rate "_" "weekly usage"
 normalize_scalar_var BURST_USAGE rate "_" "burst usage"
 normalize_scalar_var RESETS_AT int 0 "weekly reset epoch"
 normalize_scalar_var BURST_RESETS int 0 "burst reset epoch"
+normalize_scalar_var SPEND_PCT rate "_" "spend limit percentage"
 normalize_scalar_var CTX_USED_PCT rate "_" "context used percentage"
 
 # Derived values (pure bash math, no bc)
@@ -564,15 +573,10 @@ read_git_status_info() {
     sanitize_display_field "$BRANCH"; BRANCH=$REPLY
 }
 
-# Calculate context percentage (scaled to context limit)
-# Detect 1M context from JSON field OR model display name (e.g. "Opus 4.6 1M context")
-if [ "${CONTEXT_WINDOW_SIZE:-0}" -gt 200000 ] 2>>"$STATUSLINE_DEBUG_LOG"; then
-    : # Already set from JSON
-elif [[ "$MODEL" == *1[Mm]* ]] || [[ "$MODEL" == *1M* ]]; then
-    CONTEXT_WINDOW_SIZE=1000000
-else
-    CONTEXT_WINDOW_SIZE=${CONTEXT_WINDOW_SIZE:-200000}
-fi
+# Calculate context percentage (scaled to context limit). Claude Code always
+# reports context_window_size (200000, or 1000000 on extended-context models),
+# so trust it rather than guessing from the model name.
+CONTEXT_WINDOW_SIZE=${CONTEXT_WINDOW_SIZE:-200000}
 # Guard against a payload that literally says context_window_size:0 — the
 # ${VAR:-200000} defaults above only fire when the var is UNSET, not when it's
 # the literal string "0", so a zero would otherwise survive to divide-by-zero
@@ -681,7 +685,12 @@ fi
 # segment filter and CLAUDELINE_SPEND so a non-enterprise user pays zero
 # cost — no cache stat, no fork, nothing — unless they explicitly ask for it.
 SPEND_INDICATOR=""
-if seg_on "$_SEG_SPEND" && is_truthy_flag "${CLAUDELINE_SPEND:-}"; then
+# Free source first: gateway spend limits ride in the stdin payload, so they need
+# no opt-in, credential, cache, or network work.
+if seg_on "$_SEG_SPEND" && ! is_sentinel_value "$SPEND_PCT" && is_decimal_value "$SPEND_PCT"; then
+    format_spend_payload_indicator "$SPEND_PCT" "$SPEND_USED_USD" "$SPEND_LIMIT_USD"
+    SPEND_INDICATOR=$REPLY
+elif seg_on "$_SEG_SPEND" && is_truthy_flag "${CLAUDELINE_SPEND:-}"; then
     get_extra_usage_fields_nonblocking "$NOW"
     IFS=$'\x1f' read -r EU_IS_ENABLED EU_MONTHLY_LIMIT EU_USED_CREDITS EU_DECIMAL_PLACES \
         EU_CURRENCY EU_SPEND_LIMIT_REACHED EU_USER_DISABLED EU_DISABLED_REASON EU_UTILIZATION \

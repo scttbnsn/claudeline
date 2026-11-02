@@ -149,6 +149,7 @@ run_install "$create_home" "$create_shim" "$create_downloads"
 assert_eq "command" "$("$jq_bin" -r '.statusLine.type' "$create_home/.claude/settings.json")" "installer creates statusLine type"
 assert_eq "~/.claude/statusline.sh" "$("$jq_bin" -r '.statusLine.command' "$create_home/.claude/settings.json")" "installer creates statusLine command"
 assert_eq "0" "$("$jq_bin" -r '.statusLine.padding' "$create_home/.claude/settings.json")" "installer creates statusLine padding"
+assert_eq "30" "$("$jq_bin" -r '.statusLine.refreshInterval' "$create_home/.claude/settings.json")" "installer creates statusLine refreshInterval"
 assert_eq "600" "$(get_perm "$create_home/.claude/settings.json")" "installer writes new settings.json with 600 permissions"
 
 update_home="$tmpdir/update-home"
@@ -174,5 +175,29 @@ assert_eq "dark" "$("$jq_bin" -r '.theme' "$update_home/.claude/settings.json")"
 assert_eq "~/.claude/statusline.sh" "$("$jq_bin" -r '.statusLine.command' "$update_home/.claude/settings.json")" "installer updates existing statusLine command"
 assert_eq "0" "$("$jq_bin" -r '.statusLine.padding' "$update_home/.claude/settings.json")" "installer updates existing statusLine padding"
 assert_eq "/tmp/old-statusline.sh" "$("$jq_bin" -r '.statusLine.command' "$update_home/.claude/settings.json.backup")" "installer backs up prior settings before overwriting statusLine"
+
+assert_eq "30" "$("$jq_bin" -r '.statusLine.refreshInterval' "$update_home/.claude/settings.json")" "installer adds refreshInterval to an existing statusLine"
+
+keep_home="$tmpdir/keep-home"
+keep_shim="$tmpdir/keep-shim"
+keep_downloads="$tmpdir/keep-downloads"
+mkdir -p "$keep_home/.claude"
+make_downloads "$keep_downloads"
+make_shims "$keep_shim"
+printf '%s\n' '{"statusLine":{"type":"command","command":"/tmp/old.sh","refreshInterval":5}}' \
+    > "$keep_home/.claude/settings.json"
+run_install "$keep_home" "$keep_shim" "$keep_downloads"
+assert_eq "5" "$("$jq_bin" -r '.statusLine.refreshInterval' "$keep_home/.claude/settings.json")" "installer preserves a positive user refreshInterval"
+assert_eq "~/.claude/statusline.sh" "$("$jq_bin" -r '.statusLine.command' "$keep_home/.claude/settings.json")" "installer still updates the command when preserving refreshInterval"
+
+bad_home="$tmpdir/bad-home"
+bad_shim="$tmpdir/bad-shim"
+bad_downloads="$tmpdir/bad-downloads"
+mkdir -p "$bad_home/.claude"
+make_downloads "$bad_downloads"
+make_shims "$bad_shim"
+printf '%s\n' '{"statusLine":{"command":"x","refreshInterval":0}}' > "$bad_home/.claude/settings.json"
+run_install "$bad_home" "$bad_shim" "$bad_downloads"
+assert_eq "30" "$("$jq_bin" -r '.statusLine.refreshInterval' "$bad_home/.claude/settings.json")" "installer replaces a non-positive refreshInterval with the default"
 
 printf 'ok\n'

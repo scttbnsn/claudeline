@@ -40,8 +40,8 @@ else
     # shellcheck disable=SC2088
     STATUSLINE_COMMAND="~/.claude/statusline.sh"
 fi
-STATUSLINE_SHA256="348a97181a5846f1438ac06fd64e4a36808699e62c39aa26ddf941b6b543c226"
-DISPLAY_LIB_SHA256="b6eda21c5f595cd2c8aede011bee8a4d92f00e2eec51ae7c21e0a42925a8df2e"
+STATUSLINE_SHA256="44afa34412aaf084eabc3d7e4c14c23b7ce2e3198761b55130d5d3f55b563945"
+DISPLAY_LIB_SHA256="dee6b1bcffc61ca4a4ac6b4fd83f0863e9e6ef25a70f7c219c647fbd402ea557"
 USAGE_LIB_SHA256="4e71c349cce158c9fda218b8431efbcdaea6059121aef715d6447413841536d1"
 THEMES_LIB_SHA256="f21602fa7efc871559503d668ebf2df20de395e6560ca56beb918b6fb631c4c9"
 
@@ -123,7 +123,8 @@ fi
 STATUSLINE_CONFIG=$(jq -cn --arg command "$STATUSLINE_COMMAND" '{
   type: "command",
   command: $command,
-  padding: 0
+  padding: 0,
+  refreshInterval: 30
 }')
 
 stage_dir=$(mktemp -d "${TMPDIR:-/tmp}/claudeline-install.XXXXXX") || {
@@ -295,7 +296,10 @@ prepare_settings_files() {
         return 1
     fi
     if [ "$SETTINGS_HAD_ORIGINAL" -eq 1 ]; then
-        if ! jq --argjson sl "$STATUSLINE_CONFIG" '.statusLine = $sl' \
+        if ! jq --argjson sl "$STATUSLINE_CONFIG" '
+            (.statusLine | if type == "object" then .refreshInterval else null end) as $ri
+            | .statusLine = ($sl
+                + (if ($ri | type) == "number" and $ri > 0 then {refreshInterval: $ri} else {} end))' \
             "$SETTINGS_TARGET_PATH" > "$SETTINGS_REPLACEMENT_TEMP"; then
             echo -e "${RED}✗ Existing settings.json is not valid JSON${NC}"
             return 1
@@ -398,6 +402,6 @@ echo -e "${GREEN}${BOLD}✓ Installation complete!${NC}"
 echo ""
 echo -e "  ${DIM}Restart Claude Code to see your new statusline.${NC}"
 echo ""
-echo -e "${CYAN}💭 ███░░░░░░░  ·  claudeline/main  ·  Claude Opus 4.1  ·  🧠high${NC}"
+echo -e "${CYAN}💭 ███░░░░░░░  ·  claudeline/main  ·  Claude Opus 5.5  ·  🧠high${NC}"
 echo -e "${DIM}  73.5K/1.00M  ·  ♨️→  ·  💥▃  ·  ⏱️ 45m${NC}"
 echo ""

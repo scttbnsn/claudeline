@@ -351,6 +351,35 @@ round_decimal_half_up() {
     fi
 }
 
+# Shared spend rendering: icon, percentage on the 11-tier color scale, and a
+# skull once the limit is reached or usage hits 100%.
+_render_spend_percent() {
+    local percent=$1
+    local icon=$2
+    local spend_limit_reached=${3:-false}
+    local color="" overlimit=""
+
+    if [ -n "$percent" ]; then
+        local band_pct=$percent i band_name
+        [ "$band_pct" -gt 100 ] && band_pct=100
+        for ((i = 0; i < ${#SPEND_BAND_MAXES[@]}; i++)); do
+            if [ "$band_pct" -le "${SPEND_BAND_MAXES[$i]}" ]; then
+                band_name=${SPEND_BAND_COLOR_NAMES[$i]}
+                color=${!band_name}
+                break
+            fi
+        done
+    fi
+
+    if [ "$spend_limit_reached" = "true" ]; then
+        overlimit="💀"
+    elif [ -n "$percent" ] && [ "$percent" -ge 100 ]; then
+        overlimit="💀"
+    fi
+
+    REPLY="${icon} ${color}${percent}%${RESET}${overlimit}"
+}
+
 # Format the enterprise usage-based spend segment as a bare percentage, e.g.
 # "68%", or "∞" when monthly_limit is null (unlimited — there's no percentage
 # to show, and rendering nothing would look like the feature is broken).
@@ -408,25 +437,40 @@ format_spend_indicator() {
         percent=$(( (used_fixed * 100 + limit_fixed / 2) / limit_fixed ))
     fi
 
-    local color=""
-    if [ -n "$percent" ]; then
-        local band_pct=$percent i band_name
-        [ "$band_pct" -gt 100 ] && band_pct=100
-        for ((i = 0; i < ${#SPEND_BAND_MAXES[@]}; i++)); do
-            if [ "$band_pct" -le "${SPEND_BAND_MAXES[$i]}" ]; then
-                band_name=${SPEND_BAND_COLOR_NAMES[$i]}
-                color=${!band_name}
-                break
-            fi
-        done
-    fi
+    _render_spend_percent "$percent" "$icon" "$spend_limit_reached"
+}
 
-    local overlimit=""
-    if [ "$spend_limit_reached" = "true" ]; then
-        overlimit="💀"
-    elif [ -n "$percent" ] && [ "$percent" -ge 100 ]; then
-        overlimit="💀"
-    fi
+# Format the spend segment from the stdin payload's rate_limits.spend_limit
+# (Claude apps gateway). No opt-in, credential, or network involved. Dollar
+# amounts are appended, rounded to whole dollars, only when both are valid.
+# Renders empty when the percentage is not a non-negative decimal.
+format_spend_payload_indicator() {
+    local used_pct=$1
+    local used_usd=${2-}
+    local limit_usd=${3-}
+    local icon="${CLAUDELINE_SPEND_ICON:-💰}"
+    local percent="" used_whole="" limit_whole=""
 
-    REPLY="${icon} ${color}${percent}%${RESET}${overlimit}"
+    REPLY=""
+    is_decimal_value "$used_pct" || return 0
+    case "$used_pct" in -*) return 0 ;; esac
+    round_decimal_half_up "$used_pct" 0
+    percent=$REPLY
+
+    _render_spend_percent "$percent" "$icon" false
+    local rendered=$REPLY
+
+    if is_decimal_value "$used_usd" && is_decimal_value "$limit_usd"; then
+        case "$used_usd$limit_usd" in
+            *-*) ;;
+            *)
+                round_decimal_half_up "$used_usd" 0
+                used_whole=$REPLY
+                round_decimal_half_up "$limit_usd" 0
+                limit_whole=$REPLY
+                rendered="${rendered} \$${used_whole}/\$${limit_whole}"
+                ;;
+        esac
+    fi
+    REPLY=$rendered
 }

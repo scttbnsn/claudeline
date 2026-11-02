@@ -126,7 +126,7 @@ export TEST_DOWNLOAD_ROOT="$download_dir"
 
 bash "$installer" > "$tmpdir/install.out"
 
-expected_preview=$'💭 ███░░░░░░░  ·  claudeline/main  ·  Claude Opus 4.1  ·  🧠high\n  73.5K/1.00M  ·  ♨️→  ·  💥▃  ·  ⏱️ 45m'
+expected_preview=$'💭 ███░░░░░░░  ·  claudeline/main  ·  Claude Opus 5.5  ·  🧠high\n  73.5K/1.00M  ·  ♨️→  ·  💥▃  ·  ⏱️ 45m'
 readme_preview=$(awk '
     /^```$/ && !inside { inside=1; next }
     /^```$/ && inside { exit }

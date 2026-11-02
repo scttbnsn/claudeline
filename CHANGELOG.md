@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- The spend segment now renders from `rate_limits.spend_limit` in the status line payload (Claude apps gateway) with no opt-in, credential, cache, or network work, and appends whole-dollar `used_usd/limit_usd` when the payload carries both
+- The installer sets `refreshInterval: 30` on the status line so duration and reset countdowns stay current while idle, and keeps a positive value you already set
+
+### Removed
+- The model-name guess for a 1M context window. The status line now trusts `context_window_size` from Claude Code; the "1M context" suffix is still stripped from the displayed model name
+
 ### Fixed
 - The Keychain lookup now asks for the item whose account is `$USER` first, so an old account-less or legacy "unknown" item can no longer shadow the live credential, and it uses the `Claude Code-credentials-<sha256 prefix>` service name Claude Code writes when `CLAUDE_CONFIG_DIR` is set instead of always reading the default profile's item
 
