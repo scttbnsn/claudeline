@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- The Keychain lookup now asks for the item whose account is `$USER` first, so an old account-less or legacy "unknown" item can no longer shadow the live credential, and it uses the `Claude Code-credentials-<sha256 prefix>` service name Claude Code writes when `CLAUDE_CONFIG_DIR` is set instead of always reading the default profile's item
+
 ## [2.0.0] - 2026-08-27
 
 ### Changed

@@ -104,15 +104,46 @@ decode_keychain_value() {
     printf '%s' "$decoded"
 }
 
-if [ "$(uname -s)" = "Darwin" ]; then
-    if kc=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null); then
-        if decoded=$(decode_keychain_value "$kc"); then
-            read_creds "$decoded" "macOS keychain" || printf 'keychain entry present but has no usable access credential\n'
-        else
-            printf 'keychain entry present but could not be decoded\n'
-        fi
+keychain_service="Claude Code-credentials"
+if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+    if command -v shasum >/dev/null 2>&1; then
+        config_digest=$(printf '%s' "$CLAUDE_CONFIG_DIR" | shasum -a 256 2>/dev/null | cut -c1-8)
+    elif command -v sha256sum >/dev/null 2>&1; then
+        config_digest=$(printf '%s' "$CLAUDE_CONFIG_DIR" | sha256sum 2>/dev/null | cut -c1-8)
     else
-        printf 'no keychain entry for "Claude Code-credentials"\n'
+        config_digest=""
+    fi
+    if [[ "${config_digest:-}" =~ ^[0-9a-f]{8}$ ]]; then
+        keychain_service="$keychain_service-$config_digest"
+    else
+        printf 'no SHA-256 hasher; using the unsuffixed keychain service\n'
+    fi
+fi
+
+if [ "$(uname -s)" = "Darwin" ]; then
+    printf 'keychain service:  %s\n' "$keychain_service"
+    keychain_found=0
+    for keychain_account in "${USER:-}" ""; do
+        if [ -n "$keychain_account" ]; then
+            account_label="-a \$USER item"
+            kc=$(security find-generic-password -s "$keychain_service" -a "$keychain_account" -w 2>/dev/null) || continue
+        else
+            account_label="account-less lookup"
+            kc=$(security find-generic-password -s "$keychain_service" -w 2>/dev/null) || break
+        fi
+        keychain_found=1
+        if decoded=$(decode_keychain_value "$kc"); then
+            if read_creds "$decoded" "macOS keychain"; then
+                printf 'keychain lookup:   %s\n' "$account_label"
+                break
+            fi
+            printf 'keychain entry present (%s) but has no usable access credential\n' "$account_label"
+        else
+            printf 'keychain entry present (%s) but could not be decoded\n' "$account_label"
+        fi
+    done
+    if [ "$keychain_found" -eq 0 ]; then
+        printf 'no keychain entry for "%s"\n' "$keychain_service"
     fi
 fi
 

@@ -158,8 +158,36 @@ parse_claude_oauth_credentials() {
     REPLY=$access_credential
 }
 
+# Claude Code names its Keychain service "Claude Code-credentials", plus
+# "-<first 8 hex of sha256(CLAUDE_CONFIG_DIR)>" when CLAUDE_CONFIG_DIR is set.
+# Sets REPLY to the service name.
+keychain_service_name() {
+    local base="Claude Code-credentials" digest=""
+
+    REPLY=$base
+    [ -n "${CLAUDE_CONFIG_DIR:-}" ] || return 0
+
+    if command -v shasum >/dev/null 2>&1; then
+        digest=$(printf '%s' "$CLAUDE_CONFIG_DIR" | shasum -a 256 2>/dev/null) || digest=""
+    elif command -v sha256sum >/dev/null 2>&1; then
+        digest=$(printf '%s' "$CLAUDE_CONFIG_DIR" | sha256sum 2>/dev/null) || digest=""
+    fi
+    digest=${digest:0:8}
+    if [[ "$digest" =~ ^[0-9a-f]{8}$ ]]; then
+        REPLY="$base-$digest"
+    else
+        debug_log "No SHA-256 hasher available; using the unsuffixed Keychain service"
+    fi
+}
+
+# $1 = service name, $2 = optional account.
 read_keychain_credentials_with_deadline() {
+    local service=$1
+    local account=${2:-}
     local deadline=${KEYCHAIN_READ_TIMEOUT:-2}
+    local -a lookup=(security find-generic-password -s "$service")
+    [ -z "$account" ] || lookup+=(-a "$account")
+    lookup+=(-w)
 
     [[ "$deadline" =~ ^[0-9]+$ ]] || deadline=2
     [ "$deadline" -ge 1 ] || deadline=1
@@ -200,7 +228,7 @@ read_keychain_credentials_with_deadline() {
             }
             sleep 0.02;
         }
-    ' "$deadline" security find-generic-password -s "Claude Code-credentials" -w
+    ' "$deadline" "${lookup[@]}"
 }
 
 # Read the Claude Code OAuth access token: macOS Keychain first, falling back
@@ -211,19 +239,29 @@ read_keychain_credentials_with_deadline() {
 # Sets REPLY to the token and returns 0, or returns 1 when there is no usable,
 # unexpired token.
 read_claude_oauth_token() {
-    local creds="" compact_hex="" cfg=""
+    local creds="" compact_hex="" cfg="" service="" account=""
 
     REPLY=""
 
     if [[ "${OSTYPE:-}" == darwin* ]]; then
-        creds=$(read_keychain_credentials_with_deadline 2>>"$STATUSLINE_DEBUG_LOG") || creds=""
-        compact_hex=$(printf '%s' "$creds" | tr -d '[:space:]')
-        if [[ -n "$compact_hex" && "$compact_hex" =~ ^[0-9a-fA-F]+$ ]]; then
-            creds=$(printf '%s' "$compact_hex" | xxd -r -p 2>>"$STATUSLINE_DEBUG_LOG") || creds=""
-        fi
-        if parse_claude_oauth_credentials "$creds"; then
-            return 0
-        fi
+        keychain_service_name
+        service=$REPLY
+        REPLY=""
+        # Claude Code writes the live item with account = $USER; older items
+        # under other accounts can shadow it when no account is given.
+        for account in "${USER:-}" ""; do
+            creds=$(read_keychain_credentials_with_deadline "$service" "$account" 2>>"$STATUSLINE_DEBUG_LOG") || creds=""
+            compact_hex=$(printf '%s' "$creds" | tr -d '[:space:]')
+            if [[ -n "$compact_hex" && "$compact_hex" =~ ^[0-9a-fA-F]+$ ]]; then
+                creds=$(printf '%s' "$compact_hex" | xxd -r -p 2>>"$STATUSLINE_DEBUG_LOG") || creds=""
+            fi
+            if parse_claude_oauth_credentials "$creds"; then
+                return 0
+            fi
+            # With USER unset the two attempts are identical; run only one.
+            [ -n "${USER:-}" ] || break
+        done
+        REPLY=""
     fi
 
     cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json"

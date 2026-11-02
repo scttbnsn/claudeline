@@ -161,7 +161,7 @@ mkdir -p "$malformed_home"
 printf 'abc\n' > "$malformed_input"
 run_probe "$malformed_home" "$malformed_input" "$tmpdir/malformed.out" env
 [ ! -e "$tmpdir/curl-called" ] || fail "malformed Keychain data should not reach curl"
-assert_contains "keychain entry present but could not be decoded" "$tmpdir/malformed.out" "malformed Keychain diagnostic"
+assert_contains "but could not be decoded" "$tmpdir/malformed.out" "malformed Keychain diagnostic"
 
 # A bad Keychain entry falls back to a valid credentials file.
 fallback_home="$tmpdir/fallback-home"

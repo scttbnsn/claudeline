@@ -19,7 +19,16 @@ if [ "${SECURITY_BLOCK:-}" = 1 ]; then
     wait "$child_pid"
     exit $?
 fi
-printf '%s\n' "${SECURITY_BODY-}"
+printf '%s\n' "$*" >> "${SECURITY_ARGV_LOG:-/dev/null}"
+case " $* " in
+    *" -a "*)
+        [ -n "${SECURITY_BODY_ACCOUNT+x}" ] || exit 44
+        printf '%s\n' "$SECURITY_BODY_ACCOUNT"
+        ;;
+    *)
+        printf '%s\n' "${SECURITY_BODY-}"
+        ;;
+esac
 EOF
 chmod +x "$tmpdir/shim/security"
 cat > "$tmpdir/shim/curl" <<'EOF'
@@ -96,6 +105,85 @@ assert_read "profile-access-credential-1234567890" "Keychain access values with 
 SECURITY_BODY='{"claudeAiOauth":{"accessToken":"keychain-access-credential-1234567890\u001b","expiresAt":9999999999999}}'
 export SECURITY_BODY
 assert_read "profile-access-credential-1234567890" "Keychain access values with controls fall through"
+
+# Service name and account selection.
+sha8() {
+    if command -v shasum >/dev/null 2>&1; then
+        printf '%s' "$1" | shasum -a 256 | cut -c1-8
+    else
+        printf '%s' "$1" | sha256sum | cut -c1-8
+    fi
+}
+
+assert_argv_contains() {
+    local expected=$1
+    local label=$2
+
+    grep -Fq -- "$expected" "$SECURITY_ARGV_LOG" || {
+        printf 'FAIL: %s\nmissing: %s\nlog:\n%s\n' "$label" "$expected" "$(<"$SECURITY_ARGV_LOG")" >&2
+        exit 1
+    }
+}
+
+assert_argv_absent() {
+    local unexpected=$1
+    local label=$2
+
+    if grep -Fq -- "$unexpected" "$SECURITY_ARGV_LOG"; then
+        printf 'FAIL: %s\nunexpected: %s\nlog:\n%s\n' "$label" "$unexpected" "$(<"$SECURITY_ARGV_LOG")" >&2
+        exit 1
+    fi
+}
+
+SECURITY_ARGV_LOG="$tmpdir/security-argv"
+export SECURITY_ARGV_LOG
+USER=testuser
+expected_service="Claude Code-credentials-$(sha8 "$CLAUDE_CONFIG_DIR")"
+valid_account='{"claudeAiOauth":{"accessToken":"account-access-credential-1234567890","expiresAt":9999999999999}}'
+valid_plain='{"claudeAiOauth":{"accessToken":"accountless-access-credential-1234567890","expiresAt":9999999999999}}'
+expired='{"claudeAiOauth":{"accessToken":"expired-access-credential-1234567890","expiresAt":1}}'
+
+: > "$SECURITY_ARGV_LOG"
+SECURITY_BODY_ACCOUNT=$valid_account
+SECURITY_BODY=$valid_plain
+export SECURITY_BODY_ACCOUNT SECURITY_BODY
+assert_read "account-access-credential-1234567890" "valid -a USER item is used"
+assert_argv_contains "-s $expected_service -a testuser" "CLAUDE_CONFIG_DIR adds the sha256 suffix and account"
+[ "$(wc -l < "$SECURITY_ARGV_LOG" | tr -d ' ')" = 1 ] || {
+    echo "FAIL: valid -a USER item should not trigger an account-less lookup" >&2
+    exit 1
+}
+
+: > "$SECURITY_ARGV_LOG"
+unset SECURITY_BODY_ACCOUNT
+export SECURITY_BODY
+assert_read "accountless-access-credential-1234567890" "missing -a USER item falls back to the account-less item"
+assert_argv_contains "-s $expected_service -a testuser" "account lookup tried first"
+assert_argv_contains "-s $expected_service -w" "account-less lookup tried second"
+
+: > "$SECURITY_ARGV_LOG"
+SECURITY_BODY_ACCOUNT=$expired
+export SECURITY_BODY_ACCOUNT
+assert_read "accountless-access-credential-1234567890" "expired -a USER item falls back to the account-less item"
+assert_argv_contains "-s $expected_service -w" "account-less lookup after expired account item"
+
+: > "$SECURITY_ARGV_LOG"
+saved_config_dir=$CLAUDE_CONFIG_DIR
+unset CLAUDE_CONFIG_DIR
+SECURITY_BODY_ACCOUNT=$valid_account
+export SECURITY_BODY_ACCOUNT
+assert_read "account-access-credential-1234567890" "unset CLAUDE_CONFIG_DIR reads the unsuffixed service"
+assert_argv_contains "-s Claude Code-credentials -a testuser" "unsuffixed service name"
+assert_argv_absent "Claude Code-credentials-" "no suffix when CLAUDE_CONFIG_DIR is unset"
+CLAUDE_CONFIG_DIR=$saved_config_dir
+
+: > "$SECURITY_ARGV_LOG"
+SECURITY_BODY_ACCOUNT=$expired
+SECURITY_BODY='{malformed-json'
+export SECURITY_BODY_ACCOUNT SECURITY_BODY
+assert_read "profile-access-credential-1234567890" "both Keychain lookups unusable falls back to the credentials file"
+
+unset SECURITY_BODY_ACCOUNT SECURITY_ARGV_LOG
 
 EXTRA_USAGE_CACHE="$tmpdir/profile/.extra-usage-cache"
 EXTRA_USAGE_LOCK="$tmpdir/profile/.extra-usage-fetch.lock"
