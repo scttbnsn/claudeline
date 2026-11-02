@@ -56,7 +56,7 @@ Create `~/.claude/claudeline.conf` to customize without env vars:
 ```bash
 # ~/.claude/claudeline.conf
 theme=nord
-segments=context,spend,git,pace,burst,duration,tokens,effort,model,stale
+segments=context,spend,git,pace,burst,duration,tokens,effort,model,stale,cache
 ```
 
 Env vars override config file values. All keys are optional.
@@ -128,6 +128,14 @@ Vibey (default), Dark, Light, Nord, and Gruvbox — plus NO_COLOR support
 <h3>Thinking Effort</h3>
 Shows the active thinking tier with five distinct states: <code>🌱low</code>, <code>💭med</code>, <code>🧠high</code>, <code>⚡xhi</code>, <code>🔥max</code>
 </td>
+</tr>
+<tr>
+<td align="center" width="33%">
+<h3>Prompt-Cache Countdown</h3>
+Shows <code>♻️ 4m</code> while the prompt cache is warm, turning yellow under two minutes; hidden once it goes cold
+</td>
+<td></td>
+<td></td>
 </tr>
 </table>
 
@@ -273,7 +281,7 @@ Whichever is found is clamped to 100K–1M and then capped at the physical windo
 | Variable | Effect |
 |----------|--------|
 | `CLAUDELINE_THEME=nord` | Theme: `vibey` (default), `dark`, `light`, `nord`, `gruvbox` |
-| `CLAUDELINE_SEGMENTS=context,git,pace` | Show only listed segments. Available: `context`, `spend`, `git`, `pace`, `burst`, `duration`, `tokens`, `effort`, `model`, `stale` |
+| `CLAUDELINE_SEGMENTS=context,git,pace` | Show only listed segments. Available: `context`, `spend`, `git`, `pace`, `burst`, `duration`, `tokens`, `effort`, `model`, `stale`, `cache` |
 | `NO_COLOR=1` | Disables all color output ([spec](https://no-color.org)) |
 | `CLAUDELINE_DEBUG=1` | Enables private debug logging under the active Claude config profile (`~/.claude/.claudeline/debug.log` by default) |
 | `CLAUDELINE_DEBUG_LOG=/path` | Custom debug log path (requires `CLAUDELINE_DEBUG=1`) |

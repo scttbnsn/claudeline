@@ -370,7 +370,7 @@ if [ -n "${CLAUDELINE_SEGMENTS:-}" ]; then
     _SEG_CONTEXT=0; _SEG_GIT=0; _SEG_PACE=0
     _SEG_BURST=0; _SEG_DURATION=0; _SEG_SPEND=0
     _SEG_TOKENS=0; _SEG_EFFORT=0
-    _SEG_MODEL=0; _SEG_STALE=0
+    _SEG_MODEL=0; _SEG_STALE=0; _SEG_CACHE=0
     IFS=',' read -ra _segs <<< "$CLAUDELINE_SEGMENTS"
     for _s in "${_segs[@]}"; do
         case "${_s## }" in  # trim leading space
@@ -384,13 +384,14 @@ if [ -n "${CLAUDELINE_SEGMENTS:-}" ]; then
             effort)     _SEG_EFFORT=1 ;;
             model)      _SEG_MODEL=1 ;;
             stale)      _SEG_STALE=1 ;;
+            cache)      _SEG_CACHE=1 ;;
         esac
     done
 else
     _SEG_CONTEXT=1; _SEG_GIT=1; _SEG_PACE=1
     _SEG_BURST=1; _SEG_DURATION=1; _SEG_SPEND=1
     _SEG_TOKENS=1; _SEG_EFFORT=1
-    _SEG_MODEL=1; _SEG_STALE=1
+    _SEG_MODEL=1; _SEG_STALE=1; _SEG_CACHE=1
 fi
 
 seg_on() { [ "${_SEG_ALL}" -eq 1 ] || [ "${1:-0}" -eq 1 ]; }
@@ -449,10 +450,13 @@ if ! INPUT_FIELDS=$(printf '%s\n' "$input" | jq -r '[
         (.rate_limits.spend_limit.resets_at // "_"),
         (.rate_limits.spend_limit.used_usd // "_"),
         (.rate_limits.spend_limit.limit_usd // "_"),
-        (.rate_limits.spend_limit.period // "_")
+        (.rate_limits.spend_limit.period // "_"),
+        (.prompt_cache.warm // false),
+        (.prompt_cache.expires_at // "_"),
+        (.prompt_cache.caching_observed // false)
     ] | map(tostring) | map(gsub("[[:cntrl:]]";"")) | join("\u001f")' 2>>"$STATUSLINE_DEBUG_LOG"); then
     debug_log "Failed to parse statusline input; using defaults"
-    INPUT_FIELDS=$'Claude\x1f\x1f0\x1f0\x1f200000\x1f_\x1f_\x1f_\x1f_\x1f0\x1f0\x1f0\x1f0\x1f_\x1ffalse\x1f_\x1f\x1f\x1f_\x1f_\x1f_\x1f_\x1f_'
+    INPUT_FIELDS=$'Claude\x1f\x1f0\x1f0\x1f200000\x1f_\x1f_\x1f_\x1f_\x1f0\x1f0\x1f0\x1f0\x1f_\x1ffalse\x1f_\x1f\x1f\x1f_\x1f_\x1f_\x1f_\x1f_\x1ffalse\x1f_\x1ffalse'
 fi
 
 # Use the ASCII unit separator (0x1f) as the field delimiter, not a tab: `read`
@@ -465,7 +469,8 @@ IFS=$'\x1f' read -r MODEL CURRENT_DIR DURATION_MS CURRENT_TOKENS CONTEXT_WINDOW_
     WEEKLY_USAGE RESETS_AT BURST_USAGE BURST_RESETS \
     CURRENT_INPUT_TOKENS CURRENT_OUTPUT_TOKENS CURRENT_CACHE_WRITE_TOKENS CURRENT_CACHE_READ_TOKENS \
     EFFORT_LEVEL THINKING_ENABLED CTX_USED_PCT PROJECT_DIR CC_VERSION \
-    SPEND_PCT SPEND_RESETS SPEND_USED_USD SPEND_LIMIT_USD SPEND_PERIOD <<< "$INPUT_FIELDS"
+    SPEND_PCT SPEND_RESETS SPEND_USED_USD SPEND_LIMIT_USD SPEND_PERIOD \
+    CACHE_WARM CACHE_EXPIRES_AT CACHE_OBSERVED <<< "$INPUT_FIELDS"
 
 [ "$EFFORT_LEVEL" = "_" ] && EFFORT_LEVEL=""
 
@@ -1054,5 +1059,25 @@ if seg_on "$_SEG_STALE" && [[ "$CC_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     fi
 fi
 
-# Priority order: tokens > pace > burst > duration > stale
-printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_PACE" "$_L2_BURST" "$_L2_DURATION" "$_L2_STALE")"
+# Prompt-cache countdown: only while the payload says the prefix is warm and the
+# expiry is a future integer epoch, so only digits ever reach the output.
+_L2_CACHE=""
+if seg_on "$_SEG_CACHE" && [ "$CACHE_WARM" = "true" ] && [ "$CACHE_OBSERVED" = "true" ] \
+    && [[ "$CACHE_EXPIRES_AT" =~ ^[0-9]{1,15}$ ]] && [ "$CACHE_EXPIRES_AT" -gt "$NOW" ]; then
+    _cache_left=$((CACHE_EXPIRES_AT - NOW))
+    if [ "$_cache_left" -lt 60 ]; then
+        _cache_label="<1m"
+    elif [ "$_cache_left" -ge 3600 ]; then
+        _cache_label="$((_cache_left / 3600))h"
+    else
+        _cache_label="$((_cache_left / 60))m"
+    fi
+    if [ "$_cache_left" -lt 120 ]; then
+        _L2_CACHE="${CTX_YELLOW}♻️ ${_cache_label}${RESET}"
+    else
+        _L2_CACHE="${DIM}♻️ ${_cache_label}${RESET}"
+    fi
+fi
+
+# Priority order: tokens > pace > burst > duration > stale > cache
+printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_PACE" "$_L2_BURST" "$_L2_DURATION" "$_L2_STALE" "$_L2_CACHE")"

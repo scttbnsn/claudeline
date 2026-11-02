@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- A `cache` segment on line 2 shows a prompt-cache countdown (`♻️ 4m`, `<1m`, `1h`) from the `prompt_cache` payload field while the cache is warm, turns yellow under two minutes, and drops first on narrow terminals
 - The spend segment now renders from `rate_limits.spend_limit` in the status line payload (Claude apps gateway) with no opt-in, credential, cache, or network work, and appends whole-dollar `used_usd/limit_usd` when the payload carries both
 - The installer sets `refreshInterval: 30` on the status line so duration and reset countdowns stay current while idle, and keeps a positive value you already set
 
