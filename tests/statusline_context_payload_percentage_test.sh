@@ -110,4 +110,31 @@ assert_eq '🌱 ██░░░░░░░░' "$(sed -n '1p' <<< "$zero_window
 assert_eq '     50K/200K' "$(sed -n '2p' <<< "$zero_window")" \
     "zero context window falls back to the safe 200K window"
 
+# total_input_tokens (current Claude Code) wins over the current_usage sum; older
+# builds without it, or a 0 right after /compact, fall back to the sum.
+render_total() {
+    local total_json=$1
+    local usage_tokens=$2
+    local case_name=$3
+    local home_dir="$tmpdir/$case_name/home"
+
+    mkdir -p "$home_dir"
+    env -u CLAUDE_CODE_AUTO_COMPACT_WINDOW -u CLAUDE_AUTOCOMPACT_PCT_OVERRIDE \
+        HOME="$home_dir" NO_COLOR=1 NOW=1000000 CLAUDELINE_SEGMENTS="context,tokens" \
+        bash "$repo_root/statusline.sh" <<< "$(build_payload _ "$usage_tokens" 200000 \
+            | jq --argjson t "$total_json" '.context_window.total_input_tokens = $t')"
+}
+
+total_wins=$(render_total 80000 1000 total-wins)
+assert_eq '     80K/200K' "$(sed -n '2p' <<< "$total_wins")" \
+    "total_input_tokens wins over the current_usage sum when present"
+
+total_absent=$(render_total null 50000 total-absent)
+assert_eq '     50K/200K' "$(sed -n '2p' <<< "$total_absent")" \
+    "current_usage sum is used when total_input_tokens is absent"
+
+total_zero=$(render_total 0 50000 total-zero)
+assert_eq '     50K/200K' "$(sed -n '2p' <<< "$total_zero")" \
+    "current_usage sum is used when total_input_tokens is 0"
+
 printf 'ok\n'

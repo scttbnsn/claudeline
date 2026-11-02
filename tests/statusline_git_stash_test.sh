@@ -40,7 +40,18 @@ case "$*" in
         printf '/tmp/demo\n'
         ;;
     "rev-parse --verify --quiet refs/stash")
+        if [ -z "${SHIM_OLD_GIT:-}" ]; then
+            printf 'refs/stash probe should not run with --show-stash\n' >&2
+            exit 98
+        fi
         printf 'refs/stash\n'
+        ;;
+    "status --porcelain=v2 --branch --show-stash --untracked-files=no")
+        if [ -n "${SHIM_OLD_GIT:-}" ]; then
+            printf 'error: unknown option `show-stash'"'"'\n' >&2
+            exit 129
+        fi
+        printf '# branch.oid 1234567890abcdef\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +2 -0\n# stash 1\n1 .M N... 100644 100644 100644 abc abc file.txt\n'
         ;;
     "status --porcelain=v2 --branch --untracked-files=no")
         printf '# branch.oid 1234567890abcdef\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +2 -0\n1 .M N... 100644 100644 100644 abc abc file.txt\n'
@@ -83,6 +94,11 @@ PATH="$shim_dir:$PATH" HOME="$home_dir" NOW=1000000 \
     bash "$repo_root/statusline.sh" <<< "$input_json" | perl -pe 's/\e\[[0-9;]*m//g' > "$tmpdir/rendered.txt"
 
 first_line=$(sed -n '1p' "$tmpdir/rendered.txt")
-assert_eq '✨ ░░░░░░░░░░  ·  demo/main*↑2$  ·  Claude Sonnet 4' "$first_line" "stash marker uses refs/stash probe"
+assert_eq '✨ ░░░░░░░░░░  ·  demo/main*↑2$  ·  Claude Sonnet 4' "$first_line" "stash marker comes from status --show-stash"
+
+SHIM_OLD_GIT=1 PATH="$shim_dir:$PATH" HOME="$home_dir" NOW=1000000 \
+    bash "$repo_root/statusline.sh" <<< "$input_json" | perl -pe 's/\e\[[0-9;]*m//g' > "$tmpdir/rendered-old.txt"
+first_line=$(sed -n '1p' "$tmpdir/rendered-old.txt")
+assert_eq '✨ ░░░░░░░░░░  ·  demo/main*↑2$  ·  Claude Sonnet 4' "$first_line" "old git falls back to the refs/stash probe"
 
 printf 'ok\n'

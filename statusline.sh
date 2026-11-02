@@ -425,9 +425,12 @@ if ! INPUT_FIELDS=$(printf '%s\n' "$input" | jq -r '[
         (.model.display_name // "Claude"),
         (.workspace.current_dir // ""),
         (.cost.total_duration_ms // 0),
-        ((.context_window.current_usage.input_tokens // 0) +
-         (.context_window.current_usage.cache_creation_input_tokens // 0) +
-         (.context_window.current_usage.cache_read_input_tokens // 0)),
+        ((.context_window.total_input_tokens // 0) as $total |
+         if $total > 0 then $total else
+           ((.context_window.current_usage.input_tokens // 0) +
+            (.context_window.current_usage.cache_creation_input_tokens // 0) +
+            (.context_window.current_usage.cache_read_input_tokens // 0))
+         end),
         (.context_window.context_window_size // 200000),
         (.rate_limits.seven_day.used_percentage // "_"),
         (.rate_limits.seven_day.resets_at // "_"),
@@ -486,9 +489,6 @@ normalize_scalar_var BURST_RESETS int 0 "burst reset epoch"
 normalize_scalar_var SPEND_PCT rate "_" "spend limit percentage"
 normalize_scalar_var CTX_USED_PCT rate "_" "context used percentage"
 
-# Derived values (pure bash math, no bc)
-CURRENT_TOKENS=$((CURRENT_INPUT_TOKENS + CURRENT_CACHE_WRITE_TOKENS + CURRENT_CACHE_READ_TOKENS))
-
 # Cache current timestamp (used multiple times - avoid repeated date calls).
 # EPOCHSECONDS is unavailable on Bash 3.2, so keep date as a compatibility fallback.
 NOW=${NOW:-${EPOCHSECONDS:-$(date +%s)}}
@@ -497,7 +497,7 @@ NOW_DIV_10=$((NOW / 10))
 read_git_status_info() {
     local current_dir=$1
     local git_root="" git_status_out="" line="" branch="" git_oid="" git_status=""
-    local xy="" ahead="" behind="" has_unstaged="" has_staged=""
+    local xy="" ahead="" behind="" has_unstaged="" has_staged="" stash_probe="" has_stash=""
 
     BRANCH=""
     DIR_NAME="${current_dir##*/}"
@@ -517,10 +517,16 @@ read_git_status_info() {
     DIR_NAME="${git_root##*/}"
     sanitize_display_field "$DIR_NAME"; DIR_NAME=$REPLY
 
+    # --show-stash (git >= 2.35) reports stash presence in the same call. Older
+    # git rejects the flag, so retry without it and fall back to the refs/stash probe.
     if ! git_status_out=$(GIT_OPTIONAL_LOCKS=0 git -C "$current_dir" \
-        status --porcelain=v2 --branch --untracked-files=no 2>>"$STATUSLINE_DEBUG_LOG"); then
-        debug_log "Failed to read git status for $git_root; omitting branch info"
-        return 0
+        status --porcelain=v2 --branch --show-stash --untracked-files=no 2>>"$STATUSLINE_DEBUG_LOG"); then
+        stash_probe=1
+        if ! git_status_out=$(GIT_OPTIONAL_LOCKS=0 git -C "$current_dir" \
+            status --porcelain=v2 --branch --untracked-files=no 2>>"$STATUSLINE_DEBUG_LOG"); then
+            debug_log "Failed to read git status for $git_root; omitting branch info"
+            return 0
+        fi
     fi
 
     while IFS= read -r line || [ -n "$line" ]; do
@@ -536,6 +542,9 @@ read_git_status_info() {
                 xy=${line#\# branch.ab }
                 ahead=${xy%% *}; ahead=${ahead#+}
                 behind=${xy##* }; behind=${behind#-}
+                ;;
+            '# stash '*)
+                has_stash=1
                 ;;
             '1 '*|'2 '*|'u '*)
                 xy=${line:2:2}
@@ -560,11 +569,14 @@ read_git_status_info() {
     [[ "$ahead" =~ ^[0-9]+$ ]] && [ "$ahead" -gt 0 ] && git_status+="↑${ahead}"
     [[ "$behind" =~ ^[0-9]+$ ]] && [ "$behind" -gt 0 ] && git_status+="↓${behind}"
 
-    # Stash check via refs/stash avoids walking the stash reflog.
-    if GIT_OPTIONAL_LOCKS=0 git -C "$current_dir" rev-parse --verify --quiet refs/stash \
-        >/dev/null 2>>"$STATUSLINE_DEBUG_LOG"; then
-        git_status+="\$"
+    # Stash check via refs/stash avoids walking the stash reflog. Only needed
+    # when git predates status --show-stash.
+    if [ -n "$stash_probe" ] \
+        && GIT_OPTIONAL_LOCKS=0 git -C "$current_dir" rev-parse --verify --quiet refs/stash \
+            >/dev/null 2>>"$STATUSLINE_DEBUG_LOG"; then
+        has_stash=1
     fi
+    [ -n "$has_stash" ] && git_status+="\$"
 
     BRANCH="${branch}${git_status}"
 
