@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.2.2] - 2026-11-27
+
+### Removed
+- The `pr`, `worktree` and `agent` segments added in 2.2.0.
+
 ## [2.2.1] - 2026-11-27
 
 ### Removed

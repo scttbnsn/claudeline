@@ -371,7 +371,6 @@ if [ -n "${CLAUDELINE_SEGMENTS:-}" ]; then
     _SEG_BURST=0; _SEG_DURATION=0; _SEG_SPEND=0
     _SEG_TOKENS=0; _SEG_EFFORT=0
     _SEG_MODEL=0; _SEG_STALE=0; _SEG_CACHE=0
-    _SEG_PR=0; _SEG_WORKTREE=0; _SEG_AGENT=0
     IFS=',' read -ra _segs <<< "$CLAUDELINE_SEGMENTS"
     for _s in "${_segs[@]}"; do
         case "${_s## }" in  # trim leading space
@@ -386,9 +385,6 @@ if [ -n "${CLAUDELINE_SEGMENTS:-}" ]; then
             model)      _SEG_MODEL=1 ;;
             stale)      _SEG_STALE=1 ;;
             cache)      _SEG_CACHE=1 ;;
-            pr)         _SEG_PR=1 ;;
-            worktree)   _SEG_WORKTREE=1 ;;
-            agent)      _SEG_AGENT=1 ;;
         esac
     done
 else
@@ -396,7 +392,6 @@ else
     _SEG_BURST=1; _SEG_DURATION=1; _SEG_SPEND=1
     _SEG_TOKENS=1; _SEG_EFFORT=1
     _SEG_MODEL=1; _SEG_STALE=1; _SEG_CACHE=1
-    _SEG_PR=1; _SEG_WORKTREE=1; _SEG_AGENT=1
 fi
 
 seg_on() { [ "${_SEG_ALL}" -eq 1 ] || [ "${1:-0}" -eq 1 ]; }
@@ -458,15 +453,10 @@ if ! INPUT_FIELDS=$(printf '%s\n' "$input" | jq -r '[
         (.rate_limits.spend_limit.period // "_"),
         (.prompt_cache.warm // false),
         (.prompt_cache.expires_at // "_"),
-        (.prompt_cache.caching_observed // false),
-        ((.pr | if type == "object" then .number else null end) // "_"),
-        ((.pr | if type == "object" then .review_state else null end) // ""),
-        ((.worktree | if type == "object" then .name else null end) // ""),
-        ((.worktree | if type == "object" then .branch else null end) // ""),
-        ((.agent | if type == "object" then .name else null end) // "")
+        (.prompt_cache.caching_observed // false)
     ] | map(tostring) | map(gsub("[[:cntrl:]]";"")) | join("\u001f")' 2>>"$STATUSLINE_DEBUG_LOG"); then
     debug_log "Failed to parse statusline input; using defaults"
-    INPUT_FIELDS=$'Claude\x1f\x1f0\x1f0\x1f200000\x1f_\x1f_\x1f_\x1f_\x1f0\x1f0\x1f0\x1f0\x1f_\x1ffalse\x1f_\x1f\x1f\x1f_\x1f_\x1f_\x1f_\x1f_\x1ffalse\x1f_\x1ffalse\x1f_\x1f\x1f\x1f\x1f'
+    INPUT_FIELDS=$'Claude\x1f\x1f0\x1f0\x1f200000\x1f_\x1f_\x1f_\x1f_\x1f0\x1f0\x1f0\x1f0\x1f_\x1ffalse\x1f_\x1f\x1f\x1f_\x1f_\x1f_\x1f_\x1f_\x1ffalse\x1f_\x1ffalse'
 fi
 
 # Use the ASCII unit separator (0x1f) as the field delimiter, not a tab: `read`
@@ -480,16 +470,12 @@ IFS=$'\x1f' read -r MODEL CURRENT_DIR DURATION_MS CURRENT_TOKENS CONTEXT_WINDOW_
     CURRENT_INPUT_TOKENS CURRENT_OUTPUT_TOKENS CURRENT_CACHE_WRITE_TOKENS CURRENT_CACHE_READ_TOKENS \
     EFFORT_LEVEL THINKING_ENABLED CTX_USED_PCT PROJECT_DIR CC_VERSION \
     SPEND_PCT SPEND_RESETS SPEND_USED_USD SPEND_LIMIT_USD SPEND_PERIOD \
-    CACHE_WARM CACHE_EXPIRES_AT CACHE_OBSERVED \
-    PR_NUMBER PR_REVIEW_STATE WORKTREE_NAME WORKTREE_BRANCH AGENT_NAME <<< "$INPUT_FIELDS"
+    CACHE_WARM CACHE_EXPIRES_AT CACHE_OBSERVED <<< "$INPUT_FIELDS"
 
 [ "$EFFORT_LEVEL" = "_" ] && EFFORT_LEVEL=""
 
 # Sanitize externally-sourced display text before it can reach a printf %b sink.
 sanitize_display_field "$MODEL"; MODEL=$REPLY
-sanitize_display_field "$WORKTREE_NAME"; WORKTREE_NAME=$REPLY
-sanitize_display_field "$WORKTREE_BRANCH"; WORKTREE_BRANCH=$REPLY
-sanitize_display_field "$AGENT_NAME"; AGENT_NAME=$REPLY
 if [ -n "${CLAUDELINE_SPEND_ICON:-}" ]; then
     sanitize_display_field "$CLAUDELINE_SPEND_ICON"; CLAUDELINE_SPEND_ICON=$REPLY
 fi
@@ -519,7 +505,6 @@ read_git_status_info() {
     local xy="" ahead="" behind="" has_unstaged="" has_staged="" stash_probe="" has_stash=""
 
     BRANCH=""
-    GIT_BRANCH_NAME=""
     DIR_NAME="${current_dir##*/}"
     # Sanitize here, not just at the end: most real dirs are not git repos, so the
     # early returns below are the common path and must not leak raw control bytes
@@ -599,7 +584,6 @@ read_git_status_info() {
     [ -n "$has_stash" ] && git_status+="\$"
 
     BRANCH="${branch}${git_status}"
-    GIT_BRANCH_NAME=$branch
 
     # Branch is external text rendered through printf %b downstream (DIR_NAME is
     # already sanitized at each assignment above to cover the early-return paths).
@@ -666,7 +650,6 @@ for ((i=0; i<EMPTY; i++)); do BAR+="$EMPTY_CHAR"; done
 PROGRESS_BAR="${CTX_COLOR}${BAR}${RESET}"
 
 BRANCH=""
-GIT_BRANCH_NAME=""
 DIR_NAME=""
 if seg_on "$_SEG_GIT"; then
     read_git_status_info "$CURRENT_DIR"
@@ -1096,33 +1079,5 @@ if seg_on "$_SEG_CACHE" && [ "$CACHE_WARM" = "true" ] && [ "$CACHE_OBSERVED" = "
     fi
 fi
 
-# PR: number is digits-only and the state is matched against the documented
-# values, so only known text reaches the output. A missing state shows just "#N".
-_L2_PR=""
-if seg_on "$_SEG_PR" && [[ "$PR_NUMBER" =~ ^[0-9]{1,9}$ ]]; then
-    case "$PR_REVIEW_STATE" in
-        approved)          _L2_PR="${GREEN}#${PR_NUMBER} ✓ approved${RESET}" ;;
-        changes_requested) _L2_PR="${CTX_RED}#${PR_NUMBER} changes requested${RESET}" ;;
-        pending)           _L2_PR="${CTX_YELLOW}#${PR_NUMBER} pending${RESET}" ;;
-        draft)             _L2_PR="${DIM}#${PR_NUMBER} draft${RESET}" ;;
-        *)                 _L2_PR="${DIM}#${PR_NUMBER}${RESET}" ;;
-    esac
-fi
-
-# Worktree: the branch is appended only when it differs from the git branch the
-# git segment already shows.
-_L2_WORKTREE=""
-if seg_on "$_SEG_WORKTREE" && [ -n "$WORKTREE_NAME" ]; then
-    _L2_WORKTREE="${PURPLE}🌳 ${WORKTREE_NAME}${RESET}"
-    if [ -n "$WORKTREE_BRANCH" ] && [ "$WORKTREE_BRANCH" != "$GIT_BRANCH_NAME" ]; then
-        _L2_WORKTREE="${_L2_WORKTREE}${DIM}:${WORKTREE_BRANCH}${RESET}"
-    fi
-fi
-
-_L2_AGENT=""
-if seg_on "$_SEG_AGENT" && [ -n "$AGENT_NAME" ]; then
-    _L2_AGENT="${SKY}🤖 ${AGENT_NAME}${RESET}"
-fi
-
-# Priority order: tokens > pace > burst > duration > stale > cache > pr > worktree > agent
-printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_PACE" "$_L2_BURST" "$_L2_DURATION" "$_L2_STALE" "$_L2_CACHE" "$_L2_PR" "$_L2_WORKTREE" "$_L2_AGENT")"
+# Priority order: tokens > pace > burst > duration > stale > cache
+printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_PACE" "$_L2_BURST" "$_L2_DURATION" "$_L2_STALE" "$_L2_CACHE")"
