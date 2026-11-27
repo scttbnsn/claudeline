@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- Four line-2 segments read from the status line payload: `pr` (`#123 ✓ approved`, `changes requested`, `pending`, `draft`), `worktree` (`🌳 name`, with `:branch` when it differs from the git branch shown), `agent` (`🤖 name` for `claude --agent` sessions), and `lines` (`+156 −23`, hidden when both counts are zero). Each is on by default, can be toggled through `segments`, hides when Claude Code doesn't send its field, and drops before the cache segment on narrow terminals
+
 ## [2.1.0] - 2026-11-02
 
 ### Added
