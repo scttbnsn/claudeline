@@ -371,7 +371,7 @@ if [ -n "${CLAUDELINE_SEGMENTS:-}" ]; then
     _SEG_BURST=0; _SEG_DURATION=0; _SEG_SPEND=0
     _SEG_TOKENS=0; _SEG_EFFORT=0
     _SEG_MODEL=0; _SEG_STALE=0; _SEG_CACHE=0
-    _SEG_PR=0; _SEG_WORKTREE=0; _SEG_AGENT=0; _SEG_LINES=0
+    _SEG_PR=0; _SEG_WORKTREE=0; _SEG_AGENT=0
     IFS=',' read -ra _segs <<< "$CLAUDELINE_SEGMENTS"
     for _s in "${_segs[@]}"; do
         case "${_s## }" in  # trim leading space
@@ -389,7 +389,6 @@ if [ -n "${CLAUDELINE_SEGMENTS:-}" ]; then
             pr)         _SEG_PR=1 ;;
             worktree)   _SEG_WORKTREE=1 ;;
             agent)      _SEG_AGENT=1 ;;
-            lines)      _SEG_LINES=1 ;;
         esac
     done
 else
@@ -397,7 +396,7 @@ else
     _SEG_BURST=1; _SEG_DURATION=1; _SEG_SPEND=1
     _SEG_TOKENS=1; _SEG_EFFORT=1
     _SEG_MODEL=1; _SEG_STALE=1; _SEG_CACHE=1
-    _SEG_PR=1; _SEG_WORKTREE=1; _SEG_AGENT=1; _SEG_LINES=1
+    _SEG_PR=1; _SEG_WORKTREE=1; _SEG_AGENT=1
 fi
 
 seg_on() { [ "${_SEG_ALL}" -eq 1 ] || [ "${1:-0}" -eq 1 ]; }
@@ -464,12 +463,10 @@ if ! INPUT_FIELDS=$(printf '%s\n' "$input" | jq -r '[
         ((.pr | if type == "object" then .review_state else null end) // ""),
         ((.worktree | if type == "object" then .name else null end) // ""),
         ((.worktree | if type == "object" then .branch else null end) // ""),
-        ((.agent | if type == "object" then .name else null end) // ""),
-        ((.cost | if type == "object" then .total_lines_added else null end) // 0),
-        ((.cost | if type == "object" then .total_lines_removed else null end) // 0)
+        ((.agent | if type == "object" then .name else null end) // "")
     ] | map(tostring) | map(gsub("[[:cntrl:]]";"")) | join("\u001f")' 2>>"$STATUSLINE_DEBUG_LOG"); then
     debug_log "Failed to parse statusline input; using defaults"
-    INPUT_FIELDS=$'Claude\x1f\x1f0\x1f0\x1f200000\x1f_\x1f_\x1f_\x1f_\x1f0\x1f0\x1f0\x1f0\x1f_\x1ffalse\x1f_\x1f\x1f\x1f_\x1f_\x1f_\x1f_\x1f_\x1ffalse\x1f_\x1ffalse\x1f_\x1f\x1f\x1f\x1f\x1f0\x1f0'
+    INPUT_FIELDS=$'Claude\x1f\x1f0\x1f0\x1f200000\x1f_\x1f_\x1f_\x1f_\x1f0\x1f0\x1f0\x1f0\x1f_\x1ffalse\x1f_\x1f\x1f\x1f_\x1f_\x1f_\x1f_\x1f_\x1ffalse\x1f_\x1ffalse\x1f_\x1f\x1f\x1f\x1f'
 fi
 
 # Use the ASCII unit separator (0x1f) as the field delimiter, not a tab: `read`
@@ -484,7 +481,7 @@ IFS=$'\x1f' read -r MODEL CURRENT_DIR DURATION_MS CURRENT_TOKENS CONTEXT_WINDOW_
     EFFORT_LEVEL THINKING_ENABLED CTX_USED_PCT PROJECT_DIR CC_VERSION \
     SPEND_PCT SPEND_RESETS SPEND_USED_USD SPEND_LIMIT_USD SPEND_PERIOD \
     CACHE_WARM CACHE_EXPIRES_AT CACHE_OBSERVED \
-    PR_NUMBER PR_REVIEW_STATE WORKTREE_NAME WORKTREE_BRANCH AGENT_NAME LINES_ADDED LINES_REMOVED <<< "$INPUT_FIELDS"
+    PR_NUMBER PR_REVIEW_STATE WORKTREE_NAME WORKTREE_BRANCH AGENT_NAME <<< "$INPUT_FIELDS"
 
 [ "$EFFORT_LEVEL" = "_" ] && EFFORT_LEVEL=""
 
@@ -508,8 +505,6 @@ normalize_scalar_var WEEKLY_USAGE rate "_" "weekly usage"
 normalize_scalar_var BURST_USAGE rate "_" "burst usage"
 normalize_scalar_var RESETS_AT int 0 "weekly reset epoch"
 normalize_scalar_var BURST_RESETS int 0 "burst reset epoch"
-normalize_scalar_var LINES_ADDED int 0 "lines added"
-normalize_scalar_var LINES_REMOVED int 0 "lines removed"
 normalize_scalar_var SPEND_PCT rate "_" "spend limit percentage"
 normalize_scalar_var CTX_USED_PCT rate "_" "context used percentage"
 
@@ -1101,12 +1096,6 @@ if seg_on "$_SEG_CACHE" && [ "$CACHE_WARM" = "true" ] && [ "$CACHE_OBSERVED" = "
     fi
 fi
 
-# Lines changed: "+N −M", hidden when both counts are zero (or absent).
-_L2_LINES=""
-if seg_on "$_SEG_LINES" && { [ "$LINES_ADDED" -gt 0 ] || [ "$LINES_REMOVED" -gt 0 ]; }; then
-    _L2_LINES="${GREEN}+${LINES_ADDED}${RESET} ${RED}−${LINES_REMOVED}${RESET}"
-fi
-
 # PR: number is digits-only and the state is matched against the documented
 # values, so only known text reaches the output. A missing state shows just "#N".
 _L2_PR=""
@@ -1135,5 +1124,5 @@ if seg_on "$_SEG_AGENT" && [ -n "$AGENT_NAME" ]; then
     _L2_AGENT="${SKY}🤖 ${AGENT_NAME}${RESET}"
 fi
 
-# Priority order: tokens > pace > burst > duration > stale > cache > lines > pr > worktree > agent
-printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_PACE" "$_L2_BURST" "$_L2_DURATION" "$_L2_STALE" "$_L2_CACHE" "$_L2_LINES" "$_L2_PR" "$_L2_WORKTREE" "$_L2_AGENT")"
+# Priority order: tokens > pace > burst > duration > stale > cache > pr > worktree > agent
+printf '%b\n' "$(_build_responsive_line "$TERM_WIDTH" "$_L2_TOKENS" "$_L2_PACE" "$_L2_BURST" "$_L2_DURATION" "$_L2_STALE" "$_L2_CACHE" "$_L2_PR" "$_L2_WORKTREE" "$_L2_AGENT")"

@@ -56,7 +56,7 @@ Create `~/.claude/claudeline.conf` to customize without env vars:
 ```bash
 # ~/.claude/claudeline.conf
 theme=nord
-segments=context,spend,git,pace,burst,duration,tokens,effort,model,stale,cache,pr,worktree,agent,lines
+segments=context,spend,git,pace,burst,duration,tokens,effort,model,stale,cache,pr,worktree,agent
 ```
 
 Env vars override config file values. All keys are optional.
@@ -136,7 +136,7 @@ Shows <code>♻️ 4m</code> while the prompt cache is warm, turning yellow unde
 </td>
 <td align="center" width="33%">
 <h3>Session Context</h3>
-Shows the open PR with its review state (<code>#123 ✓ approved</code>), the active worktree (<code>🌳 my-feature</code>), the <code>--agent</code> name (<code>🤖 reviewer</code>), and lines changed (<code>+156 −23</code>). Each hides when Claude Code doesn't send its field
+Shows the open PR with its review state (<code>#123 ✓ approved</code>), the active worktree (<code>🌳 my-feature</code>), and the <code>--agent</code> name (<code>🤖 reviewer</code>). Each hides when Claude Code doesn't send its field
 </td>
 <td></td>
 </tr>
@@ -284,7 +284,7 @@ Whichever is found is clamped to 100K–1M and then capped at the physical windo
 | Variable | Effect |
 |----------|--------|
 | `CLAUDELINE_THEME=nord` | Theme: `vibey` (default), `dark`, `light`, `nord`, `gruvbox` |
-| `CLAUDELINE_SEGMENTS=context,git,pace` | Show only listed segments. Available: `context`, `spend`, `git`, `pace`, `burst`, `duration`, `tokens`, `effort`, `model`, `stale`, `cache`, `pr`, `worktree`, `agent`, `lines` |
+| `CLAUDELINE_SEGMENTS=context,git,pace` | Show only listed segments. Available: `context`, `spend`, `git`, `pace`, `burst`, `duration`, `tokens`, `effort`, `model`, `stale`, `cache`, `pr`, `worktree`, `agent` |
 | `NO_COLOR=1` | Disables all color output ([spec](https://no-color.org)) |
 | `CLAUDELINE_DEBUG=1` | Enables private debug logging under the active Claude config profile (`~/.claude/.claudeline/debug.log` by default) |
 | `CLAUDELINE_DEBUG_LOG=/path` | Custom debug log path (requires `CLAUDELINE_DEBUG=1`) |
